@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kl-akasha",
+  "description": "O registro de todo o saber: biblioteca pessoal de skills para IA.",
+  "owner": { "name": "KLAcceX" },
+  "plugins": [
+    {
+      "name": "argos",
+      "description": "Pull requests: vigiar os meus PRs, avisar quando pedem ação e revisar PRs de colegas.",
+      "source": "./plugins/argos",
+      "category": "pull-requests"
+    }
+  ]
+}
