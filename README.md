@@ -42,19 +42,27 @@ Cada domínio recebe o nome de uma entidade, tirada de qualquer mitologia, cuja 
 | Plugin | Domínio | Origem do nome | Status |
 |---|---|---|---|
 | **Argos** | Pull requests | Argos Panoptes, o gigante de cem olhos que nunca dormia por inteiro | 🚧 em construção |
+| **Anúbis** | Triangulação: pesa o que a task pede contra o que foi implementado e o que está no PR | Anúbis, que pesa o coração contra a pena da verdade | 💭 planejado |
 | *a definir* | Qualidade de código | | 💭 planejado |
 | *a definir* | Segurança | | 💭 planejado |
-| *a definir* | Tarefas: cruza o que a task pede com o que foi implementado e o que está no PR | | 💭 planejado |
+
+**Reservados:** **Janus**, deus das portas, para merge, release e deploy, e **Thoth**, o escriba que anota a pesagem, para registro de dívidas e tarefas.
+
+> Todo nome passa pelo conselho antes de entrar aqui.
 
 ### Argos: o vigia dos PRs
 
 A meta de volume de PRs faz muitos PRs serem abertos, e os que ficam esquecidos pesam no *stale time*. O Argos existe para que nenhum PR fique parado sem alguém perceber.
 
-| Skill | O que faz |
-|---|---|
-| `argos-review` | Revisa o PR de um colega. O rigor da revisão acompanha a criticidade da task: task crítica recebe revisão metódica de tudo, task menos crítica recebe revisão mais leve. Usa os cenários Gherkin da task como base, sabendo que eles não cobrem tudo, porque o QA completa os cenários depois. O que merecer virar outra tarefa fica anotado no fim. |
-| `argos-watch` | Vigia os meus PRs abertos: comentários, reviews, pedidos de mudança, tudo o que pede atualização. Ordena do mais antigo para o mais novo, porque o mais antigo é o que mais pesa no *stale time*. |
-| `argos-patrol` | Roda o `argos-watch` (e, opcionalmente, a fila de reviews) de tempos em tempos por meio de uma tarefa agendada do Claude, e notifica quando há novidade. |
+Hera mandou Argos vigiar Io. Ele tinha cem olhos e nunca fechava todos ao mesmo tempo. Quando morreu, Hera pôs os olhos dele na cauda do pavão, onde ainda estão abertos.
+
+| Skill | Lenda | O que faz |
+|---|---|---|
+| `argos-ward` | O que está sob a guarda dele | Vigia os meus PRs abertos (comentários, reviews e pedidos de mudança) e os PRs que esperam a minha revisão. Ordena do mais antigo para o mais novo, porque o mais antigo é o que mais pesa no *stale time*. |
+| `argos-pavo` | Os olhos no pavão, que vigiam quando ele não está | Roda o `argos-ward` de tempos em tempos por meio de uma tarefa agendada do Claude, e só notifica quando há novidade. |
+| `argos-panoptes` | "O que tudo vê" | Revisa o PR de um colega abrindo de poucos a cem olhos, conforme a criticidade da task. Usa os cenários Gherkin da task como base, sabendo que o QA completa o resto. Anota no fim o que merecer virar outra tarefa. **Ele vê e você julga**: nada é publicado sem a sua aprovação. |
+
+**A criticidade é adaptável.** Primeiro vale a sua régua pessoal (`~/.claude/kl-akasha/criticality.md`, uma seção por repositório). Se não houver, vale a régua padrão do plugin (o Priority do Jira). Se nada for encontrado, a skill pergunta. Labels como `hotfix` e `security` e áreas sensíveis do código só sobem o nível.
 
 ---
 
@@ -70,17 +78,21 @@ kl-akasha/
 │       │   └── plugin.json     # nome, versão e descrição do plugin
 │       ├── README.md           # o que o domínio cobre e as suas skills
 │       └── skills/
-│           ├── argos-review/
-│           │   ├── SKILL.md    # instruções da skill
-│           │   └── references/ # material de apoio carregado sob demanda
-│           ├── argos-watch/
+│           ├── argos-ward/
+│           │   └── SKILL.md    # instruções da skill
+│           ├── argos-pavo/
 │           │   └── SKILL.md
-│           └── argos-patrol/
-│               └── SKILL.md
+│           └── argos-panoptes/
+│               ├── SKILL.md
+│               └── references/ # material de apoio carregado sob demanda
+│                   └── criticality.md   # régua padrão de criticidade
 ├── docs/
+│   ├── PRD-kl-akasha-v1.md     # o que a v1 entrega e por quê
 │   └── conventions.md          # como nomear, criar e versionar skills
 └── README.md
 ```
+
+A configuração pessoal fica **fora** do repositório, em `~/.claude/kl-akasha/`, para não encostar nos repositórios do time.
 
 ### Regras de organização
 
