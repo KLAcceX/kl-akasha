@@ -7,20 +7,22 @@ description: Use when the user wants their pull requests watched automatically o
 
 When Argos fell, Hera set his eyes on the peacock's tail, where they still watch. This skill keeps watching the user's PRs when the user is not looking: a scheduled task runs one vigil round, and the user hears only about what changed.
 
+**The Argos mod already runs the vigil inside Claude.** It ships with this plugin, runs a round on its own timer, shows a band above the prompt, toasts what is new, and `/argos` opens the full list. It costs no tokens. Its settings (account, search filter, interval) are the plugin's options in `/config`. Use a scheduled task only when the user wants rounds while no Claude session is open.
+
 Two jobs. Pick by who is asking:
 
 - **A scheduled task asked for a vigil round** → Run a round.
-- **The user wants the vigil set up, changed or stopped** → Set up.
+- **The user wants the vigil set up, changed or stopped** → point them to the mod's options first; Set up a scheduled task only if they still want one.
 
 ## Run a round
 
 From this skill's base directory, with the qualifiers and account given in the task prompt:
 
 ```bash
-GH_TOKEN=$(gh auth token -u <login>) node scripts/pavo.mjs org:acme
+node scripts/pavo.mjs org:acme --account <login>
 ```
 
-Leave out `GH_TOKEN=...` when the prompt names no account (it then uses the active `gh` account). Never run `gh auth switch`.
+Leave out `--account` when the prompt names no account (it then uses the active `gh` account). Never run `gh auth switch`.
 
 The output's first line decides the rest:
 

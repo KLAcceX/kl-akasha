@@ -30,8 +30,13 @@ query($q: String!) {
 const isBot = (a) => !a || a.__typename === "Bot" || /\[bot\]$/.test(a.login);
 const isOther = (a, me) => a && !isBot(a) && a.login !== me;
 
+// Google eng-practices: answer a review request within one business day.
+// ponytail: 24 wall-clock hours, use business days if weekends cause false alarms.
+const PICKUP_MS = 24 * 36e5;
+const isLate = (pr, now) => now - Date.parse(pr.createdAt) > PICKUP_MS;
+
 // Signals for a PR I authored. Empty list = nothing for me to do right now.
-export function mySignals(pr, me) {
+export function mySignals(pr, me, now = Date.now()) {
   const s = [];
   const last = pr.commits.nodes[0]?.commit;
   const lastPush = last?.committedDate ?? pr.createdAt;
@@ -49,8 +54,14 @@ export function mySignals(pr, me) {
   if (["FAILURE", "ERROR"].includes(last?.statusCheckRollup?.state)) s.push("CI falhou");
   if (pr.mergeable === "CONFLICTING") s.push("conflito");
   if (!s.length && pr.reviewDecision === "APPROVED") s.push("aprovado: pronto pra merge");
+  // Pickup is where PRs wait longest: nobody has looked yet, so ping the reviewers.
+  const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, me));
+  if (!s.length && !pr.isDraft && !anyReview && isLate(pr, now)) s.push("sem review > 1 dia");
   return s;
 }
+
+// Signals for a PR waiting for my review.
+export const reviewSignals = (pr, now = Date.now()) => (isLate(pr, now) ? ["atrasada > 1 dia"] : []);
 
 function search(q) {
   const out = execFileSync("gh", ["api", "graphql", "-f", `query=${QUERY}`, "-f", `q=${q}`], {
@@ -72,7 +83,8 @@ const byAge = (a, b) => a.createdAt.localeCompare(b.createdAt);
 function row(p) {
   const draft = p.isDraft ? " _(draft)_" : "";
   const title = p.title.replace(/\|/g, "\\|");
-  return `| ${age(p.createdAt)} | [${p.repo}#${p.number}](${p.url}) ${title}${draft} | ${p.signals.join(", ") || "aguardando review"} |`;
+  const idle = p.kind === "review" ? "no prazo" : "aguardando review";
+  return `| ${age(p.createdAt)} | [${p.repo}#${p.number}](${p.url}) ${title}${draft} | ${p.signals.join(", ") || idle} |`;
 }
 
 function main(args) {
@@ -89,7 +101,7 @@ function main(args) {
     isDraft: pr.isDraft,
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
-    signals: kind === "mine" ? mySignals(pr, me) : [],
+    signals: kind === "mine" ? mySignals(pr, me) : reviewSignals(pr),
   });
   const mine = search(`is:pr is:open archived:false author:${me} ${extra}`).map(shape("mine")).sort(byAge);
   const toReview = search(`is:pr is:open archived:false review-requested:${me} ${extra}`)
@@ -119,29 +131,40 @@ function selfTest() {
     latestReviews: { nodes: [] },
   };
   const pr = (over) => ({ ...base, ...over });
+  const day1 = Date.parse("2026-10-01T12:00:00Z");
+  const day3 = Date.parse("2026-10-03T12:00:00Z");
 
-  assert.deepEqual(mySignals(pr({}), me), []);
-  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me), ["aprovado: pronto pra merge"]);
-  assert.deepEqual(mySignals(pr({ reviewDecision: "CHANGES_REQUESTED" }), me), ["mudanças pedidas"]);
+  // pickup: nobody reviewed for more than a day
+  assert.deepEqual(mySignals(pr({}), me, day1), []);
+  assert.deepEqual(mySignals(pr({}), me, day3), ["sem review > 1 dia"]);
+  assert.deepEqual(mySignals(pr({ isDraft: true }), me, day3), []);
+  const reviewed = { nodes: [{ state: "APPROVED", submittedAt: "2026-10-01T01:00:00Z", author: user("ana") }] };
+  assert.deepEqual(mySignals(pr({ latestReviews: reviewed }), me, day3), []);
+  assert.deepEqual(reviewSignals(pr({}), day1), []);
+  assert.deepEqual(reviewSignals(pr({}), day3), ["atrasada > 1 dia"]);
+
+  assert.deepEqual(mySignals(pr({}), me, day1), []);
+  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me, day1), ["aprovado: pronto pra merge"]);
+  assert.deepEqual(mySignals(pr({ reviewDecision: "CHANGES_REQUESTED" }), me, day1), ["mudanças pedidas"]);
   // unresolved thread: counts only when someone else spoke last
   const thread = (login, isResolved = false) => ({ isResolved, comments: { nodes: [{ author: user(login) }] } });
-  assert.deepEqual(mySignals(pr({ reviewThreads: { nodes: [thread("ana"), thread(me), thread("bia", true)] } }), me), [
+  assert.deepEqual(mySignals(pr({ reviewThreads: { nodes: [thread("ana"), thread(me), thread("bia", true)] } }), me, day1), [
     "1 thread(s) sem resposta",
   ]);
   // review comments only count after my last push
   const review = (submittedAt) => ({ state: "COMMENTED", submittedAt, author: user("ana") });
-  assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-01T12:00:00Z")] } }), me), []);
-  assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-03T00:00:00Z")] } }), me), ["1 review(s) novo(s)"]);
+  assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-01T12:00:00Z")] } }), me, day1), []);
+  assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-03T00:00:00Z")] } }), me, day1), ["1 review(s) novo(s)"]);
   // bots never count as someone waiting for me
   const bot = { login: "sonar[bot]", __typename: "Bot" };
-  assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: bot }] } }), me), []);
-  assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: user("ana") }] } }), me), ["comentário sem resposta"]);
+  assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: bot }] } }), me, day1), []);
+  assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: user("ana") }] } }), me, day1), ["comentário sem resposta"]);
   // CI and conflict block "ready to merge"
   const failing = { nodes: [{ commit: { committedDate: base.createdAt, statusCheckRollup: { state: "FAILURE" } } }] };
-  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED", commits: failing }), me), ["CI falhou"]);
-  assert.deepEqual(mySignals(pr({ mergeable: "CONFLICTING" }), me), ["conflito"]);
+  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED", commits: failing }), me, day1), ["CI falhou"]);
+  assert.deepEqual(mySignals(pr({ mergeable: "CONFLICTING" }), me, day1), ["conflito"]);
   // no commits/checks yet must not throw
-  assert.deepEqual(mySignals(pr({ commits: { nodes: [] } }), me), []);
+  assert.deepEqual(mySignals(pr({ commits: { nodes: [] } }), me, day1), []);
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-01T05:00:00Z")), "5h");
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-04T01:00:00Z")), "3d");
   console.log("self-test ok");

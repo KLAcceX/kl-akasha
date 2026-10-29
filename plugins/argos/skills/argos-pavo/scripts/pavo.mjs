@@ -3,8 +3,10 @@
 // and prints only what is new. State lives outside any repo.
 //
 // Usage:
-//   node pavo.mjs [extra search qualifiers...]   e.g. node pavo.mjs org:acme
+//   node pavo.mjs [extra search qualifiers...] [--account <gh login>] [--json]
+//   node pavo.mjs org:acme --account me-at-work
 //   node pavo.mjs --self-test
+// Every round also writes last-round.json next to the state (the Argos mod reads it).
 // Env: ARGOS_PAVO_STATE overrides the state file path.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -17,11 +19,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const WARD = join(here, "..", "..", "argos-ward", "scripts", "ward.mjs");
 const STATE = process.env.ARGOS_PAVO_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "pavo-state.json");
 
-// State = { [url]: "signal|signal" } for my PRs that need action, plus { [url]: "review" } for my review queue.
+// State = { [url]: "signal|signal" } for my PRs that need action, plus { [url]: "review|..." } for my review queue.
 export function snapshot({ mine, toReview }) {
   const s = {};
   for (const p of mine) if (p.signals.length) s[p.url] = [...p.signals].sort().join("|");
-  for (const p of toReview) s[p.url] = "review";
+  for (const p of toReview) s[p.url] = ["review", ...p.signals].join("|");
   return s;
 }
 
@@ -32,27 +34,63 @@ export function news(prev, ward) {
   return all.filter((p) => cur[p.url] && cur[p.url] !== prev[p.url]);
 }
 
+// A review request reads as such, plus its lateness when late.
+export const describe = (p) => (p.kind === "review" ? ["pede sua revisão", ...p.signals].join(", ") : p.signals.join(", "));
+
 export function notification(items) {
-  const parts = items.map((p) => `${p.repo.split("/")[1]}#${p.number} ${p.kind === "review" ? "pede sua revisão" : p.signals.join(", ")}`);
+  const parts = items.map((p) => `${p.repo.split("/")[1]}#${p.number} ${describe(p)}`);
   let msg = `Argos: ${items.length} novidade(s): ${parts.join("; ")}`;
   return msg.length > 190 ? msg.slice(0, 187) + "..." : msg;
 }
 
+// Everything that needs action now, oldest first.
+export const pending = (ward) => {
+  const cur = snapshot(ward);
+  return [...ward.mine, ...ward.toReview].filter((p) => cur[p.url]).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+};
+
 function main(args) {
-  const ward = JSON.parse(execFileSync("node", [WARD, ...args, "--json"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }));
+  const at = new Date().toISOString();
+  const ROUND = join(dirname(STATE), "last-round.json");
+  mkdirSync(dirname(STATE), { recursive: true });
+  const json = args.includes("--json");
+  const i = args.indexOf("--account");
+  const account = i >= 0 ? args[i + 1] : undefined;
+  const qualifiers = args.filter((a, j) => a !== "--json" && j !== i && j !== i + 1);
+
+  let ward;
+  try {
+    const env = { ...process.env };
+    if (account) env.GH_TOKEN = execFileSync("gh", ["auth", "token", "-u", account], { encoding: "utf8" }).trim();
+    ward = JSON.parse(execFileSync("node", [WARD, ...qualifiers, "--json"], { encoding: "utf8", env, maxBuffer: 32 * 1024 * 1024 }));
+  } catch (err) {
+    const error = String(err.stderr || err.message).trim().split("\n").pop();
+    // keep the last good list visible, flagged with the error
+    let last = {};
+    try {
+      last = JSON.parse(readFileSync(ROUND, "utf8"));
+    } catch {}
+    writeFileSync(ROUND, JSON.stringify({ ...last, at, error, news: [], notify: null }, null, 2));
+    if (json) console.log(JSON.stringify({ at, error }));
+    else console.error(`ARGOS_PAVO: erro: ${error}`);
+    process.exit(1);
+  }
+
   let prev = {};
   try {
     prev = JSON.parse(readFileSync(STATE, "utf8"));
   } catch {} // first round: everything that needs action is new
   const items = news(prev, ward).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  mkdirSync(dirname(STATE), { recursive: true });
   writeFileSync(STATE, JSON.stringify(snapshot(ward), null, 2));
+  const round = { at, me: ward.me, pending: pending(ward), news: items, notify: items.length ? notification(items) : null };
+  writeFileSync(ROUND, JSON.stringify(round, null, 2));
 
+  if (json) return console.log(JSON.stringify(round));
   if (!items.length) return console.log("ARGOS_PAVO: nada novo");
   console.log(`ARGOS_PAVO: ${items.length} novidade(s)`);
-  console.log(`NOTIFY: ${notification(items)}`);
+  console.log(`NOTIFY: ${round.notify}`);
   for (const p of items) {
-    const what = p.kind === "review" ? "pede sua revisão" : p.signals.join(", ");
+    const what = describe(p);
     console.log(`- ${p.repo}#${p.number} ${p.title} | ${what} | aberto em ${p.createdAt.slice(0, 10)} | ${p.url}`);
   }
 }
@@ -79,6 +117,13 @@ function selfTest() {
   const many = { mine: Array.from({ length: 30 }, (_, i) => mine(`u${i}`, ["mudanças pedidas"])), toReview: [] };
   assert.ok(notification(news({}, many)).length <= 190);
   assert.equal(notification([rev("r")]), "Argos: 1 novidade(s): web#2 pede sua revisão");
+  // a review request turning late is news once, then quiet
+  const late = { ...ward, toReview: [{ ...rev("r"), signals: ["atrasada > 1 dia"] }] };
+  assert.deepEqual(news(snapshot(ward), late).map((p) => p.url), ["r"]);
+  assert.deepEqual(news(snapshot(late), late), []);
+  assert.equal(describe(late.toReview[0]), "pede sua revisão, atrasada > 1 dia");
+  // pending lists everything needing action, oldest first, idle PRs left out
+  assert.deepEqual(pending(ward).map((p) => p.url), ["a", "r"]);
   console.log("self-test ok");
 }
 

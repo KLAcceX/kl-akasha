@@ -1,6 +1,27 @@
 {
   "name": "argos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Argos, o vigia de cem olhos: nenhum PR fica parado sem alguém perceber.",
-  "author": { "name": "KLAcceX" }
+  "author": { "name": "KLAcceX" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "account": {
+      "type": "string",
+      "title": "Conta do gh",
+      "description": "Login do gh usado na vigília. Vazio = conta ativa.",
+      "default": ""
+    },
+    "qualifiers": {
+      "type": "string",
+      "title": "Filtro da busca",
+      "description": "Qualificadores de busca do GitHub, ex.: org:minha-empresa. Vazio = todo o GitHub.",
+      "default": ""
+    },
+    "intervalMinutes": {
+      "type": "number",
+      "title": "Intervalo (min)",
+      "description": "De quantos em quantos minutos a vigília roda. Mínimo 5.",
+      "default": 60
+    }
+  }
 }

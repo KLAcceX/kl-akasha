@@ -62,6 +62,8 @@ Hera mandou Argos vigiar Io. Ele tinha cem olhos e nunca fechava todos ao mesmo 
 | `argos-pavo` | Os olhos no pavão, que vigiam quando ele não está | Roda o `argos-ward` de tempos em tempos por meio de uma tarefa agendada do Claude, e só notifica quando há novidade. |
 | `argos-panoptes` | "O que tudo vê" | Revisa o PR de um colega abrindo de poucos a cem olhos, conforme a criticidade da task. Usa os cenários Gherkin da task como base, sabendo que o QA completa o resto. Anota no fim o que merecer virar outra tarefa. **Ele vê e você julga**: nada é publicado sem a sua aprovação. |
 
+**Os olhos dentro do Claude.** O plugin traz um mod que roda a vigília num timer próprio, sem gastar tokens. Ele mostra uma faixa acima do prompt (`👁 Argos: 1 PR(s) pedem ação · portal#219 conflito`), avisa por toast quando aparece novidade, e o comando `/argos` abre a lista completa num painel. A conta do `gh`, o filtro (ex.: `org:minha-empresa`) e o intervalo se configuram nas opções do plugin. Com várias sessões abertas, só uma roda a vigília em cada intervalo.
+
 **A criticidade é adaptável.** Primeiro vale a sua régua pessoal (`~/.claude/kl-akasha/criticality.md`, uma seção por repositório). Se não houver, vale a régua padrão do plugin (o Priority do Jira). Se nada for encontrado, a skill pergunta. Labels como `hotfix` e `security` e áreas sensíveis do código só sobem o nível.
 
 ---
