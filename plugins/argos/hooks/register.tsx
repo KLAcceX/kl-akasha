@@ -19,15 +19,19 @@ const isRunning = atom(RUNNING, false)
 const view = atom({ plugin: 'argos', key: 'view' } as const, 'fix' as View)
 const author = atom({ plugin: 'argos', key: 'author' } as const, '')
 
-// The KL · Akasha mark (brand/kl/final): the zoom on the face is the icon; the
-// animated one travels from the whole mark to the face and back.
+// The KL · Akasha mark (brand/kl/final). The icon is the face centred in a full
+// L-coloured frame; the loading one travels from the whole mark to the face and back.
+const GLYPH =
+  '<path fill="#7E5CC0" d="M104 96L160 40A56 56 0 0 1 160 152Z"/><path fill="#A98BE0" d="M160 40L104 96L160 152L122 96Z"/>' +
+  '<path fill="#F3EEFB" d="M172 68L178 90L200 96L178 102L172 124L166 102L144 96L166 90Z"/>'
 const MARK =
   '<g transform="translate(-6 0)"><path fill="#51408A" d="M40 40H96V136Q96 160 120 160H200A28 28 0 0 1 200 216H40Z"/>' +
   '<path fill="#7E5CC0" d="M104 96L160 40A56 56 0 0 1 160 152Z"/><path fill="#A98BE0" d="M160 40L104 96L160 152L122 96Z"/>' +
   '<path fill="#F3EEFB" d="M172 68L178 90L200 96L178 102L172 124L166 102L144 96L166 90Z"/></g>'
 const ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="66 20 156 156"><defs><clipPath id="t"><rect x="66" y="20" width="156" height="156" rx="30"/></clipPath></defs>' +
-  `<g clip-path="url(#t)"><rect x="0" y="0" width="256" height="256" fill="#1E1430"/>${MARK}</g></svg>`
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="56" fill="#1E1430"/>' +
+  '<rect x="22" y="22" width="212" height="212" rx="40" fill="none" stroke="#51408A" stroke-width="18"/>' +
+  `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
 const LOADING =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><animate attributeName="viewBox" values="0 0 256 256;66 20 156 156;0 0 256 256" dur="1.6s" repeatCount="indefinite" calcMode="spline" keySplines="0.65 0 0.35 1;0.65 0 0.35 1"/>' +
   `<rect x="-200" y="-200" width="656" height="656" rx="48" fill="#1E1430"/>${MARK}</svg>`
