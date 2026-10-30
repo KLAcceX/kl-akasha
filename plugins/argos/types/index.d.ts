@@ -5,6 +5,7 @@ export type Item = {
   title: string
   url: string
   author?: string
+  isDraft?: boolean
   createdAt: string
   signals: string[]
 }
@@ -12,16 +13,20 @@ export type Item = {
 // What pavo.mjs writes to last-round.json.
 export type Round = {
   at: string
+  okAt?: string | null
   me?: string
   repos?: string[]
   pending?: Item[]
+  mine?: Item[]
   others?: Item[]
   notify?: string | null
   error?: string
+  needsRepos?: boolean
 }
 
-// What the pane shows: what I must fix, teammates' PRs, or both.
-export type View = 'fix' | 'others' | 'all'
+// The queue tabs: what is for me, or my teammates' PRs.
+export type View = 'you' | 'team'
+export type Sort = 'rank' | 'oldest' | 'repo'
 
 declare module 'claude-code' {
   interface PluginState {
@@ -31,6 +36,12 @@ declare module 'claude-code' {
       isRunning: boolean
       view: View
       author: string
+      repo: string
+      sort: Sort
+      signal: string
+      expanded: string
+      copied: string
+      details: boolean
     }
   }
 }

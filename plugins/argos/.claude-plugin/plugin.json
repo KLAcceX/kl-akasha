@@ -1,6 +1,6 @@
 {
   "name": "argos",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Argos, the hundred-eyed watcher: no PR sits idle without someone noticing.",
   "author": { "name": "KLAcceX" },
   "types": "./types/index.d.ts",

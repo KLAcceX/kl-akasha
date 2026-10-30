@@ -81,7 +81,7 @@ function main(args) {
 
   // Nothing connected: search nothing, so no account's PRs are read by accident.
   if (!qualifiers.some((q) => q.startsWith("repo:"))) {
-    const round = { at, repos: [], pending: [], others: [], news: [], notify: null, needsRepos: true };
+    const round = { at, okAt: at, repos: [], pending: [], mine: [], others: [], news: [], notify: null, needsRepos: true };
     writeFileSync(ROUND, JSON.stringify(round, null, 2));
     if (json) return console.log(JSON.stringify(round));
     return console.log(`ARGOS_PAVO: ${t(lang, "no_repos")}`);
@@ -99,7 +99,8 @@ function main(args) {
     try {
       last = JSON.parse(readFileSync(ROUND, "utf8"));
     } catch {}
-    writeFileSync(ROUND, JSON.stringify({ ...last, at, error, news: [], notify: null }, null, 2));
+    // `at` is this failed attempt; `okAt` stays the last round that worked, so the pane never passes old data off as fresh
+    writeFileSync(ROUND, JSON.stringify({ ...last, at, okAt: last.okAt ?? null, error, news: [], notify: null }, null, 2));
     if (json) console.log(JSON.stringify({ at, error }));
     else console.error(`ARGOS_PAVO: ${t(lang, "error")}: ${error}`);
     process.exit(1);
@@ -113,9 +114,12 @@ function main(args) {
   writeFileSync(STATE, JSON.stringify(snapshot(ward), null, 2));
   const round = {
     at,
+    okAt: at,
     me: ward.me,
     repos: repos.map((r) => r.repo),
     pending: pending(ward),
+    // every open PR of mine, signals or not: the pane counts and charts them
+    mine: ward.mine,
     others: ward.others ?? [],
     news: items,
     notify: items.length ? notification(items, lang) : null,
