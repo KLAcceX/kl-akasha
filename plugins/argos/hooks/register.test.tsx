@@ -63,14 +63,27 @@ test('each PR adds to the right columns', () => {
   expect(Object.values(cells(theirs)).concat(Object.values(cells(ready)))).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
 })
 
-test('repos with something pending come first, blocked on top; the rest fold into one line', () => {
+test('every connected repo is listed with its open PRs, blocked first, zeros included', () => {
   const vm = ok(vmOf(round))
-  expect(vm.repos.map(x => [x.name, x.counts])).toEqual([
-    ['portal', { comments: 2, changed: 0, blocked: 1, review: 0 }],
-    ['web', { comments: 0, changed: 1, blocked: 0, review: 1 }],
+  expect(vm.repos.map(x => [x.name, x.counts, x.prs.length])).toEqual([
+    ['portal', { comments: 2, changed: 0, blocked: 1, review: 0 }, 3],
+    ['web', { comments: 0, changed: 1, blocked: 0, review: 1 }, 2],
+    ['api', { comments: 0, changed: 0, blocked: 0, review: 0 }, 1],
+    ['docs', { comments: 0, changed: 0, blocked: 0, review: 0 }, 0],
   ])
-  expect(vm.clean).toBe(2)
-  expect(vm.repos[1]?.prs.map(p => p.number)).toEqual([7, 8])
+  // every open PR is listed, the ones that need something first, with their owner
+  expect(vm.repos[0]?.prs.map(p => [p.number, p.act, p.owner])).toEqual([
+    [219, 'Resolve', 'you'],
+    [220, null, 'you'],
+    [221, null, 'you'],
+  ])
+  // only someone else's PR offers approve; mine never does
+  expect(vm.repos[0]?.prs.every(p => p.approve === null)).toBe(true)
+  expect(vm.repos[1]?.prs[0]?.approveMerge).toBe('Approve u7 on GitHub and merge it once checks pass (gh pr review --approve, then gh pr merge).')
+  expect(vm.repos[1]?.prs.map(p => [p.number, p.owner])).toEqual([
+    [7, 'bia'],
+    [8, 'caio'],
+  ])
   expect(vm.band).toEqual({ count: 3, verb: 'Merge it', ref: 'portal#220' })
 })
 
@@ -91,9 +104,9 @@ test('the send button carries the picked PRs: mine to fix, the others to review'
   )
   // a repo's checkbox reads all, some or none of its PRs
   const some = ok(vmOf(round, { selected: ['acme/web#7'] }))
-  expect(some.repos.map(x => x.pick)).toEqual(['none', 'some'])
-  expect(vm.repos.map(x => x.pick)).toEqual(['all', 'all'])
-  expect(vm.allSelected).toBe(true)
+  expect(some.repos.map(x => x.pick)).toEqual(['none', 'some', 'none', 'none'])
+  expect(vm.repos.map(x => x.pick)).toEqual(['some', 'all', 'none', 'none'])
+  expect(vm.allSelected).toBe(false)
   // "In prompt ✓" holds for this selection until the next round
   const sent = ok(vmOf(round, { selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'], sent: vm.send.key }))
   expect(sent.send.inPrompt).toBe(true)
@@ -108,7 +121,7 @@ test('failures and late rounds say so in words', () => {
   expect(vmOf({ at: round.at, okAt: null, error: 'x' }).state).toBe('noData')
   const late = vmOf({ ...round, okAt: ago(0.2), at: ago(0.2) })
   expect([late.seen, late.status]).toEqual(['seen 4 h ago', "Last check 4 h ago; the next one didn't run."])
-  expect(vmOf({ ...round, pending: [], mine: [], others: [] }).state).toBe('noPRs')
+  expect(ok(vmOf({ ...round, pending: [], mine: [], others: [] })).counts).toEqual({ open: 0, mine: 0, reviewed: 0, unreviewed: 0 })
 })
 
 test('the band shows the most urgent PR with its verb', async ($, on) => {
@@ -155,10 +168,10 @@ test('the top line leads with the tally; each repo is one line with its checkbox
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: 'to review' }))?.text).toBe('to review')
-  expect((await ui.find({ key: 'tally:open' }))?.text).toBe('6open')
-  expect((await ui.find({ key: 'check' }))?.text).toBe('Check now')
-  expect((await ui.find({ key: 'pick:acme/portal' }))?.text).toBe('portal')
-  expect((await ui.find({ key: 'open:acme/portal' }))?.text).toBe('1 PR  ▾')
+  expect((await ui.find({ key: 'tally:mine' }))?.text).toBe('3yours')
+  expect((await ui.find({ key: 'check' }))?.text).toBe('↻  Check now')
+  expect((await ui.find({ type: 'Text', text: 'portal' }))?.text).toBe('portal')
+  expect((await ui.find({ key: 'open:acme/portal' }))?.text).toBe('3 PRs  ▾')
   expect((await ui.find({ type: 'Text', text: /^Pick a repo/ }))?.text).toBe('Pick a repo or a PR to send.')
   expect((await ui.find({ key: 'send' }))?.text).toBe('Send to the AI')
   expect((await ui.find({ key: 'pick-all' }))?.text).toBe('Pick all')
@@ -172,8 +185,10 @@ test('picked PRs fill the send button; an open repo lists its PRs one per line',
   expect((await ui.find({ key: 'send' }))?.text).toBe('Enviar 3 PRs para a IA')
   expect((await ui.find({ type: 'Text', text: /^Vai para a IA/ }))?.text).toBe('Vai para a IA: 1 para corrigir, 2 para revisar.')
   expect((await ui.find({ key: 'act:acme/web#7' }))?.text).toBe('Revisar ›')
+  expect((await ui.find({ key: 'approve:acme/web#7' }))?.text).toBe('Aprovar ›')
+  expect((await ui.find({ key: 'merge:acme/web#7' }))?.text).toBe('Aprovar e mergear ›')
   expect((await ui.find({ key: 'open:acme/web' }))?.text).toBe('2 PRs  ▴')
-  expect((await ui.find({ key: 'pick-all' }))?.text).toBe('Limpar')
+  expect((await ui.find({ key: 'pick-all' }))?.text).toBe('Marcar todos')
   await ui.unmount()
 })
 
@@ -182,18 +197,19 @@ test('the terminal draws boxes in brackets, also when narrow', async ($, on) => 
   on('clock.now', clock)
   for (const columns of [80, 36]) {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal', viewport: { columns, rows: 30 } })
-    expect((await ui.find({ key: 'box:acme/portal' }))?.text).toBe('[x]')
+    expect((await ui.find({ key: 'box:acme/portal' }))?.text).toBe('[-]')
     expect((await ui.find({ type: 'Text', text: /^1 blocked$/ }))?.text).toBe('1 blocked')
     await ui.unmount()
   }
 })
 
-test('nothing pending says so and keeps the folded count', async ($, on) => {
-  on('state.get', stored({ round: { ...round, pending: [], mine: [quiet], others: [theirs] } }))
+test('with no open PR the repos stay listed, at zero', async ($, on) => {
+  on('state.get', stored({ round: { ...round, pending: [], mine: [], others: [] } }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /^Nothing pending/ }))?.text).toBe('Nothing pending in your repos')
-  expect((await ui.find({ type: 'Text', text: /nothing pending$/ }))?.text).toBe('4 repos with nothing pending')
+  expect((await ui.find({ type: 'Text', text: 'docs' }))?.text).toBe('docs')
+  expect((await ui.find({ key: 'tally:mine' }))?.text).toBe('0yours')
+  expect(await ui.find({ key: 'open:acme/docs' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -203,7 +219,7 @@ test('a failed round keeps the last good data under a retry strip', async ($, on
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /check failed/ }))?.text).toContain('Showing data from')
   expect((await ui.find({ type: 'Button', text: 'Try again' }))?.text).toBe('Try again')
-  expect((await ui.find({ key: 'pick:acme/portal' }))?.text).toBe('portal')
+  expect((await ui.find({ type: 'Text', text: 'portal' }))?.text).toBe('portal')
   await ui.unmount()
 })
 

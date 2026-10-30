@@ -82,8 +82,6 @@ const ICONS = {
 }
 const LAYER = 'rgba(127, 127, 127, 0.10)'
 const PICKED = 'rgba(217, 119, 87, 0.12)'
-// Below this many cells the tally leaves the title line for a line of its own.
-const NARROW = 72
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -217,7 +215,6 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
-    const isNarrow = (e.viewport?.columns ?? 80) < NARROW
     const running = await read($, isRunning)
     const vm = toViewModel(await read($, round), {
       now: await $.clock.now(),
@@ -229,12 +226,11 @@ export const register: Register = (on, options) => {
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
 
-    // The top bar, the dashboard's head: the mark and "Argos" with when it last looked at
-    // the far left, the tally of open work beside them, Check now at the far right. It
-    // wraps on a narrow pane.
+    // The head of the dashboard. Left: the mark and the title, the tally of open PRs under
+    // them. Right: when Argos last looked, then Check now as a real button, so it reads as
+    // pressable. Wraps on a narrow pane, the right group going below.
     type Tally = { open: number; mine: number; reviewed: number; unreviewed: number }
     const TALLY = [
-      ['open', 'tally_open'],
       ['mine', 'tally_mine'],
       ['reviewed', 'tally_reviewed'],
       ['unreviewed', 'tally_todo'],
@@ -259,23 +255,24 @@ export const register: Register = (on, options) => {
       </Box>
     )
     const top = (tally?: Tally) => (
-      <Box key="top" flexDirection="column" gap="xs">
+      <Box key="top" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="md" rowGap="sm">
+        <Box flexDirection="row" alignItems="center" gap="sm" flexGrow={1}>
+          {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={32} height={32} />}
+          <Box flexDirection="column">
+            <Text size="heading" weight="semibold">
+              Argos
+            </Text>
+            {tally && tallyLine(tally)}
+          </Box>
+        </Box>
         <Box flexDirection="row" alignItems="center" gap="sm">
-          {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={18} height={18} />}
-          <Text weight="semibold">Argos</Text>
           <Text size="caption" dimColor>
             {vm.seen}
           </Text>
-          {tally && !isNarrow && tallyLine(tally)}
-          <Box flexGrow={1} />
-          <Box flexDirection="row" alignItems="center" gap="xs">
-            {hasSvg && <ui.Svg source={ICONS.refresh} alt={t(lang, 'ui_check')} width={14} height={14} />}
-            <Button key="check" plain={true} hotkey="r" dimColor={running} onPress={checkNow}>
-              {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
-            </Button>
-          </Box>
+          <Button key="check" variant="secondary" dimColor={running} onPress={checkNow}>
+            {running ? t(lang, 'ui_checking') : `↻  ${t(lang, 'ui_check')}`}
+          </Button>
         </Box>
-        {tally && isNarrow && tallyLine(tally)}
       </Box>
     )
     const svgIcon = (name: keyof typeof ICONS, alt: string, size = 14) =>
@@ -290,11 +287,10 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+    // a part a state does not have is left out, so no gap is spent on it
     const frame = (first: any, ...body: any[]) => (
-      <Box flexDirection="column" gap="lg" padding="md">
-        {first}
-        {status}
-        {body}
+      <Box flexDirection="column" gap="lg" paddingX="lg" paddingY="md">
+        {[first, status, ...body].filter(Boolean)}
       </Box>
     )
     // Every state but the list leads with the bare top row; the list puts it in its summary.
@@ -303,7 +299,6 @@ export const register: Register = (on, options) => {
     if (vm.state === 'loading') return page(<Text key="b">{t(lang, 'ui_loading')}</Text>)
     if (vm.state === 'never') return page(<Text key="b">{t(lang, 'ui_never')}</Text>)
     if (vm.state === 'noData') return page(<Text key="b">{t(lang, 'ui_no_data')}</Text>)
-    if (vm.state === 'noPRs') return page(<Text key="b">{t(lang, 'ui_no_prs', vm.repos)}</Text>)
     if (vm.state === 'noRepos')
       return page(
         <Box key="b" flexDirection="column" gap="sm">
@@ -361,17 +356,19 @@ export const register: Register = (on, options) => {
       const { text } = await $.prompt.read()
       if (!text.includes(request)) await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
     }
-    // One repo. Its line: the checkbox, the name (which picks too, a larger target), the
+    // One repo. Its line: the checkbox (the control that picks it), the name, the
     // counts in their slots, and the expand control: "2 PRs" with a chevron in the accent,
     // one button. Opened, each PR hangs under the repo on a tree elbow: its checkbox, its
     // title in the quieter caption size (the repo leads), its age and number, and at the
-    // far right a short action in the signal's colour that puts that one PR in the prompt.
+    // far right a short action in the signal's colour that puts that one PR in the prompt;
+    // someone else's PR also offers Approve and Approve and merge, requests the person
+    // sends from the prompt, so nothing reaches GitHub without them.
     // A repo is tinted only when all its PRs are picked; a partial pick shows in its box.
     const row = (x: Repo) => (
       <Box
         key={x.repo}
         flexDirection="column"
-        gap="xs"
+        justifyContent="center"
         backgroundColor={fill(x.pick === 'all' ? PICKED : LAYER)}
         borderStyle={hasSvg ? 'round' : undefined}
         borderColor={fill(x.pick === 'all' ? PICKED : LAYER)}
@@ -379,24 +376,28 @@ export const register: Register = (on, options) => {
         paddingY="sm"
       >
         <Box flexDirection="row" alignItems="center" gap="sm">
-          {check(`box:${x.repo}`, x.pick, () => toggle(x.keys, x.pick !== 'all'))}
+          {x.prs.length > 0 ? check(`box:${x.repo}`, x.pick, () => toggle(x.keys, x.pick !== 'all')) : <Text dimColor>{hasSvg ? '☐' : '[ ]'}</Text>}
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Button key={`pick:${x.repo}`} plain={true} hover={{ color: 'claude' }} onPress={() => toggle(x.keys, x.pick !== 'all')}>
-              <Text weight="semibold">{x.name}</Text>
-            </Button>
+            <Text key={`name:${x.repo}`} weight="semibold" dimColor={x.prs.length === 0} wrap="truncate">
+              {x.name}
+            </Text>
           </Box>
           <Box flexDirection="row" alignItems="center" gap="xs">
             {COLUMNS.map(c => (!hasSvg && x.counts[c] === 0 ? null : count(x.repo, c, x.counts[c])))}
           </Box>
           <Box flexDirection="row" justifyContent="flex-end" marginLeft="md" width={hasSvg ? 9 : undefined}>
-            <Button key={`open:${x.repo}`} plain={true} hover={{ color: 'claude' }} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
-              <Text dimColor={!x.isOpen}>{t(lang, 'ui_prs', x.prs.length)}</Text>
-              <Text color="claude" weight="semibold">{x.isOpen ? '  ▴' : '  ▾'}</Text>
-            </Button>
+            {x.prs.length ? (
+              <Button key={`open:${x.repo}`} plain={true} hover={{ color: 'claude' }} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
+                <Text dimColor={!x.isOpen}>{t(lang, 'ui_prs', x.prs.length)}</Text>
+                <Text color="claude" weight="semibold">{x.isOpen ? '  ▴' : '  ▾'}</Text>
+              </Button>
+            ) : (
+              <Text dimColor>{t(lang, 'ui_prs', 0)}</Text>
+            )}
           </Box>
         </Box>
-        {x.isOpen && (
-          <Box flexDirection="column" gap="xs" paddingTop="xs">
+        {x.isOpen ? (
+          <Box flexDirection="column" gap="xs" paddingTop="sm">
             {x.prs.map(p => (
               <Box key={p.key} flexDirection="row" alignItems="center" gap="sm">
                 {hasSvg ? <ui.Svg source={ICONS.elbow} alt={t(lang, 'ui_alt_in', x.name)} width={16} height={16} /> : <Text dimColor>└</Text>}
@@ -408,19 +409,38 @@ export const register: Register = (on, options) => {
                     </Text>
                   </Button>
                 </Box>
+                <Text size="caption" color={p.isMine ? 'claude' : undefined} dimColor={!p.isMine}>
+                  {t(lang, 'ui_by', p.owner)}
+                </Text>
                 <Text size="caption" dimColor tabular>
                   {p.age}
                 </Text>
                 <Link href={p.url} label={`#${p.number}`} />
-                <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt)}>
-                  <Text size="caption" color={TONE[p.tone]} weight="semibold">
-                    {`${p.act} ›`}
-                  </Text>
-                </Button>
+                {p.act && p.tone && (
+                  <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt)}>
+                    <Text size="caption" color={TONE[p.tone]} weight="semibold">
+                      {`${p.act} ›`}
+                    </Text>
+                  </Button>
+                )}
+                {p.approve && (
+                  <Button key={`approve:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.approve!)}>
+                    <Text size="caption" color="success" weight="semibold">
+                      {`${t(lang, 'ui_approve')} ›`}
+                    </Text>
+                  </Button>
+                )}
+                {p.approveMerge && (
+                  <Button key={`merge:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.approveMerge!)}>
+                    <Text size="caption" color="success" weight="semibold">
+                      {`${t(lang, 'ui_approve_merge')} ›`}
+                    </Text>
+                  </Button>
+                )}
               </Box>
             ))}
           </Box>
-        )}
+        ) : null}
       </Box>
     )
 
@@ -474,28 +494,10 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    if (vm.repos.length === 0)
-      return frame(
-        top(vm.counts),
-        <Text key="clear" weight="semibold">
-          {t(lang, 'ui_nothing')}
-        </Text>,
-        vm.clean > 0 && (
-          <Text key="clean" size="caption" dimColor>
-            {t(lang, 'ui_clean', vm.clean)}
-          </Text>
-        ),
-      )
-
     return frame(
       top(vm.counts),
       <Box key="list" flexDirection="column" gap="sm">
         {vm.repos.map(row)}
-        {vm.clean > 0 && (
-          <Text size="caption" dimColor>
-            {t(lang, 'ui_clean', vm.clean)}
-          </Text>
-        )}
       </Box>,
       footer,
     )

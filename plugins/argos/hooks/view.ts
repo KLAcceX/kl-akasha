@@ -129,12 +129,12 @@ export function toViewModel(r: Round | null, o: Opts) {
   const pending = [...(r.pending ?? [])].sort(byRank)
   const seenUrl = new Set<string>()
   const all = [...pending, ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !seenUrl.has(p.url) && Boolean(seenUrl.add(p.url)))
-  if (!all.length) return { ...head, state: 'noPRs' as const, repos: connected.length }
 
   const names = [...new Set([...connected, ...all.map(p => p.repo)])]
   const picks = new Set(ui.selected)
   const repos = names.map(repo => {
-    const prs = all.filter(p => p.repo === repo && counts(p)).sort(byRank)
+    // every open PR of the repo: the ones that need something first, then the rest
+    const prs = all.filter(p => p.repo === repo).sort((a, b) => Number(counts(b)) - Number(counts(a)) || byRank(a, b))
     const sum = Object.fromEntries(COLUMNS.map(c => [c, prs.reduce((n, p) => n + cells(p)[c], 0)])) as Counts
     const chosen = prs.filter(p => picks.has(keyOf(p))).length
     return {
@@ -142,7 +142,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       name: shortRepo(repo),
       counts: sum,
       // the repo's checkbox: all of its PRs picked, some, or none
-      pick: chosen === 0 ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const),
+      pick: chosen === 0 || !prs.length ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const),
       keys: prs.map(keyOf),
       isOpen: ui.open === repo,
       prs: prs.map(p => ({
@@ -151,8 +151,15 @@ export function toViewModel(r: Round | null, o: Opts) {
         number: p.number,
         title: p.title,
         verb: verb(p, lang),
-        act: act(p, lang),
-        tone: tone(cells(p)),
+        // a PR that needs nothing gets no action button and no colour
+        act: counts(p) ? act(p, lang) : null,
+        tone: counts(p) ? tone(cells(p)) : null,
+        // who opened it, so "yours" in the tally can be checked line by line
+        owner: p.kind === 'mine' ? t(lang, 'ui_you') : p.author || '?',
+        isMine: p.kind === 'mine',
+        // someone else's ready-for-review PR: approve it, or approve and merge it
+        approve: p.kind !== 'mine' && !p.isDraft ? t(lang, 'prompt_approve', p.url) : null,
+        approveMerge: p.kind !== 'mine' && !p.isDraft ? t(lang, 'prompt_approve_merge', p.url) : null,
         age: ageShort(p.createdAt, now, lang),
         isPicked: picks.has(keyOf(p)),
         // its own request, for the action button on its line
@@ -161,16 +168,15 @@ export function toViewModel(r: Round | null, o: Opts) {
       items: prs,
     }
   })
-  // blocked first, then what waits on me, then the rest
-  const weight = (c: Counts) => [c.blocked, c.review, c.comments, c.changed]
-  const busy = repos
-    .filter(x => x.prs.length)
-    .sort((a, b) => {
-      const [wa, wb] = [weight(a.counts), weight(b.counts)]
-      return wb.map((n, i) => n - wa[i]!).find(Boolean) ?? a.name.localeCompare(b.name)
-    })
-  // The top line's tally of the work: every open PR once, mine, and the others split by
-  // whether I already reviewed them. The four always add up.
+  // Every connected repo stays on the list, with zeros when it has nothing: blocked first,
+  // then what waits on me, then by how many PRs are open, then by name.
+  const weight = (x: (typeof repos)[number]) => [x.counts.blocked, x.counts.review, x.counts.comments, x.counts.changed, x.prs.length]
+  const busy = [...repos].sort((a, b) => {
+    const [wa, wb] = [weight(a), weight(b)]
+    return wb.map((n, i) => n - wa[i]!).find(Boolean) ?? a.name.localeCompare(b.name)
+  })
+  // The tally under the title, over open PRs only: mine, and the others split by whether
+  // I already reviewed them. The three add up to every open PR on the list.
   const others = all.filter(p => p.kind !== 'mine')
   const reviewed = others.filter(p => p.reviewed).length
   const tally = { open: all.length, mine: all.length - others.length, reviewed, unreviewed: others.length - reviewed }
@@ -187,7 +193,6 @@ export function toViewModel(r: Round | null, o: Opts) {
     state: 'ok' as const,
     counts: tally,
     repos: busy.map(({ items, ...x }) => x),
-    clean: repos.length - busy.length,
     allKeys,
     allSelected: allKeys.length > 0 && allKeys.every(k => picks.has(k)),
     send: {
