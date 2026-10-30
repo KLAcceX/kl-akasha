@@ -12,9 +12,9 @@ import assert from "node:assert/strict";
 import { label, langArg, t } from "./i18n.mjs";
 
 const QUERY = `
-query($q: String!) {
-  search(type: ISSUE, query: $q, first: 50) {
-    issueCount
+query($q: String!, $after: String) {
+  search(type: ISSUE, query: $q, first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
         number title url isDraft createdAt updatedAt reviewDecision mergeable
@@ -24,6 +24,9 @@ query($q: String!) {
         reviewThreads(first: 50) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
         comments(last: 1) { nodes { createdAt author { login __typename } } }
         latestReviews(first: 20) { nodes { state submittedAt author { login __typename } } }
+        timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) {
+          nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } } } }
+        }
       }
     }
   }
@@ -35,7 +38,13 @@ const isOther = (a, me) => a && !isBot(a) && a.login !== me;
 // Google eng-practices: answer a review request within one business day.
 // ponytail: 24 wall-clock hours, use business days if weekends cause false alarms.
 const PICKUP_MS = 24 * 36e5;
-const isLate = (pr, now) => now - Date.parse(pr.createdAt) > PICKUP_MS;
+const isLate = (since, now) => now - Date.parse(since) > PICKUP_MS;
+
+// When I was asked to review, so a PR opened long ago and handed to me today is not late
+// yet. A team request counts as mine; with no event left, the PR's own age.
+export const askedAt = (pr, me) =>
+  (pr.timelineItems?.nodes ?? []).filter((e) => e.createdAt && [me, undefined].includes(e.requestedReviewer?.login)).at(-1)
+    ?.createdAt ?? pr.createdAt;
 
 // Signals for a PR I authored. Empty list = nothing for me to do right now.
 export function mySignals(pr, me, now = Date.now()) {
@@ -58,7 +67,7 @@ export function mySignals(pr, me, now = Date.now()) {
   if (!s.length && pr.reviewDecision === "APPROVED") s.push("ready");
   // Pickup is where PRs wait longest: nobody has looked yet, so ping the reviewers.
   const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, me));
-  if (!s.length && !pr.isDraft && !anyReview && isLate(pr, now)) s.push("no_review");
+  if (!s.length && !pr.isDraft && !anyReview && isLate(pr.createdAt, now)) s.push("no_review");
   return s;
 }
 
@@ -73,7 +82,7 @@ const changedSince = (pr, me) => {
 // Signals for a PR waiting for my review.
 export const reviewSignals = (pr, me, now = Date.now()) => [
   ...(changedSince(pr, me) ? ["changed"] : []),
-  ...(isLate(pr, now) ? ["late"] : []),
+  ...(isLate(askedAt(pr, me), now) ? ["late"] : []),
 ];
 
 // Signals for a teammate's PR nobody asked me to review: where a proactive look helps.
@@ -86,19 +95,25 @@ export function othersSignals(pr, me, now = Date.now()) {
   if (["FAILURE", "ERROR"].includes(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state)) s.push("ci_failed");
   if (pr.mergeable === "CONFLICTING") s.push("conflict");
   const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, author));
-  if (!anyReview && isLate(pr, now)) s.push("no_review");
+  if (!anyReview && isLate(pr.createdAt, now)) s.push("no_review");
   return s;
 }
 
+// Every page of the search (GitHub stops at 1000 results), so many connected repos with
+// many PRs each are all listed.
 function search(q) {
-  const out = execFileSync("gh", ["api", "graphql", "-f", `query=${QUERY}`, "-f", `q=${q}`], {
-    encoding: "utf8",
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  const { search } = JSON.parse(out).data;
-  // ponytail: first 50 per list only; paginate if someone really has 50+ open PRs.
-  if (search.issueCount > 50) console.error(`aviso: ${search.issueCount} PRs, mostrando 50`);
-  return search.nodes.filter((n) => n.url);
+  const nodes = [];
+  let after;
+  do {
+    const out = execFileSync("gh", ["api", "graphql", "-f", `query=${QUERY}`, "-f", `q=${q}`, ...(after ? ["-f", `after=${after}`] : [])], {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    const { search } = JSON.parse(out).data;
+    nodes.push(...search.nodes.filter((n) => n.url));
+    after = search.pageInfo.hasNextPage ? search.pageInfo.endCursor : undefined;
+  } while (after);
+  return nodes;
 }
 
 const age = (iso, now = Date.now()) => {
@@ -201,6 +216,11 @@ function selfTest() {
   assert.deepEqual(othersSignals(theirs({ latestReviews: myReview("2026-10-01T06:00:00Z") }), me, day1), ["changed"]);
   assert.deepEqual(othersSignals(theirs({ latestReviews: myReview("2026-10-02T06:00:00Z") }), me, day1), []);
   assert.deepEqual(reviewSignals(pr({ latestReviews: myReview("2026-10-01T06:00:00Z") }), me, day3), ["changed", "late"]);
+  // late counts from my review request (a team request too), not from when the PR opened
+  const asked = (login, createdAt) => ({ createdAt, requestedReviewer: login ? { login } : {} });
+  assert.deepEqual(reviewSignals(pr({ timelineItems: { nodes: [asked(me, "2026-10-03T06:00:00Z")] } }), me, day3), []);
+  assert.deepEqual(reviewSignals(pr({ timelineItems: { nodes: [asked(null, "2026-10-03T06:00:00Z")] } }), me, day3), []);
+  assert.deepEqual(reviewSignals(pr({ timelineItems: { nodes: [asked("ana", "2026-10-03T06:00:00Z")] } }), me, day3), ["late"]);
 
   assert.deepEqual(mySignals(pr({}), me, day1), []);
   assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me, day1), ["ready"]);
