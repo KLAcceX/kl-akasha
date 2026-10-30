@@ -126,15 +126,39 @@ test('the band stays out of the way when nothing needs action', async ($, on) =>
   await ui.unmount()
 })
 
-test('the pane lists repos to pick, the legend and a quiet send button', async ($, on) => {
+test('the send checks block an empty pick or a running check, and warn on stale data or a big batch', () => {
+  expect(ok(vmOf(round)).send.block).toBe('Pick at least one repo to send.')
+  const picked = ok(vmOf(round, { selected: ['acme/portal', 'acme/web'] }))
+  expect([picked.send.block, picked.send.warn, picked.send.summary]).toEqual([null, null, 'Going to the AI: 1 to fix, 2 to review.'])
+  const running = ok(toViewModel(round as never, { now: NOW, lang: 'en', minutes: 60, running: true, ui: { selected: ['acme/web'] } }))
+  expect(running.send.block).toBe('Wait for the check to finish.')
+  const stale = ok(vmOf({ ...round, okAt: ago(0.2), at: ago(0.2) }, { selected: ['acme/web'] }))
+  expect(stale.send.warn).toMatch(/^The data is from \d\d:\d\d\. Check again before sending\.$/)
+  const many = Array.from({ length: 11 }, (_, i) => item({ kind: 'review', repo: 'acme/web', number: 100 + i, url: `m${i}` }))
+  expect(ok(vmOf({ ...round, pending: many }, { selected: ['acme/web'] })).send.warn).toBe('12 PRs at once: the AI works through them by priority.')
+})
+
+test('colour follows the heaviest column, and the summary names where to start', () => {
+  const vm = ok(vmOf(round))
+  expect([vm.tone, vm.repos.map(x => x.tone)]).toEqual(['blocked', ['blocked', 'review']])
+  expect(vm.headline).toBe('2 repos need you')
+  expect(vm.totals).toEqual({ comments: 2, changed: 1, blocked: 1, review: 1 })
+  expect(vm.repos[0]?.meta).toBe('oldest 7w')
+})
+
+test('the pane leads with the summary, coloured counts and a send that says what is missing', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ key: 'pick:acme/portal' }))?.text).toBe('☐ portal')
-  expect((await ui.find({ type: 'Text', text: /^Pick the repos/ }))?.text).toBe('Pick the repos to work on')
-  expect((await ui.find({ type: 'Text', text: /nothing pending/ }))?.text).toBe('2 repos with nothing pending')
-  expect((await ui.find({ type: 'Text', text: 'blocked' }))?.text).toBe('blocked')
-  expect((await ui.find({ key: 'send' }))?.text).toBe('Pick a repo to send')
+  expect((await ui.find({ type: 'Text', text: /need you$/ }))?.text).toBe('2 repos need you')
+  expect((await ui.find({ type: 'Text', text: /^1 blocked$/ }))?.text).toBe('1 blocked')
+  expect((await ui.find({ key: 'open:acme/portal' }))?.text).toBe('1 PR')
+  expect((await ui.find({ key: 'pick:acme/portal' }))?.text).toBe('portal')
+  expect(await ui.find({ key: 'pick:acme/portal' })).toBeDefined()
+  expect(await ui.find({ key: 'open:acme/portal' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^Pick at least/ }))?.text).toBe('Pick at least one repo to send.')
+  expect((await ui.find({ key: 'send' }))?.text).toBe('Send to the AI')
+  expect((await ui.find({ key: 'pick-all' }))?.text).toBe('Pick all')
   await ui.unmount()
 })
 
@@ -142,19 +166,20 @@ test('picked repos fill the send button; an open repo lists its PRs', { options:
   on('state.get', stored({ round, selected: ['acme/portal', 'acme/web'], open: 'acme/web' }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ key: 'pick:acme/web' }))?.text).toBe('☑ web')
   expect((await ui.find({ key: 'send' }))?.text).toBe('Enviar 2 repos para a IA')
-  expect((await ui.find({ type: 'Text', text: /Revisar o PR de bia/ }))?.text).toBe('Revisar o PR de bia · T')
+  expect((await ui.find({ type: 'Text', text: /^Vai para a IA/ }))?.text).toBe('Vai para a IA: 1 para corrigir, 2 para revisar.')
+  expect((await ui.find({ type: 'Text', text: /^Revisar o PR de bia$/ }))?.text).toBe('Revisar o PR de bia')
+  expect((await ui.find({ key: 'pick-all' }))?.text).toBe('Limpar')
   await ui.unmount()
 })
 
-test('the terminal draws letters for icons and boxes in brackets, also when narrow', async ($, on) => {
+test('the terminal draws boxes in brackets, also when narrow', async ($, on) => {
   on('state.get', stored({ round, selected: ['acme/portal'] }))
   on('clock.now', clock)
   for (const columns of [80, 36]) {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal', viewport: { columns, rows: 30 } })
     expect((await ui.find({ key: 'pick:acme/portal' }))?.text).toBe('[x] portal')
-    expect((await ui.find({ type: 'Text', text: 'B' }))?.text).toBe('B')
+    expect((await ui.find({ type: 'Text', text: /^1 blocked$/ }))?.text).toBe('1 blocked')
     await ui.unmount()
   }
 })
@@ -174,7 +199,7 @@ test('a failed round keeps the last good data under a retry strip', async ($, on
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /check failed/ }))?.text).toContain('Showing data from')
   expect((await ui.find({ type: 'Button', text: 'Try again' }))?.text).toBe('Try again')
-  expect((await ui.find({ key: 'pick:acme/portal' }))?.text).toBe('☐ portal')
+  expect((await ui.find({ type: 'Text', text: /need you$/ }))?.text).toBe('2 repos need you')
   await ui.unmount()
 })
 

@@ -35,23 +35,58 @@ const ICON =
   `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
 const RED = '#E5384A'
 
-// Column icons: Tabler Icons outlines (MIT, tabler.io/icons), a mid grey that reads in
-// both themes; the octagon is the one in colour. The terminal draws the letter instead.
-const PATHS: Record<Column, string> = {
-  comments:
-    '<path d="M3 20l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c3.255 2.777 3.695 7.266 1.029 10.501c-2.666 3.235 -7.615 4.215 -11.574 2.293l-4.7 1"/>',
-  changed: '<path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/>',
-  blocked:
-    '<path d="M8.7 3h6.6l4.7 4.7v6.6l-4.7 4.7h-6.6l-4.7 -4.7v-6.6z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+// One theme colour per column, used on its count alone: red for blocked, amber for a
+// review waiting on you, blue for comments, purple for changed.
+const TONE: Record<Column, 'error' | 'warning' | 'suggestion' | 'merged'> = {
+  blocked: 'error',
+  review: 'warning',
+  comments: 'suggestion',
+  changed: 'merged',
+}
+// Translucent fills, so one value reads on the light and the dark theme alike: each count's
+// pill takes its colour faintly; cards, the summary and the send bar sit on a neutral
+// layer; a picked card takes the accent faintly. The terminal draws none of them.
+const TINT: Record<Column, string> = {
+  blocked: 'rgba(229, 72, 77, 0.16)',
+  review: 'rgba(226, 163, 58, 0.18)',
+  comments: 'rgba(80, 140, 230, 0.16)',
+  changed: 'rgba(150, 110, 230, 0.16)',
+}
+// Icons: Tabler Icons outlines (MIT, tabler.io/icons) drawn as Svg, which a Button
+// cannot hold, so each sits beside the text control it belongs to. Colours that read on
+// both themes; the terminal draws none and keeps its words.
+const GREY = '#8C8A83'
+const HUE: Record<Column, string> = { blocked: '#E5484D', review: '#E2A33A', comments: '#508CE6', changed: '#966EE6' }
+const stroke = (paths: string, color = GREY) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" ` +
+  `stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`
+const REFRESH = '<path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/>'
+const GLYPHS: Record<Column, string> = {
+  blocked: '<path d="M8.7 3h6.6l4.7 4.7v6.6l-4.7 4.7h-6.6l-4.7 -4.7v-6.6z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
   review:
     '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/>',
+  comments:
+    '<path d="M3 20l1.3 -3.9c-2.3 -3.4 -1.4 -7.9 2.1 -10.4c3.5 -2.5 8.6 -2.3 11.8 .5c3.3 2.8 3.7 7.3 1 10.5c-2.7 3.2 -7.6 4.2 -11.6 2.3l-4.6 1"/>',
+  changed: REFRESH,
 }
-const svgIcon = (c: Column) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${c === 'blocked' ? RED : '#8A8F98'}" ` +
-  `stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${PATHS[c]}</svg>`
-const LETTER: Record<Column, string> = { comments: 'C', changed: 'A', blocked: 'B', review: 'R' }
-// Below this many cells a repo's counts go on their own line under its name.
-const NARROW = 52
+const ICONS = {
+  unchecked: stroke('<rect x="4" y="4" width="16" height="16" rx="3"/>'),
+  checked:
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="#D97757"/>' +
+    '<path d="M8 12.5l2.6 2.6l5.4 -5.6" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  right: stroke('<path d="M9 6l6 6l-6 6"/>'),
+  down: stroke('<path d="M6 9l6 6l6 -6"/>'),
+  refresh: stroke(REFRESH),
+  pr: stroke(
+    '<path d="M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M16 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>' +
+      '<path d="M6 8v8"/><path d="M11 6h5a2 2 0 0 1 2 2v8"/><path d="M14 9l-3 -3l3 -3"/>',
+  ),
+  ...(Object.fromEntries(Object.entries(GLYPHS).map(([c, d]) => [c, stroke(d, HUE[c as Column])])) as Record<Column, string>),
+}
+const LAYER = 'rgba(127, 127, 127, 0.10)'
+const PICKED = 'rgba(217, 119, 87, 0.12)'
+// Below this many cells a card drops its age line and keeps the essentials.
+const NARROW = 44
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -191,11 +226,14 @@ export const register: Register = (on, options) => {
           {vm.seen}
         </Text>
         <Box flexGrow={1} />
+        {hasSvg && <ui.Svg source={ICONS.refresh} alt="" width={14} height={14} />}
         <Button key="check" plain={true} hotkey="r" dimColor={running} onPress={checkNow}>
           {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
         </Button>
       </Box>
     )
+    const svgIcon = (name: keyof typeof ICONS, alt: string, size = 14) =>
+      hasSvg && <ui.Svg source={ICONS[name]} alt={alt} width={size} height={size} />
     const status = vm.status && (
       <Box borderStyle="round" borderColor={RED} paddingX="sm" flexDirection="column" gap="xs">
         <Text>{vm.status}</Text>
@@ -243,128 +281,182 @@ export const register: Register = (on, options) => {
     // narrows vm for TypeScript; every other state returned above
     if (vm.state !== 'ok') return page()
 
-    const icon = (c: Column) =>
-      hasSvg ? (
-        <ui.Svg source={svgIcon(c)} alt={t(lang, `ui_col_${c}`)} width={14} height={14} />
-      ) : (
-        <Text color={c === 'blocked' ? RED : undefined} dimColor={c !== 'blocked'}>
-          {LETTER[c]}
-        </Text>
-      )
-    // One count: icon and number, in a fixed slot so the columns line up; a zero leaves
-    // the slot empty, so the eye only meets what is there.
-    const cell = (repo: string, c: Column, n: number, slot: boolean) =>
-      n > 0 ? (
-        <Box key={`${repo}:${c}`} flexDirection="row" alignItems="center" gap="xs" width={slot ? 6 : undefined}>
-          {icon(c)}
-          <Text tabular color={c === 'blocked' ? RED : undefined} weight={c === 'blocked' ? 'semibold' : undefined}>
-            {String(n)}
-          </Text>
-        </Box>
-      ) : (
-        slot && <Box key={`${repo}:${c}`} width={6} />
-      )
+    const fill = (color: string) => (hasSvg ? color : undefined)
+    // A count as a pill in its column's colour; colour marks the counts only, never the
+    // frame around a repo, so red appears once per blocked count and nowhere else.
+    const chips = (id: string, counts: Record<Column, number>) => (
+      <Box flexDirection="row" flexWrap="wrap" gap="xs">
+        {COLUMNS.map(
+          c =>
+            counts[c] > 0 && (
+              <Box
+                key={`${id}:${c}`}
+                flexDirection="row"
+                alignItems="center"
+                gap="xs"
+                backgroundColor={fill(TINT[c])}
+                borderStyle={hasSvg ? 'round' : undefined}
+                borderColor={fill(TINT[c])}
+                paddingX="sm"
+              >
+                {svgIcon(c, '', 12)}
+                <Text color={TONE[c]} weight="semibold">
+                  {t(lang, `chip_${c}`, counts[c])}
+                </Text>
+              </Box>
+            ),
+        )}
+      </Box>
+    )
     const toggle = (repo: string) => () =>
       void update($, selected, list => (list.includes(repo) ? list.filter(x => x !== repo) : [...list, repo]))
 
-    type Repo = Extract<typeof vm, { state: 'ok' }>['repos'][number]
-    const repoRow = (x: Repo) => {
-      const box = hasSvg ? (x.isSelected ? '☑' : '☐') : x.isSelected ? '[x]' : '[ ]'
-      const name = (
-        <Box key="name" flexDirection="row" alignItems="center" gap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Button key={`pick:${x.repo}`} plain={true} onPress={toggle(x.repo)}>
-            {`${box} ${x.name}`}
-          </Button>
-          <Button key={`open:${x.repo}`} plain={true} dimColor={true} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
-            {x.isOpen ? '▾' : '▸'}
-          </Button>
-        </Box>
-      )
-      const prs = x.isOpen && (
-        <Box key="prs" flexDirection="column" gap="xs" paddingLeft="lg">
-          {x.prs.map(p => (
-            <Box key={p.key} flexDirection="row" alignItems="center" gap="sm">
-              <Link href={p.url} label={`#${p.number}`} />
-              <Text wrap="truncate">
-                {p.verb} · {p.title}
-              </Text>
-            </Box>
-          ))}
-        </Box>
-      )
-      return isNarrow ? (
-        <Box key={x.repo} flexDirection="column" gap="xs">
-          {name}
-          <Box flexDirection="row" flexWrap="wrap" gap="md" paddingLeft="lg">
-            {COLUMNS.map(c => cell(x.repo, c, x.counts[c], false))}
+    type Repo = (typeof vm.repos)[number]
+    // One card per repo on the neutral layer, until picked (then the accent frame and fill).
+    // Left: the checkbox with the repo name, one control. Right: "N PRs ▸", which lists
+    // them. Between: the next action and the counts.
+    const card = (x: Repo) => (
+      <Box
+        key={x.repo}
+        flexDirection="column"
+        gap="xs"
+        borderStyle="round"
+        borderColor={x.isSelected ? 'claude' : undefined}
+        backgroundColor={fill(x.isSelected ? PICKED : LAYER)}
+        paddingX="sm"
+        paddingY="xs"
+      >
+        <Box flexDirection="row" alignItems="center" justifyContent="space-between" gap="sm">
+          <Box flexDirection="row" alignItems="center" gap="sm" flexShrink={1} minWidth={0}>
+            {svgIcon(x.isSelected ? 'checked' : 'unchecked', t(lang, x.isSelected ? 'ui_alt_picked' : 'ui_alt_unpicked'), 16)}
+            <Button key={`pick:${x.repo}`} plain={true} onPress={toggle(x.repo)}>
+              {!hasSvg && <Text color={x.isSelected ? 'claude' : undefined}>{x.isSelected ? '[x] ' : '[ ] '}</Text>}
+              <Text weight="semibold">{x.name}</Text>
+            </Button>
           </Box>
-          {prs}
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            <Button key={`open:${x.repo}`} plain={true} dimColor={!x.isOpen} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
+              {hasSvg ? t(lang, 'ui_prs', x.prs.length) : `${t(lang, 'ui_prs', x.prs.length)} ${x.isOpen ? '▾' : '▸'}`}
+            </Button>
+            {svgIcon(x.isOpen ? 'down' : 'right', '')}
+          </Box>
         </Box>
-      ) : (
-        <Box key={x.repo} flexDirection="column" gap="xs">
+        {x.next && (
           <Box flexDirection="row" alignItems="center" gap="sm">
-            {name}
-            {COLUMNS.map(c => cell(x.repo, c, x.counts[c], true))}
+            <Text wrap="truncate">{x.next.verb}</Text>
+            <Link href={x.next.url} label={`#${x.next.number}`} />
           </Box>
-          {prs}
-        </Box>
-      )
-    }
+        )}
+        {chips(x.repo, x.counts)}
+        {!isNarrow && (
+          <Text size="caption" dimColor wrap="truncate">
+            {x.meta}
+          </Text>
+        )}
+        {x.isOpen && (
+          <Box flexDirection="column" gap="xs" paddingTop="xs">
+            {x.prs.map(p => (
+              <Box key={p.key} flexDirection="row" alignItems="center" gap="sm">
+                {svgIcon('pr', '')}
+                <Link href={p.url} label={`#${p.number}`} />
+                <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Text wrap="truncate">{p.verb}</Text>
+                  <Text size="caption" dimColor wrap="truncate">
+                    {p.title} · {p.age}
+                  </Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        )}
+      </Box>
+    )
 
-    // Puts the picked repos' PRs in the prompt without sending: appended on a new line
-    // when there is a draft, never twice. The button says "In prompt ✓" until the next round.
+    // The send bar: what will go (or why nothing can), and the one button of the pane.
+    // The button stays pressable; with nothing picked it is secondary and the line beside
+    // it says what to do. The prompt is filled, never sent.
     const { send } = vm
     const sendNow = async () => {
-      if (!send.count) return
+      if (send.block) return
       const { text } = await $.prompt.read()
       if (!text.includes(send.prompt))
         await $.prompt.fill(text.trim() ? { text: `\n${send.prompt}`, mode: 'append' } : { text: send.prompt, mode: 'replace' })
       await update($, sent, () => send.key)
     }
+    const footer = (
+      <Box
+        key="send-bar"
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="space-between"
+        flexWrap="wrap"
+        gap="sm"
+        backgroundColor={fill(LAYER)}
+        borderStyle={hasSvg ? 'round' : undefined}
+        borderColor={fill(LAYER)}
+        paddingX="md"
+        paddingY="sm"
+      >
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text size="caption" dimColor={Boolean(send.block)}>
+            {send.block ?? send.summary}
+          </Text>
+          {send.warn && !send.block && (
+            <Text size="caption" color="warning">
+              {send.warn}
+            </Text>
+          )}
+        </Box>
+        <Button key="send" variant={send.block ? 'secondary' : 'primary'} onPress={() => void sendNow()}>
+          {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
+        </Button>
+      </Box>
+    )
 
-    return page(
-      vm.repos.length === 0 ? (
+    if (vm.repos.length === 0)
+      return page(
         <Text key="clear" size="heading" weight="semibold">
           {t(lang, 'ui_nothing')}
-        </Text>
-      ) : (
-        <Box key="list" flexDirection="column" gap="sm">
-          <Text size="caption" dimColor>
-            {t(lang, 'ui_pick')}
+        </Text>,
+        vm.clean > 0 && (
+          <Text key="clean" size="caption" dimColor>
+            {t(lang, 'ui_clean', vm.clean)}
           </Text>
-          {vm.repos.map(repoRow)}
-        </Box>
-      ),
-      vm.clean > 0 && (
-        <Text key="clean" size="caption" dimColor>
-          {t(lang, 'ui_clean', vm.clean)}
-        </Text>
-      ),
-      vm.repos.length > 0 && (
-        <Box key="legend" flexDirection="row" flexWrap="wrap" columnGap="md" rowGap="xs">
-          {COLUMNS.map(c => (
-            <Box key={c} flexDirection="row" alignItems="center" gap="xs">
-              {icon(c)}
-              <Text size="caption" dimColor>
-                {t(lang, `ui_col_${c}`)}
-              </Text>
-            </Box>
-          ))}
-        </Box>
-      ),
-      vm.repos.length > 0 && (
-        <Box key="send" flexDirection="row">
-          {send.count ? (
-            <Button key="send" variant="primary" onPress={() => void sendNow()}>
-              {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
-            </Button>
-          ) : (
-            <Button key="send" plain={true} dimColor={true} onPress={() => {}}>
-              {t(lang, 'ui_send', 0)}
+        ),
+      )
+
+    return page(
+      <Box
+        key="summary"
+        flexDirection="column"
+        gap="sm"
+        backgroundColor={fill(LAYER)}
+        borderStyle={hasSvg ? 'round' : undefined}
+        borderColor={fill(LAYER)}
+        paddingX="md"
+        paddingY="sm"
+      >
+        <Box flexDirection="row" alignItems="center" justifyContent="space-between" gap="sm">
+          <Text size="heading" weight="semibold">
+            {vm.headline}
+          </Text>
+          {vm.repos.length > 1 && (
+            <Button key="pick-all" plain={true} dimColor={true} onPress={() => void update($, selected, () => (vm.allSelected ? [] : vm.repos.map(x => x.repo)))}>
+              {vm.allSelected ? t(lang, 'ui_pick_none') : t(lang, 'ui_pick_all')}
             </Button>
           )}
         </Box>
-      ),
+        {chips('total', vm.totals)}
+      </Box>,
+      <Box key="list" flexDirection="column" gap="sm">
+        {vm.repos.map(card)}
+        {vm.clean > 0 && (
+          <Text size="caption" dimColor>
+            {t(lang, 'ui_clean', vm.clean)}
+          </Text>
+        )}
+      </Box>,
+      footer,
     )
   })
 }

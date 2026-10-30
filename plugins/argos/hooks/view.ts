@@ -44,6 +44,14 @@ export function verb(p: Item, lang: string): string {
   return t(lang, `v_${k}`, Number(n))
 }
 
+// 5h, 12d, 3w: hours under a day, days under two weeks, then weeks.
+export function ageShort(iso: string, now: number, lang: string): string {
+  const h = Math.max(0, (now - Date.parse(iso)) / 36e5)
+  if (h < 24) return t(lang, 'u_h', Math.max(1, Math.floor(h)))
+  const d = Math.floor(h / 24)
+  return d < 14 ? t(lang, 'u_d', d) : t(lang, 'u_w', Math.floor(d / 7))
+}
+
 // The four columns of a repo row, in this order everywhere (icons, legend, tests).
 export const COLUMNS = ['comments', 'changed', 'blocked', 'review'] as const
 export type Column = (typeof COLUMNS)[number]
@@ -61,6 +69,11 @@ export function cells(p: Item): Counts {
   }
 }
 const counts = (p: Item) => Object.values(cells(p)).some(Boolean)
+// The column that names a PR's or a repo's colour: blocked, then review, then the rest.
+const WEIGHT: Column[] = ['blocked', 'review', 'comments', 'changed']
+export const tone = (c: Counts): Column => WEIGHT.find(k => c[k] > 0) ?? 'comments'
+// More PRs than this in one send gets a warning: the AI works through them in order.
+export const MANY = 10
 
 export function reason(error: string, lang: string) {
   if (/gh auth|not logged/i.test(error)) return t(lang, 'err_gh_auth')
@@ -115,13 +128,26 @@ export function toViewModel(r: Round | null, o: Opts) {
   const repos = names.map(repo => {
     const prs = all.filter(p => p.repo === repo && counts(p)).sort(byRank)
     const sum = Object.fromEntries(COLUMNS.map(c => [c, prs.reduce((n, p) => n + cells(p)[c], 0)])) as Counts
+    const first = prs[0]
+    const oldest = prs.reduce<Item | undefined>((o, p) => (!o || p.createdAt < o.createdAt ? p : o), undefined)
     return {
       repo,
       name: shortRepo(repo),
       counts: sum,
+      tone: tone(sum),
       isSelected: ui.selected.includes(repo),
       isOpen: ui.open === repo,
-      prs: prs.map(p => ({ key: keyOf(p), url: p.url, number: p.number, title: p.title, verb: verb(p, lang) })),
+      next: first ? { verb: verb(first, lang), number: first.number, url: first.url } : null,
+      meta: oldest ? t(lang, 'ui_repo_meta', ageShort(oldest.createdAt, now, lang)) : '',
+      prs: prs.map(p => ({
+        key: keyOf(p),
+        url: p.url,
+        number: p.number,
+        title: p.title,
+        verb: verb(p, lang),
+        tone: tone(cells(p)),
+        age: ageShort(p.createdAt, now, lang),
+      })),
       items: prs,
     }
   })
@@ -131,21 +157,34 @@ export function toViewModel(r: Round | null, o: Opts) {
     .filter(x => x.prs.length)
     .sort((a, b) => {
       const [wa, wb] = [weight(a.counts), weight(b.counts)]
-      return wb.map((n, i) => n - wa[i]).find(Boolean) ?? a.name.localeCompare(b.name)
+      return wb.map((n, i) => n - wa[i]!).find(Boolean) ?? a.name.localeCompare(b.name)
     })
+  const totals = Object.fromEntries(COLUMNS.map(c => [c, busy.reduce((n, x) => n + x.counts[c], 0)])) as Counts
   const picked = busy.filter(x => x.isSelected)
+  const items = picked.flatMap(x => x.items)
+  const fix = items.filter(p => p.kind === 'mine').length
   const sendKey = `${r.at}|${picked.map(x => x.repo).join(',')}`
+  // What the send button checks before it fills the prompt, worst first.
+  const block = !picked.length ? t(lang, 'ui_send_none') : o.running ? t(lang, 'ui_send_wait') : null
+  const warn = r.error || isLate ? t(lang, 'ui_send_stale', okAt ? hhmm(okAt) : '') : items.length > MANY ? t(lang, 'ui_send_many', items.length) : null
 
   return {
     ...head,
     state: 'ok' as const,
+    headline: t(lang, 'ui_headline', busy.length),
+    totals,
+    tone: tone(totals),
     repos: busy.map(({ items, ...x }) => x),
     clean: repos.length - busy.length,
+    allSelected: busy.length > 0 && picked.length === busy.length,
     send: {
       count: picked.length,
-      prompt: prompt(picked.flatMap(x => x.items), lang),
+      prompt: prompt(items, lang),
       key: sendKey,
       inPrompt: picked.length > 0 && ui.sent === sendKey,
+      summary: picked.length ? t(lang, 'ui_send_summary', fix, items.length - fix) : '',
+      block,
+      warn,
     },
     band: pending[0] ? { count: pending.length, verb: verb(pending[0], lang), ref: `${shortRepo(pending[0].repo)}#${pending[0].number}` } : null,
   }
