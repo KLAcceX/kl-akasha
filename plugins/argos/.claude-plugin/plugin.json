@@ -1,6 +1,6 @@
 {
   "name": "argos",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Argos, o vigia de cem olhos: nenhum PR fica parado sem alguém perceber.",
   "author": { "name": "KLAcceX" },
   "types": "./types/index.d.ts",
@@ -14,8 +14,15 @@
     "qualifiers": {
       "type": "string",
       "title": "Filtro da busca",
-      "description": "Qualificadores de busca do GitHub, ex.: org:minha-empresa. Vazio = todo o GitHub.",
+      "description": "Qualificadores extras de busca do GitHub (ex.: is:draft). A vigília só olha os repositórios conectados com /argos repos add.",
       "default": ""
+    },
+    "language": {
+      "type": "string",
+      "title": "Idioma / Language",
+      "description": "Idioma da faixa, do painel e dos avisos. Language of the band, pane and notices.",
+      "options": ["pt-BR", "en"],
+      "default": "pt-BR"
     },
     "intervalMinutes": {
       "type": "number",

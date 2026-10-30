@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { grouped, repoFromRemote, visible } from './register'
+import { describe, grouped, visible } from './register'
 
 const BAND = { plugin: 'argos', component: 'AbovePrompt', props: { hasSurvey: false } } as const
 const PANE = {
@@ -19,7 +19,7 @@ const mine = {
   url: 'https://github.com/acme/portal/pull/219',
   author: 'me',
   createdAt: '2026-09-05T00:00:00Z',
-  signals: ['conflito'],
+  signals: ['conflict'],
 } as const
 const theirs = {
   kind: 'other',
@@ -29,7 +29,7 @@ const theirs = {
   url: 'https://github.com/acme/web/pull/7',
   author: 'bia',
   createdAt: '2026-10-27T00:00:00Z',
-  signals: ['sem review > 1 dia'],
+  signals: ['no_review'],
 } as const
 const round = { at: '2026-10-29T12:00:00.000Z', me: 'me', repos: ['acme/portal', 'acme/web', 'acme/docs'], pending: [mine], others: [theirs] }
 
@@ -44,6 +44,14 @@ test('the band shows the count, the oldest PR and teammates waiting', async ($, 
     expect((await ui.find({ type: 'Text', text: /dos outros/ }))?.text).toContain('1 dos outros')
     await ui.unmount()
   }
+})
+
+test('the band speaks English when the language option says so', { options: { language: 'en' } }, async ($, on) => {
+  on('state.get', stored({ round }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /need/ }))?.text).toContain('portal#219 conflict')
+  expect((await ui.find({ type: 'Text', text: /teammates/ }))?.text).toContain('1 from teammates')
+  await ui.unmount()
 })
 
 test('the band says it is watching while a round runs', async ($, on) => {
@@ -70,7 +78,15 @@ test('the pane groups by repo, empty connected repos included', async ($, on) =>
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /acme\/portal · 1/ }))?.text).toBe('acme/portal · 1')
   expect((await ui.find({ type: 'Text', text: /acme\/docs · 0/ }))?.text).toBe('acme/docs · 0')
-  expect((await ui.find({ type: 'Text', text: /#7/ }))?.text).toContain('@bia')
+  expect((await ui.find({ type: 'Text', text: /#7/ }))?.text).toContain('@bia · sem review > 1 dia')
+  await ui.unmount()
+})
+
+test('the pane asks for a repo when none is connected', async ($, on) => {
+  on('state.get', stored({ round: { at: round.at, repos: [], pending: [], others: [], needsRepos: true } }))
+  on('clock.now', () => ({ value: Date.parse('2026-10-29T12:00:00Z') }))
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /repos add/ }))?.text).toContain('/argos repos add')
   await ui.unmount()
 })
 
@@ -83,11 +99,8 @@ test('views and the author filter pick the right PRs', () => {
   expect(grouped([mine as never], ['acme/web']).map(g => `${g.repo}:${g.items.length}`)).toEqual(['acme/web:0', 'acme/portal:1'])
 })
 
-test('a git remote becomes owner/repo', () => {
-  expect(repoFromRemote('git@github.com:acme/api.git\n')).toBe('acme/api')
-  expect(repoFromRemote('https://github.com/acme/web')).toBe('acme/web')
-  expect(repoFromRemote('https://github.com/acme/web.git/')).toBe('acme/web')
-  expect(repoFromRemote('git@github-work:acme/portal.git')).toBe('acme/portal')
-  expect(repoFromRemote('ssh://git@github.com/acme/api.git')).toBe('acme/api')
-  expect(repoFromRemote('https://gitlab.com/acme/web')).toBe(undefined)
+test('signal codes read as words in each language', () => {
+  expect(describe({ ...mine, signals: ['threads:2', 'conflict'] } as never, 'pt-BR')).toBe('2 thread(s) sem resposta, conflito')
+  expect(describe({ ...mine, signals: ['threads:2', 'conflict'] } as never, 'en')).toBe('2 unanswered thread(s), conflict')
+  expect(describe({ ...theirs, signals: [] } as never, 'en')).toBe('in progress')
 })

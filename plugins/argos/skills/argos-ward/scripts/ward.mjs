@@ -3,11 +3,13 @@
 // with the signals that say a PR needs action.
 //
 // Usage:
-//   node ward.mjs [extra search qualifiers...] [--json]
-//   node ward.mjs org:my-company --json
+//   node ward.mjs [extra search qualifiers...] [--json] [--lang pt-BR|en]
+//   node ward.mjs repo:acme/api repo:acme/web --lang en
 //   node ward.mjs --self-test
+// Signals are stable codes (see i18n.mjs); text output translates them.
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { label, langArg, t } from "./i18n.mjs";
 
 const QUERY = `
 query($q: String!) {
@@ -41,38 +43,38 @@ export function mySignals(pr, me, now = Date.now()) {
   const last = pr.commits.nodes[0]?.commit;
   const lastPush = last?.committedDate ?? pr.createdAt;
 
-  if (pr.reviewDecision === "CHANGES_REQUESTED") s.push("mudanças pedidas");
+  if (pr.reviewDecision === "CHANGES_REQUESTED") s.push("changes_requested");
   const openThreads = pr.reviewThreads.nodes.filter(
     (t) => !t.isResolved && isOther(t.comments.nodes[0]?.author, me),
   ).length;
-  if (openThreads) s.push(`${openThreads} thread(s) sem resposta`);
+  if (openThreads) s.push(`threads:${openThreads}`);
   const newReviews = pr.latestReviews.nodes.filter(
     (r) => isOther(r.author, me) && r.state === "COMMENTED" && r.submittedAt > lastPush,
   ).length;
-  if (newReviews) s.push(`${newReviews} review(s) novo(s)`);
-  if (isOther(pr.comments.nodes[0]?.author, me)) s.push("comentário sem resposta");
-  if (["FAILURE", "ERROR"].includes(last?.statusCheckRollup?.state)) s.push("CI falhou");
-  if (pr.mergeable === "CONFLICTING") s.push("conflito");
-  if (!s.length && pr.reviewDecision === "APPROVED") s.push("aprovado: pronto pra merge");
+  if (newReviews) s.push(`new_reviews:${newReviews}`);
+  if (isOther(pr.comments.nodes[0]?.author, me)) s.push("unanswered");
+  if (["FAILURE", "ERROR"].includes(last?.statusCheckRollup?.state)) s.push("ci_failed");
+  if (pr.mergeable === "CONFLICTING") s.push("conflict");
+  if (!s.length && pr.reviewDecision === "APPROVED") s.push("ready");
   // Pickup is where PRs wait longest: nobody has looked yet, so ping the reviewers.
   const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, me));
-  if (!s.length && !pr.isDraft && !anyReview && isLate(pr, now)) s.push("sem review > 1 dia");
+  if (!s.length && !pr.isDraft && !anyReview && isLate(pr, now)) s.push("no_review");
   return s;
 }
 
 // Signals for a PR waiting for my review.
-export const reviewSignals = (pr, now = Date.now()) => (isLate(pr, now) ? ["atrasada > 1 dia"] : []);
+export const reviewSignals = (pr, now = Date.now()) => (isLate(pr, now) ? ["late"] : []);
 
 // Signals for a teammate's PR nobody asked me to review: where a proactive look helps.
 export function othersSignals(pr, now = Date.now()) {
   if (pr.isDraft) return [];
   const author = pr.author?.login;
   const s = [];
-  if (pr.reviewDecision === "CHANGES_REQUESTED") s.push("mudanças pedidas");
-  if (["FAILURE", "ERROR"].includes(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state)) s.push("CI falhou");
-  if (pr.mergeable === "CONFLICTING") s.push("conflito");
+  if (pr.reviewDecision === "CHANGES_REQUESTED") s.push("changes_requested");
+  if (["FAILURE", "ERROR"].includes(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state)) s.push("ci_failed");
+  if (pr.mergeable === "CONFLICTING") s.push("conflict");
   const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, author));
-  if (!anyReview && isLate(pr, now)) s.push("sem review > 1 dia");
+  if (!anyReview && isLate(pr, now)) s.push("no_review");
   return s;
 }
 
@@ -93,17 +95,19 @@ const age = (iso, now = Date.now()) => {
 };
 const byAge = (a, b) => a.createdAt.localeCompare(b.createdAt);
 
-function row(p) {
+function row(p, lang) {
   const draft = p.isDraft ? " _(draft)_" : "";
   const title = p.title.replace(/\|/g, "\\|");
-  const idle = { mine: "aguardando review", review: "no prazo", other: "em andamento" }[p.kind];
   const by = p.kind === "other" ? ` · @${p.author}` : "";
-  return `| ${age(p.createdAt)} | [${p.repo}#${p.number}](${p.url}) ${title}${draft}${by} | ${p.signals.join(", ") || idle} |`;
+  const signals = p.signals.map((c) => label(lang, c)).join(", ") || t(lang, `idle_${p.kind}`);
+  return `| ${age(p.createdAt)} | [${p.repo}#${p.number}](${p.url}) ${title}${draft}${by} | ${signals} |`;
 }
 
 function main(args) {
   const json = args.includes("--json");
-  const extra = args.filter((a) => a !== "--json").join(" ");
+  const lang = langArg(args);
+  const l = args.indexOf("--lang");
+  const extra = args.filter((a, i) => a !== "--json" && (l < 0 || (i !== l && i !== l + 1))).join(" ");
   const me = JSON.parse(execFileSync("gh", ["api", "user"], { encoding: "utf8" })).login;
 
   const shape = (kind) => (pr) => ({
@@ -133,15 +137,16 @@ function main(args) {
 
   if (json) return console.log(JSON.stringify({ me, mine, toReview, others }, null, 2));
 
-  const head = "| Idade | PR | Sinais |\n|---|---|---|";
+  const head = `| ${t(lang, "col_age")} | PR | ${t(lang, "col_signals")} |\n|---|---|---|`;
+  const table = (list) => (list.length ? [head, ...list.map((p) => row(p, lang))].join("\n") : `_${t(lang, "none")}_`);
   const needs = mine.filter((p) => p.signals.length).length;
-  console.log(`## Meus PRs abertos: ${mine.length} (${needs} pedem ação)\n`);
-  console.log(mine.length ? [head, ...mine.map(row)].join("\n") : "_Nenhum._");
-  console.log(`\n## Esperando minha revisão: ${toReview.length}\n`);
-  console.log(toReview.length ? [head, ...toReview.map(row)].join("\n") : "_Nenhum._");
+  console.log(`## ${t(lang, "h_mine", mine.length, needs)}\n`);
+  console.log(table(mine));
+  console.log(`\n## ${t(lang, "h_review", toReview.length)}\n`);
+  console.log(table(toReview));
   if (!/\brepo:/.test(extra)) return;
-  console.log(`\n## Dos outros: ${others.length}\n`);
-  console.log(others.length ? [head, ...others.map(row)].join("\n") : "_Nenhum._");
+  console.log(`\n## ${t(lang, "h_others", others.length)}\n`);
+  console.log(table(others));
 }
 
 function selfTest() {
@@ -162,46 +167,53 @@ function selfTest() {
 
   // pickup: nobody reviewed for more than a day
   assert.deepEqual(mySignals(pr({}), me, day1), []);
-  assert.deepEqual(mySignals(pr({}), me, day3), ["sem review > 1 dia"]);
+  assert.deepEqual(mySignals(pr({}), me, day3), ["no_review"]);
   assert.deepEqual(mySignals(pr({ isDraft: true }), me, day3), []);
   const reviewed = { nodes: [{ state: "APPROVED", submittedAt: "2026-10-01T01:00:00Z", author: user("ana") }] };
   assert.deepEqual(mySignals(pr({ latestReviews: reviewed }), me, day3), []);
   assert.deepEqual(reviewSignals(pr({}), day1), []);
-  assert.deepEqual(reviewSignals(pr({}), day3), ["atrasada > 1 dia"]);
+  assert.deepEqual(reviewSignals(pr({}), day3), ["late"]);
   // teammates' PRs: the author's own review never counts, drafts stay quiet
   const theirs = (over) => pr({ author: user("bia"), ...over });
   assert.deepEqual(othersSignals(theirs({}), day1), []);
-  assert.deepEqual(othersSignals(theirs({}), day3), ["sem review > 1 dia"]);
+  assert.deepEqual(othersSignals(theirs({}), day3), ["no_review"]);
   assert.deepEqual(othersSignals(theirs({ isDraft: true }), day3), []);
   const byAuthor = { nodes: [{ state: "COMMENTED", submittedAt: "2026-10-01T01:00:00Z", author: user("bia") }] };
-  assert.deepEqual(othersSignals(theirs({ latestReviews: byAuthor }), day3), ["sem review > 1 dia"]);
+  assert.deepEqual(othersSignals(theirs({ latestReviews: byAuthor }), day3), ["no_review"]);
   assert.deepEqual(othersSignals(theirs({ latestReviews: reviewed }), day3), []);
-  assert.deepEqual(othersSignals(theirs({ reviewDecision: "CHANGES_REQUESTED", latestReviews: reviewed }), day3), ["mudanças pedidas"]);
+  assert.deepEqual(othersSignals(theirs({ reviewDecision: "CHANGES_REQUESTED", latestReviews: reviewed }), day3), ["changes_requested"]);
 
   assert.deepEqual(mySignals(pr({}), me, day1), []);
-  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me, day1), ["aprovado: pronto pra merge"]);
-  assert.deepEqual(mySignals(pr({ reviewDecision: "CHANGES_REQUESTED" }), me, day1), ["mudanças pedidas"]);
+  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me, day1), ["ready"]);
+  assert.deepEqual(mySignals(pr({ reviewDecision: "CHANGES_REQUESTED" }), me, day1), ["changes_requested"]);
   // unresolved thread: counts only when someone else spoke last
   const thread = (login, isResolved = false) => ({ isResolved, comments: { nodes: [{ author: user(login) }] } });
   assert.deepEqual(mySignals(pr({ reviewThreads: { nodes: [thread("ana"), thread(me), thread("bia", true)] } }), me, day1), [
-    "1 thread(s) sem resposta",
+    "threads:1",
   ]);
   // review comments only count after my last push
   const review = (submittedAt) => ({ state: "COMMENTED", submittedAt, author: user("ana") });
   assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-01T12:00:00Z")] } }), me, day1), []);
-  assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-03T00:00:00Z")] } }), me, day1), ["1 review(s) novo(s)"]);
+  assert.deepEqual(mySignals(pr({ latestReviews: { nodes: [review("2026-10-03T00:00:00Z")] } }), me, day1), ["new_reviews:1"]);
   // bots never count as someone waiting for me
   const bot = { login: "sonar[bot]", __typename: "Bot" };
   assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: bot }] } }), me, day1), []);
-  assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: user("ana") }] } }), me, day1), ["comentário sem resposta"]);
+  assert.deepEqual(mySignals(pr({ comments: { nodes: [{ author: user("ana") }] } }), me, day1), ["unanswered"]);
   // CI and conflict block "ready to merge"
   const failing = { nodes: [{ commit: { committedDate: base.createdAt, statusCheckRollup: { state: "FAILURE" } } }] };
-  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED", commits: failing }), me, day1), ["CI falhou"]);
-  assert.deepEqual(mySignals(pr({ mergeable: "CONFLICTING" }), me, day1), ["conflito"]);
+  assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED", commits: failing }), me, day1), ["ci_failed"]);
+  assert.deepEqual(mySignals(pr({ mergeable: "CONFLICTING" }), me, day1), ["conflict"]);
   // no commits/checks yet must not throw
   assert.deepEqual(mySignals(pr({ commits: { nodes: [] } }), me, day1), []);
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-01T05:00:00Z")), "5h");
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-04T01:00:00Z")), "3d");
+  // codes read as words in either language; unknown languages fall back to pt-BR
+  assert.equal(label("pt-BR", "threads:2"), "2 thread(s) sem resposta");
+  assert.equal(label("en", "threads:2"), "2 unanswered thread(s)");
+  assert.equal(label("en", "no_review"), "no review > 1 day");
+  assert.equal(label("xx", "conflict"), "conflito");
+  assert.equal(langArg(["repo:a/b", "--lang", "en"]), "en");
+  assert.equal(langArg([]), "pt-BR");
   console.log("self-test ok");
 }
 
