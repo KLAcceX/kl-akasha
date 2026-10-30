@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// argos-panoptes facts: everything about a PR that is rule, not judgment.
-// Size, files, task key, risk signals and the review level (how many eyes open).
+// argos-panoptes facts: the countable part of a PR, gathered fast through the GitHub CLI.
+// Size, files, task key, risk hints and a suggested level. The model decides the real
+// level after reading the task and the diff (see references/criticality.md).
 //
 // Usage:
 //   node facts.mjs <pr-url | owner/repo#n> [--priority <task priority>] [--account <gh login>]
@@ -14,10 +15,14 @@ import assert from "node:assert/strict";
 
 export const LEVELS = ["low", "normal", "critical"];
 
-// Default rubric: Jira's Priority field.
-export const DEFAULT_MAP = { highest: "critical", high: "critical", medium: "normal", low: "low", lowest: "low" };
+// Default rubric: Jira's Priority field and the usual aliases.
+export const DEFAULT_MAP = {
+  highest: "critical", high: "critical", blocker: "critical", critical: "critical", p0: "critical", p1: "critical",
+  medium: "normal", major: "normal", p2: "normal",
+  low: "low", lowest: "low", minor: "low", trivial: "low", p3: "low", p4: "low",
+};
 
-// Changes with a large blast radius always get more eyes, whatever the task says.
+// Paths that often carry a large blast radius. Hints only: the model confirms by reading the diff.
 const RISK_PATHS = [
   /(^|\/)(auth|login|session|oauth|sso|permission|rbac|acl)/i,
   /(token|password|secret|credential|crypto)/i,
@@ -46,15 +51,15 @@ export const riskSignals = (files, labels) => [
   ...[...new Set(files.filter((f) => RISK_PATHS.some((r) => r.test(f))))].map((f) => `path:${f}`),
 ];
 
-// Level from the task priority through the repo's rubric (or the default), raised one step
-// by risk signals, never lowered. No priority at all: normal, flagged as presumed.
+// Suggested level: task priority through the repo's rubric (or the default), raised one step
+// by risk hints, never lowered. No priority at all: normal, flagged as presumed.
 export function level({ priority, rubric, signals }) {
   const map = rubric?.map ?? DEFAULT_MAP;
   const mapped = priority ? map[String(priority).trim().toLowerCase()] : undefined;
   const base = mapped ?? "normal";
   const raised = signals.length ? LEVELS[Math.min(LEVELS.indexOf(base) + 1, LEVELS.length - 1)] : base;
   return {
-    level: raised,
+    suggestedLevel: raised,
     base,
     presumed: !mapped,
     source: mapped ? `${rubric ? "personal rubric" : "default rubric"}: priority "${priority}"` : priority ? `unknown priority "${priority}"` : "no priority found",
@@ -123,7 +128,7 @@ function main(args) {
         hasPersonalRubric: Boolean(rubric),
         ...lvl,
         riskSignals: signals,
-        parts: lvl.level === "critical" && lines > CHUNK_LINES ? chunks(files) : null,
+        parts: lvl.suggestedLevel === "critical" && lines > CHUNK_LINES ? chunks(files) : null,
         files,
       },
       null,
@@ -147,22 +152,25 @@ function selfTest() {
   assert.deepEqual(riskSignals(["src/ui/button.tsx"], ["feature"]), []);
 
   // default rubric, no signals
-  assert.equal(level({ priority: "High", signals: [] }).level, "critical");
-  assert.equal(level({ priority: "Medium", signals: [] }).level, "normal");
-  assert.equal(level({ priority: "lowest", signals: [] }).level, "low");
+  assert.equal(level({ priority: "High", signals: [] }).suggestedLevel, "critical");
+  assert.equal(level({ priority: "Medium", signals: [] }).suggestedLevel, "normal");
+  assert.equal(level({ priority: "lowest", signals: [] }).suggestedLevel, "low");
   // signals raise one step, never lower
   const raised = level({ priority: "Low", signals: ["label:security"] });
-  assert.equal(raised.level, "normal");
+  assert.equal(raised.suggestedLevel, "normal");
   assert.deepEqual(raised.raisedBy, ["label:security"]);
-  assert.equal(level({ priority: "Highest", signals: ["path:x/auth.ts"] }).level, "critical");
+  assert.equal(level({ priority: "Highest", signals: ["path:x/auth.ts"] }).suggestedLevel, "critical");
   // nothing known: normal, presumed
   const none = level({ signals: [] });
-  assert.equal(none.level, "normal");
+  assert.equal(none.suggestedLevel, "normal");
   assert.equal(none.presumed, true);
-  assert.equal(level({ priority: "Blocker", signals: [] }).source, 'unknown priority "Blocker"');
+  assert.equal(level({ priority: "Someday", signals: [] }).source, 'unknown priority "Someday"');
+  // usual aliases
+  assert.equal(level({ priority: "Blocker", signals: [] }).suggestedLevel, "critical");
+  assert.equal(level({ priority: "P3", signals: [] }).suggestedLevel, "low");
   // a personal rubric wins over the default
   const rubric = { map: { blocker: "critical", p2: "low" } };
-  assert.equal(level({ priority: "Blocker", rubric, signals: [] }).level, "critical");
+  assert.equal(level({ priority: "Blocker", rubric, signals: [] }).suggestedLevel, "critical");
   assert.equal(level({ priority: "P2", rubric, signals: [] }).source, 'personal rubric: priority "P2"');
 
   // parts never exceed the limit unless one file alone does

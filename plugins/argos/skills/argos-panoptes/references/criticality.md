@@ -1,31 +1,39 @@
-# Criticality rubric
+# Criticality: how deep to look
 
-The review level comes from the task, never from the PR alone. `scripts/facts.mjs` applies this rubric; this file explains it.
+The level comes from the task first and the change second. `scripts/facts.mjs` suggests one; you decide, because what matters is what the change *does*, which a filename can't tell.
 
-## Order of precedence
+## 1. The task's priority, through a rubric
 
-1. **Personal rubric** for the repo, in `~/.claude/kl-akasha/criticality.json` (outside any repo, so team repositories are never touched).
-2. **Default rubric**: the Jira `Priority` field.
-3. **Nothing found**: `normal`, flagged as *presumed* at the top of the review.
-
-Risk signals then raise the level by one step. They never lower it.
-
-## Default rubric (Jira Priority)
+1. **Personal rubric** for the repo in `~/.claude/kl-akasha/criticality.json` (outside any repo, so team repositories are never touched).
+2. **Default rubric** when there is none:
 
 | Priority | Level |
 |---|---|
-| Highest, High | critical |
-| Medium | normal |
-| Low, Lowest | low |
+| Highest, High (or Blocker, Critical, P0, P1) | critical |
+| Medium (or Major, P2) | normal |
+| Low, Lowest (or Minor, Trivial, P3, P4) | low |
 
-## Risk signals
+3. **No priority field at all:** read the task text. Words like "urgent", "customer blocked", "production down", "hotfix" or a deadline point to critical; a typo or copy change points to low. Otherwise normal, and say it was **presumed**.
 
-- **Labels:** `hotfix`, `security`, `incident`, `urgent`, `critical`, `p0`, `sev0`, `sev1`.
-- **Paths with a large blast radius:** auth, sessions, permissions, tokens, secrets, crypto, payments and billing, migrations and schemas, middleware, env files, CI workflows, infrastructure.
+## 2. What the change touches can raise it
+
+Raise one step (never lower) when the diff really touches something with a large blast radius:
+
+- authentication, sessions, permissions, roles;
+- secrets, tokens, crypto;
+- money: payments, billing, prices, discounts, invoices;
+- data shape or data loss: migrations, schema changes, deletes and bulk updates;
+- shared plumbing: middleware, shared types and contracts, CI, infrastructure, env files.
+
+The script flags these by path and label as **hints**. Confirm by reading the diff: a renamed comment in `auth/` is not a risk; an `UPDATE` without a `WHERE` in a file called `utils.ts` is.
+
+## 3. Say why
+
+The review opens with one line such as: `Level: critical — task priority High (default rubric); also touches discount calculation`. If you presumed or overrode the suggestion, say so.
 
 ## Personal rubric format
 
-One entry per `owner/repo`. `map` turns the value the team uses (lower-cased) into a level:
+One entry per `owner/repo`; `map` turns the value the team uses (lower-cased) into a level:
 
 ```json
 {
@@ -34,6 +42,4 @@ One entry per `owner/repo`. `map` turns the value the team uses (lower-cased) in
 }
 ```
 
-`source` is a note for people: where the value comes from (a field, a label, another tracker). Pass that value to `facts.mjs` with `--priority`.
-
-When a review had to presume the level, offer once to save an entry for that repo, then write it on a yes.
+When a review had to presume the level, offer once to save an entry for that repo and write it on a yes.

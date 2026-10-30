@@ -1,51 +1,49 @@
 ---
 name: argos-ward
-description: Use when the user asks which of their pull requests need attention, whether their PRs got comments, reviews or change requests, which PRs are waiting for their review, what teammates' PRs need a look, or wants to fight PR stale time. Also used by argos-pavo on each round.
+description: Report which pull requests need the user right now, oldest first, so none goes stale. That covers their own PRs with comments, reviews, change requests, failing CI or conflicts, PRs waiting for their review, and teammates' PRs in the connected repos that need a proactive look. Use whenever the user asks what to do about their PRs, whether a PR got feedback, what is waiting for their review, or about PR stale time, even casually. Portuguese requests count too, such as "algum PR meu precisa de mim?", "tem review pra eu fazer?", "o que os colegas abriram de PR?". Not for reviewing one specific PR in depth (use argos-panoptes).
+compatibility: The bundled script and the Argos mod need the GitHub CLI. Without it, use a GitHub connector and compute the same signals.
 ---
 
 # Argos Ward
 
-Argos guarded what Hera entrusted to him. This skill guards the user's PRs: every open PR they wrote or must review, and their teammates' PRs in the connected repositories, oldest first, with what each one needs.
+Find every open PR that needs the user, say what each one needs, oldest first: the oldest weighs most on stale time.
 
-## Run
+## Sources and scope
 
-Only on repositories the user connected or named. Get the connected ones with `node ../argos-pavo/scripts/repos.mjs list --json` (from this skill's base directory), then pass one `repo:` qualifier per repository:
+Read `../../references/sources.md` and check what is available. Watch only repositories the user connected or named: get the connected ones with `node ../argos-pavo/scripts/repos.mjs list --json`. With none, ask which repos to watch (argos-pavo connects them) instead of searching all of GitHub, which would read every repo the account can see.
+
+## With the GitHub CLI
+
+From this skill's directory, one `repo:` qualifier per repository:
 
 ```bash
-node scripts/ward.mjs repo:acme/api repo:acme/web --lang en
-node scripts/ward.mjs repo:acme/api --json          # machine output
+node scripts/ward.mjs repo:acme/api repo:acme/web --lang en     # or --lang pt-BR, or --json
 ```
 
-With no repository connected or named, do not run it: ask which repositories to watch, then connect them with argos-pavo.
+Use the account that owns those repos: `GH_TOKEN=$(gh auth token -u <login>) node scripts/ward.mjs ...` for that command only, never `gh auth switch`.
 
-The script uses the **active `gh` account**. When the user has more than one and the active one is wrong, run it with that account's token for this command only: `GH_TOKEN=$(gh auth token -u <login>) node scripts/ward.mjs ...`. Never run `gh auth switch`.
+## Without it
+
+Use the GitHub connector: list open PRs by the user, PRs requesting their review, and other open PRs in the scoped repos; then apply the signals below yourself.
 
 ## Signals
 
-Signals are stable codes; the text output translates them (`--lang pt-BR|en`).
+Signals travel as codes; the script translates them.
 
-| Code | pt-BR | en | Suggest |
-|---|---|---|---|
-| `changes_requested` | mudanças pedidas | changes requested | Address them, re-request review |
-| `threads:N` | N thread(s) sem resposta | N unanswered thread(s) | Reply or fix, then resolve |
-| `new_reviews:N` | N review(s) novo(s) | N new review(s) | Read and answer |
-| `unanswered` | comentário sem resposta | unanswered comment | Reply |
-| `ci_failed` | CI falhou | CI failed | Look at the failing check |
-| `conflict` | conflito | conflict | Update the branch |
-| `ready` | aprovado: pronto pra merge | approved: ready to merge | Merge, or ping whoever merges |
-| `no_review` | sem review > 1 dia | no review > 1 day | Mine: ping reviewers. Teammate's: review it proactively |
-| `late` | atrasada > 1 dia | late > 1 day | Review it now |
+| Code | Means | Suggest |
+|---|---|---|
+| `changes_requested` | a reviewer asked for changes | address them, re-request review |
+| `threads:N` | N unresolved threads where someone else spoke last | reply or fix, then resolve |
+| `new_reviews:N` | review comments after the last push | read and answer |
+| `unanswered` | the last conversation comment is someone else's | reply |
+| `ci_failed` | the last commit's checks failed | look at the failing check |
+| `conflict` | merge conflict with the base | update the branch |
+| `ready` | approved, nothing blocking | merge, or ping whoever merges |
+| `no_review` | nobody reviewed for over a day | mine: ping reviewers; a teammate's: review it |
+| `late` | a review request older than a day | review it now |
 
-Bots never count as someone waiting. Teammates' drafts stay quiet.
+Bots never count as someone waiting; teammates' drafts stay quiet.
 
 ## Report
 
-Show the tables as printed (oldest first: the oldest PR weighs most on stale time). Then one line per PR that needs action, with the suggested step, oldest first.
-
-The ward only looks. Replying, pushing, re-requesting review or merging changes the PR for everyone: offer it, and do it only when the user says so.
-
-## Limits
-
-- First 50 PRs per list; the script warns when there are more.
-- `review-requested` lists only pending review requests.
-- Self-check: `node scripts/ward.mjs --self-test`.
+The tables oldest first, then one line per PR needing action with its next step. Replying, pushing, re-requesting review or merging changes the PR for everyone: offer it, and do it only when the user says so.

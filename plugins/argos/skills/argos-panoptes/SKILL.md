@@ -1,58 +1,49 @@
 ---
 name: argos-panoptes
-description: Use when the user asks to review a teammate's pull request, wants a review sized to how critical the task is, wants a PR checked against its Jira task or Gherkin scenarios, or picks a PR from the Argos pane to look at.
+description: Review a teammate's pull request with depth matched to how critical its task is, checked against the task's acceptance criteria and Gherkin scenarios, drafted for the user to approve before anything is posted. Use whenever the user asks to review, look at, check or approve someone else's PR, wants to know if a PR is safe to merge, or picks a PR from the Argos pane, even if they only paste a PR link. Portuguese requests count too, such as "revisa o PR da Bia", "dá uma olhada nesse PR antes de eu aprovar", "esse PR tá ok pra merge?". Not for the user's own PRs that need attention (use argos-ward) or for writing code.
+compatibility: Works with the GitHub CLI or a GitHub connector, and with the Atlassian CLI, an Atlassian connector, another tracker, or a pasted task. The bundled script needs the GitHub CLI.
 ---
 
 # Argos Panoptes
 
-Panoptes, "the all-seeing": Argos opens from a few to all hundred eyes depending on how critical the task is. **Argos sees; the user judges.** The review is a draft for the user, never something posted on their behalf.
+Review a PR the way a careful senior teammate would: deep where the task is critical, light where it is not, and always tied to what the task asked for. The result is a **draft for the user**. They judge; nothing is posted without their yes.
 
-## 1. Facts
+## 1. Sources
 
-From this skill's base directory:
+Read `../../references/sources.md` and check what this machine has for PRs and for tasks. That decides how every step below gets its data.
 
-```bash
-node scripts/facts.mjs <pr-url | owner/repo#n> [--account <gh login>]
-```
+## 2. PR facts
 
-It returns the PR's size, files, labels, the task key (Jira style, from branch, title or body), risk signals, and a first level. Use the account the user works with for that repo; never run `gh auth switch`.
-
-## 2. Task
-
-With a task key and a Jira or issue tool available, read the task: summary, acceptance criteria, Gherkin scenarios, and the field that holds its priority. Then run `facts.mjs` again with `--priority <value>` so the level follows the task.
-
-No tool, or no key: ask the user once to paste the task (or say "skip"). Never invent the task.
-
-## 3. Level
-
-Read `references/criticality.md`. Open the review with one line: the level, where it came from, and what raised it. When the result says `presumed`, say so, and after the review offer once to save a rubric entry for that repo.
-
-## 4. Review
-
-Read `references/review-levels.md` and review at that level. When `parts` is present, review part by part.
-
-Check out nothing and run nothing in the user's repo unless they ask: read the diff with `gh pr diff <n> -R <repo>` and the surrounding files with `gh api repos/<repo>/contents/<path>?ref=<branch>`.
-
-## 5. Draft
-
-Write the draft in the user's language, in this order:
-
-1. **Header:** PR link, author, level and its source, size (lines, files, parts).
-2. **Verdict:** one line: what you would do (approve, comment, request changes) and why. The user decides.
-3. **Scenarios:** one row per Gherkin scenario: covered, partly or not found, with `file:line`.
-4. **Findings:** by severity (Blocker, Important, Suggestion), each with `file:line`, what is wrong and the smallest fix.
-5. **Suggested tasks:** follow-ups worth their own task: missing scenarios for the QA, debt found on the way.
-
-## 6. Publish only on a yes
-
-Ask whether to post. On a clear yes, post exactly the draft the user saw (edited as they asked):
+With `gh`, from this skill's directory:
 
 ```bash
-gh pr review <n> -R <repo> --comment --body-file <draft.md>   # or --approve / --request-changes, as the user chose
+node scripts/facts.mjs <pr-url | owner/repo#n> [--account <gh login>] [--priority <value>]
 ```
 
-Without that yes, nothing leaves the chat.
+It returns size, files, labels, a task key found in the branch, title or body, path and label **risk hints**, and review parts for big critical PRs. Without `gh`, gather the same facts through whatever source sections 1 found.
 
-## Self-check
+## 3. Task
 
-`node scripts/facts.mjs --self-test`
+Read the task with the best available source (sources.md, "Tasks"). Keep: summary, acceptance criteria, Gherkin scenarios, priority or any urgency signal, labels. If no source works, ask once for the pasted task or a "skip". Never invent one.
+
+## 4. Level
+
+Read `references/criticality.md`. **You** decide the level (low, normal, critical); the script's `suggestedLevel` and hints are input, not the answer. Weigh the task's priority through the rubric, what the diff actually touches, and what the task text says ("customer blocked", "hotfix"). Risk only raises the level. Open the review with one line: the level and why. When it was presumed, say so and, after the review, offer once to save a rubric entry for the repo.
+
+## 5. Review
+
+Read `references/review-levels.md` and review at that depth. Read the diff and, at critical level, the code around it (callers, consumers, migrations) through the PR source; don't check out or run anything in the user's repo unless asked. When `parts` exist, go part by part.
+
+## 6. Draft
+
+In the user's language, in this order:
+
+1. **Header:** PR link, author, level and why, size, and any source you could not read.
+2. **Verdict:** one line: approve, comment or request changes, and the reason. The user decides.
+3. **Scenarios:** one row per Gherkin scenario (or acceptance criterion): covered, partly or not found, with `file:line`.
+4. **Findings:** Blocker, Important, Suggestion; each with `file:line`, what is wrong, and the smallest fix.
+5. **Suggested tasks:** follow-ups worth their own task, such as scenarios for the QA or debt found on the way.
+
+## 7. Publish only on a yes
+
+Offer to post. On a clear yes, post what the user saw, as they edited it, with the review type they chose (`gh pr review <n> -R <repo> --comment|--approve|--request-changes --body-file <file>`, or the GitHub connector's review tool). No yes, nothing leaves the chat.
