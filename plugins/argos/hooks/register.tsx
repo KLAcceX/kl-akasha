@@ -7,7 +7,10 @@ import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { label, t } from '../skills/argos-ward/scripts/i18n.mjs'
+import { ALERT, ageDots, ageHeight, ageText, base, buckets, days, has } from './chart'
 import type { Item, Round, Sort, View } from '../types'
+
+export { ageDots, ageHeight, ageText, buckets, days } from './chart'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
@@ -41,15 +44,6 @@ const LOADING =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><animate attributeName="viewBox" values="0 0 256 256;66 20 156 156;0 0 256 256" dur="1.6s" repeatCount="indefinite" calcMode="spline" keySplines="0.65 0 0.35 1;0.65 0 0.35 1"/>' +
   `<rect x="-200" y="-200" width="656" height="656" rx="48" fill="#1E1430"/>${MARK}</svg>`
 
-const DAY = 864e5
-const base = (code: string) => code.split(':')[0]
-const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
-// Signals that block a PR: shown with ▲ (never colour alone) and ringed in the chart.
-const ALERT = new Set(['conflict', 'ci_failed', 'changes_requested'])
-const stuck = (p: Item) => has(p, 'conflict', 'ci_failed', 'changes_requested', 'late', 'no_review')
-
-export const days = (iso: string, now: number) => Math.max(0, Math.floor((now - Date.parse(iso)) / DAY))
-
 // What to do first: merge, then a late review that blocks a teammate, then unblock mine,
 // answer, review on time, ask for review; teammates' PRs after, drafts last.
 export function rank(p: Item): number {
@@ -80,17 +74,6 @@ export function action(p: Item, lang: string, now: number) {
   return n === undefined ? t(lang, `act_${k}`) : t(lang, `act_${k}`, Number(n))
 }
 
-// Open PRs by age: <1d, 1–3d, 3–7d, 1–2 weeks, over 2 weeks.
-const LIMITS = [1, 3, 7, 14]
-export function buckets(items: Item[], now: number): Item[][] {
-  const b: Item[][] = [[], [], [], [], []]
-  for (const p of items) {
-    const i = LIMITS.findIndex(l => (now - Date.parse(p.createdAt)) / DAY < l)
-    b[i < 0 ? 4 : i].push(p)
-  }
-  return b
-}
-
 // The portrait's numbers, all from one place: the pane, the chart and the band agree.
 export function summary(r: Round | null, now: number, minutes = 60) {
   const pending = r?.pending ?? []
@@ -118,28 +101,6 @@ export function summary(r: Round | null, now: number, minutes = 60) {
     ageH: Math.floor(ageH),
   }
 }
-
-// The signature: one dot per open PR in five age columns. Light = for you, lilac = a teammate's
-// PR with a signal, purple = a teammate's without; ringed = stuck. At most 16 dots, then +n.
-const MAX_DOTS = 16
-export function ageDots(b: Item[][], labels: string[], now: number) {
-  const cols = b.map((col, i) => {
-    const x0 = i * 60
-    const dots = col.slice(0, MAX_DOTS).map((p, j) => {
-      const fill = p.kind !== 'other' ? '#F3EEFB' : p.signals.length ? '#A98BE0' : '#7E5CC0'
-      const ring = stuck(p) ? ` stroke="${p.kind !== 'other' ? '#A98BE0' : '#F3EEFB'}" stroke-width="1.5"` : ''
-      return `<circle cx="${x0 + 15 + (j % 4) * 10}" cy="${50 - Math.floor(j / 4) * 10}" r="3.5" fill="${fill}"${ring}><title>#${p.number} · ${days(p.createdAt, now)}d</title></circle>`
-    })
-    const more = col.length > MAX_DOTS ? `<text x="${x0 + 30}" y="12" font-size="9" fill="#F3EEFB" text-anchor="middle">+${col.length - MAX_DOTS}</text>` : ''
-    return `${dots.join('')}${more}<text x="${x0 + 30}" y="68" font-size="9" fill="#A98BE0" text-anchor="middle">${labels[i]}</text>`
-  })
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 72"><rect width="300" height="72" rx="10" fill="#1E1430"/>${cols.join('')}</svg>`
-}
-// The same chart as text for surfaces without Svg: ● for you, ○ for the team.
-export const ageText = (b: Item[][], labels: string[]) =>
-  b
-    .map((col, i) => `${labels[i]} ${col.slice(0, MAX_DOTS).map(p => (p.kind !== 'other' ? '●' : '○')).join('')}${col.length > MAX_DOTS ? ` +${col.length - MAX_DOTS}` : ''}`)
-    .join('  ')
 
 // What a queue tab shows; author, repo and signal narrow it.
 export function visible(r: Round | null, v: View, who = '', repo = '', sig = '') {
@@ -333,10 +294,11 @@ export const register: Register = (on, options) => {
         </Box>
       )
 
-    const v = await read($, view)
+    const v: View = (await read($, view)) === 'team' ? 'team' : 'you'
     const who = await read($, author)
     const repo = await read($, repoFilter)
-    const order = await read($, sort)
+    const storedOrder = await read($, sort)
+    const order: Sort = storedOrder === 'oldest' || storedOrder === 'repo' ? storedOrder : 'rank'
     const sig = await read($, signal)
     const open = await read($, expanded)
     const copiedUrl = await read($, copied)
@@ -435,11 +397,16 @@ export const register: Register = (on, options) => {
       { value: 'oldest', label: t(lang, 'opt_oldest') },
       { value: 'repo', label: t(lang, 'opt_by_repo') },
     ]
-    const tab = (id: View, word: string) => (
-      <Button key={`tab:${id}`} plain={true} onPress={() => void update($, view, () => id)}>
-        {v === id ? `● ${word}` : word}
-      </Button>
-    )
+    const tab = (id: View, word: string) =>
+      v === id ? (
+        <Button key={`tab:${id}`} onPress={() => void update($, view, () => id)}>
+          {word}
+        </Button>
+      ) : (
+        <Button key={`tab:${id}`} plain={true} dimColor={true} onPress={() => void update($, view, () => id)}>
+          {word}
+        </Button>
+      )
     const ageLabels = t(lang, 'age_buckets') as unknown as string[]
 
     return (
@@ -493,10 +460,12 @@ export const register: Register = (on, options) => {
             <Text size="heading" weight="bold" dimColor={s.isStale || Boolean(r.error)}>
               {s.isStale ? t(lang, 'act_check') : action(hero, lang, now)}
             </Text>
-            <Link href={hero.url} label={`${shortRepo(hero.repo)}#${hero.number} ${hero.title}`} />
-            <Text dimColor tabular>
-              {days(hero.createdAt, now)}d{hero.kind !== 'mine' ? ` · @${hero.author || '?'}` : ''}
-            </Text>
+            <Box flexDirection="row" gap="sm" alignItems="center">
+              <Link href={hero.url} label={`${shortRepo(hero.repo)}#${hero.number} ${hero.title}`} />
+              <Text dimColor tabular>
+                {days(hero.createdAt, now)}d{hero.kind !== 'mine' ? ` · @${hero.author || '?'}` : ''}
+              </Text>
+            </Box>
             <Box flexDirection="row" gap="sm">
               <Link href={hero.url} label={`${t(lang, 'ui_open_github')} →`} />
               {aiButton(hero, true)}
@@ -527,7 +496,7 @@ export const register: Register = (on, options) => {
             source={ageDots(s.buckets, ageLabels, now)}
             alt={t(lang, 'age_alt', s.buckets.map(c => c.length))}
             width={300}
-            height={72}
+            height={ageHeight(s.buckets)}
             isInteractive
           />
         ) : (
@@ -538,7 +507,7 @@ export const register: Register = (on, options) => {
         {s.bySignal.length > 0 && (
           <Box flexDirection="row" gap="xs" flexWrap="wrap">
             {s.bySignal.map(([code, n]) => (
-              <Button key={`sig:${code}`} plain={true} onPress={() => void update($, signal, cur => (cur === code ? '' : code))}>
+              <Button key={`sig:${code}`} onPress={() => void update($, signal, cur => (cur === code ? '' : code))}>
                 {`${sig === code ? '✓ ' : ALERT.has(code) ? '▲ ' : ''}${label(lang, code).replace(/^\d+\s*/, '')} ${n}`}
               </Button>
             ))}
