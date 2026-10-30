@@ -53,7 +53,7 @@ export const repoQualifiers = (list, qualifiers) =>
 
 export function notification(items, lang = "pt-BR") {
   const parts = items.map((p) => `${p.repo.split("/")[1]}#${p.number} ${describe(p, lang)}`);
-  const msg = `${t(lang, "news", items.length)}: ${parts.join("; ")}`;
+  const msg = `Argos: ${t(lang, "news", items.length)}: ${parts.join("; ")}`;
   return msg.length > 190 ? msg.slice(0, 187) + "..." : msg;
 }
 
