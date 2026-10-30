@@ -30,14 +30,12 @@ declare module 'claude-code' {
       round: Round | null
       isHidden: boolean
       isRunning: boolean
-      // the open row's repo#number; '' = the first row, '-' = none
-      expanded: string
-      teamOpen: boolean
-      youLimit: number
-      teamLimit: number
-      // `${round.at}|${repo#number}` of the last request put in the prompt
+      // repos picked to send to the AI (owner/name)
+      selected: string[]
+      // the repo whose PRs are shown; '' = none
+      open: string
+      // `${round.at}|repo,repo` of the last selection put in the prompt
       sent: string
-      copied: string
     }
   }
 }

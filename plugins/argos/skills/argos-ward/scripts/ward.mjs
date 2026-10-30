@@ -62,14 +62,26 @@ export function mySignals(pr, me, now = Date.now()) {
   return s;
 }
 
+// My last review is older than the last push: the PR changed and needs another look.
+// ponytail: committedDate is the author's clock; use the push event if rebases cause false alarms.
+const changedSince = (pr, me) => {
+  const mine = pr.latestReviews.nodes.find((r) => r.author?.login === me);
+  const pushed = pr.commits.nodes[0]?.commit?.committedDate;
+  return Boolean(mine && pushed && pushed > mine.submittedAt);
+};
+
 // Signals for a PR waiting for my review.
-export const reviewSignals = (pr, now = Date.now()) => (isLate(pr, now) ? ["late"] : []);
+export const reviewSignals = (pr, me, now = Date.now()) => [
+  ...(changedSince(pr, me) ? ["changed"] : []),
+  ...(isLate(pr, now) ? ["late"] : []),
+];
 
 // Signals for a teammate's PR nobody asked me to review: where a proactive look helps.
-export function othersSignals(pr, now = Date.now()) {
+export function othersSignals(pr, me, now = Date.now()) {
   if (pr.isDraft) return [];
   const author = pr.author?.login;
   const s = [];
+  if (changedSince(pr, me)) s.push("changed");
   if (pr.reviewDecision === "CHANGES_REQUESTED") s.push("changes_requested");
   if (["FAILURE", "ERROR"].includes(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state)) s.push("ci_failed");
   if (pr.mergeable === "CONFLICTING") s.push("conflict");
@@ -120,7 +132,7 @@ function main(args) {
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
     author: pr.author?.login ?? "",
-    signals: { mine: () => mySignals(pr, me), review: () => reviewSignals(pr), other: () => othersSignals(pr) }[kind](),
+    signals: { mine: () => mySignals(pr, me), review: () => reviewSignals(pr, me), other: () => othersSignals(pr, me) }[kind](),
   });
   const mine = search(`is:pr is:open archived:false author:${me} ${extra}`).map(shape("mine")).sort(byAge);
   const toReview = search(`is:pr is:open archived:false review-requested:${me} ${extra}`)
@@ -171,17 +183,22 @@ function selfTest() {
   assert.deepEqual(mySignals(pr({ isDraft: true }), me, day3), []);
   const reviewed = { nodes: [{ state: "APPROVED", submittedAt: "2026-10-01T01:00:00Z", author: user("ana") }] };
   assert.deepEqual(mySignals(pr({ latestReviews: reviewed }), me, day3), []);
-  assert.deepEqual(reviewSignals(pr({}), day1), []);
-  assert.deepEqual(reviewSignals(pr({}), day3), ["late"]);
+  assert.deepEqual(reviewSignals(pr({}), me, day1), []);
+  assert.deepEqual(reviewSignals(pr({}), me, day3), ["late"]);
   // teammates' PRs: the author's own review never counts, drafts stay quiet
   const theirs = (over) => pr({ author: user("bia"), ...over });
-  assert.deepEqual(othersSignals(theirs({}), day1), []);
-  assert.deepEqual(othersSignals(theirs({}), day3), ["no_review"]);
-  assert.deepEqual(othersSignals(theirs({ isDraft: true }), day3), []);
+  assert.deepEqual(othersSignals(theirs({}), me, day1), []);
+  assert.deepEqual(othersSignals(theirs({}), me, day3), ["no_review"]);
+  assert.deepEqual(othersSignals(theirs({ isDraft: true }), me, day3), []);
   const byAuthor = { nodes: [{ state: "COMMENTED", submittedAt: "2026-10-01T01:00:00Z", author: user("bia") }] };
-  assert.deepEqual(othersSignals(theirs({ latestReviews: byAuthor }), day3), ["no_review"]);
-  assert.deepEqual(othersSignals(theirs({ latestReviews: reviewed }), day3), []);
-  assert.deepEqual(othersSignals(theirs({ reviewDecision: "CHANGES_REQUESTED", latestReviews: reviewed }), day3), ["changes_requested"]);
+  assert.deepEqual(othersSignals(theirs({ latestReviews: byAuthor }), me, day3), ["no_review"]);
+  assert.deepEqual(othersSignals(theirs({ latestReviews: reviewed }), me, day3), []);
+  assert.deepEqual(othersSignals(theirs({ reviewDecision: "CHANGES_REQUESTED", latestReviews: reviewed }), me, day3), ["changes_requested"]);
+  // a push after my review asks for another look; one before it does not
+  const myReview = (submittedAt) => ({ nodes: [{ state: "COMMENTED", submittedAt, author: user(me) }] });
+  assert.deepEqual(othersSignals(theirs({ latestReviews: myReview("2026-10-01T06:00:00Z") }), me, day1), ["changed"]);
+  assert.deepEqual(othersSignals(theirs({ latestReviews: myReview("2026-10-02T06:00:00Z") }), me, day1), []);
+  assert.deepEqual(reviewSignals(pr({ latestReviews: myReview("2026-10-01T06:00:00Z") }), me, day3), ["changed", "late"]);
 
   assert.deepEqual(mySignals(pr({}), me, day1), []);
   assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me, day1), ["ready"]);

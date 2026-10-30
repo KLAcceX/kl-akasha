@@ -1,16 +1,17 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one argos-pavo round over
 // the connected repos. The band above the prompt shows the most urgent PR; /argos opens
-// the pane: one work list in two sections ("For you" open, "Team" folded), the first
-// row expanded as the next action, and the age of open PRs in the footer.
-// Words and numbers come from toViewModel (view.ts), in the plugin's `language` option.
+// the pane: one row per repo with what it holds (open comments, changed since my review,
+// blocked, review requested), a box to pick it, and one button that sends the picked
+// repos' PRs to the AI. Words and numbers come from toViewModel (view.ts).
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../skills/argos-ward/scripts/i18n.mjs'
-import { STEP, UI, toViewModel } from './view'
+import { COLUMNS, UI, toViewModel } from './view'
+import type { Column } from './view'
 import type { Round } from '../types'
 
-export { ageShort, ageStrip, byRank, rank, reason, toViewModel, verb } from './view'
+export { byRank, cells, prompt, rank, reason, toViewModel, verb } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
@@ -19,12 +20,9 @@ const RUNNING = { plugin: 'argos', key: 'isRunning' } as const
 const round = atom(ROUND, null)
 const isHidden = atom(HIDDEN, false)
 const isRunning = atom(RUNNING, false)
-const expanded = atom({ plugin: 'argos', key: 'expanded' } as const, UI.expanded)
-const teamOpen = atom({ plugin: 'argos', key: 'teamOpen' } as const, UI.teamOpen)
-const youLimit = atom({ plugin: 'argos', key: 'youLimit' } as const, UI.youLimit)
-const teamLimit = atom({ plugin: 'argos', key: 'teamLimit' } as const, UI.teamLimit)
+const selected = atom({ plugin: 'argos', key: 'selected' } as const, UI.selected)
+const open = atom({ plugin: 'argos', key: 'open' } as const, UI.open)
 const sent = atom({ plugin: 'argos', key: 'sent' } as const, UI.sent)
-const copied = atom({ plugin: 'argos', key: 'copied' } as const, UI.copied)
 
 // The KL · Akasha mark (brand/kl/final): the face centred in a full L-coloured frame,
 // on its own dark ground so it reads in both themes.
@@ -35,8 +33,25 @@ const ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="56" fill="#1E1430"/>' +
   '<rect x="22" y="22" width="212" height="212" rx="40" fill="none" stroke="#51408A" stroke-width="18"/>' +
   `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
-const PURPLE = '#7E5CC0'
 const RED = '#E5384A'
+
+// Column icons: Tabler Icons outlines (MIT, tabler.io/icons), a mid grey that reads in
+// both themes; the octagon is the one in colour. The terminal draws the letter instead.
+const PATHS: Record<Column, string> = {
+  comments:
+    '<path d="M3 20l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c3.255 2.777 3.695 7.266 1.029 10.501c-2.666 3.235 -7.615 4.215 -11.574 2.293l-4.7 1"/>',
+  changed: '<path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/>',
+  blocked:
+    '<path d="M8.7 3h6.6l4.7 4.7v6.6l-4.7 4.7h-6.6l-4.7 -4.7v-6.6z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  review:
+    '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/>',
+}
+const svgIcon = (c: Column) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${c === 'blocked' ? RED : '#8A8F98'}" ` +
+  `stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${PATHS[c]}</svg>`
+const LETTER: Record<Column, string> = { comments: 'C', changed: 'A', blocked: 'B', review: 'R' }
+// Below this many cells a repo's counts go on their own line under its name.
+const NARROW = 52
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -126,8 +141,7 @@ export const register: Register = (on, options) => {
     const running = await read($, isRunning)
     const vm = toViewModel(await read($, round), { now: await $.clock.now(), lang, minutes, running })
     const band = vm.state === 'ok' ? vm.band : null
-    const stuck = vm.state === 'ok' ? (vm.team?.stuck ?? 0) : 0
-    if (e.props.hasSurvey || (await read($, isHidden)) || (!running && !band && !stuck && !vm.status)) return next(e)
+    if (e.props.hasSurvey || (await read($, isHidden)) || (!running && !band && !vm.status)) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
@@ -142,7 +156,6 @@ export const register: Register = (on, options) => {
             {t(lang, 'ui_needs', band.count)} · {band.verb}: {band.ref}{' '}
           </Text>
         )}
-        {!running && stuck > 0 && <Text dimColor>· {t(lang, 'ui_others', stuck)} </Text>}
         <Button key="open" onPress={() => void load($).then(() => $.ui.open({ id: PANE, title }))}>
           {t(lang, 'ui_see')}
         </Button>
@@ -158,26 +171,20 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
+    const isNarrow = (e.viewport?.columns ?? 80) < NARROW
     const running = await read($, isRunning)
     const vm = toViewModel(await read($, round), {
       now: await $.clock.now(),
       lang,
       minutes,
       running,
-      ui: {
-        expanded: await read($, expanded),
-        teamOpen: await read($, teamOpen),
-        youLimit: await read($, youLimit),
-        teamLimit: await read($, teamLimit),
-        sent: await read($, sent),
-        copied: await read($, copied),
-      },
+      ui: { selected: await read($, selected), open: await read($, open), sent: await read($, sent) },
     })
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
 
     const header = (
-      <Box flexDirection="row" alignItems="center" gap="sm">
+      <Box flexDirection="row" alignItems="center" gap="sm" flexWrap="wrap">
         {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={16} height={16} />}
         <Text weight="semibold">Argos</Text>
         <Text size="caption" dimColor wrap="truncate">
@@ -233,129 +240,131 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>,
       )
+    // narrows vm for TypeScript; every other state returned above
+    if (vm.state !== 'ok') return page()
 
-    type Row = (typeof vm.you.rows)[number]
-    // Puts the request in the prompt without sending it: appended on a new line when
-    // there is a draft, never twice. The label says "In prompt ✓" until the next round.
-    const putInPrompt = async (row: Row) => {
-      if (!row.ai) return
-      const { text } = await $.prompt.read()
-      if (!text.includes(row.ai.prompt))
-        await $.prompt.fill(text.trim() ? { text: `\n${row.ai.prompt}`, mode: 'append' } : { text: row.ai.prompt, mode: 'replace' })
-      await update($, sent, () => `${vm.at}|${row.key}`)
-    }
-    const copy = (row: Row) => async (press: any) => {
-      const res = await $.ui.copy({ text: row.url, surface: press.surface })
-      await update($, copied, () => (res.isCopied ? row.key : `fail:${row.key}`))
-      $.clock.after(2_000, () => void update($, copied, () => ''))
-    }
-
-    // The active row: the one with a border, a heading and the only primary button.
-    const active = (row: Row) => (
-      <Box key={row.key} flexDirection="column" gap="sm" padding="md" borderStyle="round" borderColor={PURPLE}>
-        <Text size="heading" weight="semibold">
-          {row.verb}
-        </Text>
-        <Text>{row.fullTitle}</Text>
-        <Text size="caption" dimColor>
-          {row.metaLong}
-        </Text>
-        {!hasSvg && <Text dimColor>{row.url}</Text>}
-        <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
-          {row.ai && (
-            <Button key={`ai:${row.key}`} variant="primary" onPress={() => void putInPrompt(row)}>
-              {row.inPrompt ? t(lang, 'ui_in_prompt') : row.ai.label}
-            </Button>
-          )}
-          <Link href={row.url} label={t(lang, 'ui_open_github')} />
-          <Button key={`copy:${row.key}`} plain={true} onPress={copy(row)}>
-            {row.copyLabel}
-          </Button>
-          <Button key={`close:${row.key}`} plain={true} dimColor={true} onPress={() => void update($, expanded, () => '-')}>
-            {t(lang, 'ui_close')}
-          </Button>
-        </Box>
-      </Box>
-    )
-    const line = (row: Row) =>
-      row.isActive ? (
-        active(row)
+    const icon = (c: Column) =>
+      hasSvg ? (
+        <ui.Svg source={svgIcon(c)} alt={t(lang, `ui_col_${c}`)} width={14} height={14} />
       ) : (
-        <Box key={row.key} flexDirection="row" alignItems="center" gap="sm">
-          <Text mono tabular dimColor>
-            {row.age}
+        <Text color={c === 'blocked' ? RED : undefined} dimColor={c !== 'blocked'}>
+          {LETTER[c]}
+        </Text>
+      )
+    // One count: icon and number, in a fixed slot so the columns line up; a zero leaves
+    // the slot empty, so the eye only meets what is there.
+    const cell = (repo: string, c: Column, n: number, slot: boolean) =>
+      n > 0 ? (
+        <Box key={`${repo}:${c}`} flexDirection="row" alignItems="center" gap="xs" width={slot ? 6 : undefined}>
+          {icon(c)}
+          <Text tabular color={c === 'blocked' ? RED : undefined} weight={c === 'blocked' ? 'semibold' : undefined}>
+            {String(n)}
           </Text>
-          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-            <Text wrap="truncate">{row.title}</Text>
-            <Text size="caption" dimColor wrap="truncate">
-              {row.meta}
-            </Text>
+        </Box>
+      ) : (
+        slot && <Box key={`${repo}:${c}`} width={6} />
+      )
+    const toggle = (repo: string) => () =>
+      void update($, selected, list => (list.includes(repo) ? list.filter(x => x !== repo) : [...list, repo]))
+
+    type Repo = Extract<typeof vm, { state: 'ok' }>['repos'][number]
+    const repoRow = (x: Repo) => {
+      const box = hasSvg ? (x.isSelected ? '☑' : '☐') : x.isSelected ? '[x]' : '[ ]'
+      const name = (
+        <Box key="name" flexDirection="row" alignItems="center" gap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Button key={`pick:${x.repo}`} plain={true} onPress={toggle(x.repo)}>
+            {`${box} ${x.name}`}
+          </Button>
+          <Button key={`open:${x.repo}`} plain={true} dimColor={true} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
+            {x.isOpen ? '▾' : '▸'}
+          </Button>
+        </Box>
+      )
+      const prs = x.isOpen && (
+        <Box key="prs" flexDirection="column" gap="xs" paddingLeft="lg">
+          {x.prs.map(p => (
+            <Box key={p.key} flexDirection="row" alignItems="center" gap="sm">
+              <Link href={p.url} label={`#${p.number}`} />
+              <Text wrap="truncate">
+                {p.verb} · {p.title}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )
+      return isNarrow ? (
+        <Box key={x.repo} flexDirection="column" gap="xs">
+          {name}
+          <Box flexDirection="row" flexWrap="wrap" gap="md" paddingLeft="lg">
+            {COLUMNS.map(c => cell(x.repo, c, x.counts[c], false))}
           </Box>
-          <Button key={`open:${row.key}`} plain={true} onPress={() => void update($, expanded, () => row.key)}>
-            {t(lang, 'ui_actions')}
-          </Button>
+          {prs}
+        </Box>
+      ) : (
+        <Box key={x.repo} flexDirection="column" gap="xs">
+          <Box flexDirection="row" alignItems="center" gap="sm">
+            {name}
+            {COLUMNS.map(c => cell(x.repo, c, x.counts[c], true))}
+          </Box>
+          {prs}
         </Box>
       )
-    const more = (id: string, n: number, onPress: () => void) =>
-      n > 0 && (
-        <Box key={`more:${id}`} flexDirection="row">
-          <Button plain={true} onPress={onPress}>
-            {t(lang, 'ui_show_more', n)}
-          </Button>
-        </Box>
-      )
-    const { you, team, age } = vm
+    }
+
+    // Puts the picked repos' PRs in the prompt without sending: appended on a new line
+    // when there is a draft, never twice. The button says "In prompt ✓" until the next round.
+    const { send } = vm
+    const sendNow = async () => {
+      if (!send.count) return
+      const { text } = await $.prompt.read()
+      if (!text.includes(send.prompt))
+        await $.prompt.fill(text.trim() ? { text: `\n${send.prompt}`, mode: 'append' } : { text: send.prompt, mode: 'replace' })
+      await update($, sent, () => send.key)
+    }
 
     return page(
-      <Box key="you" flexDirection="column" gap="sm">
-        <Box flexDirection="row" gap="sm">
-          <Text size="caption" weight="semibold">
-            {t(lang, 'ui_for_you', you.count)}
-          </Text>
-          <Box flexGrow={1} />
+      vm.repos.length === 0 ? (
+        <Text key="clear" size="heading" weight="semibold">
+          {t(lang, 'ui_nothing')}
+        </Text>
+      ) : (
+        <Box key="list" flexDirection="column" gap="sm">
           <Text size="caption" dimColor>
-            {t(lang, 'ui_of_mine', you.mineOpen)}
+            {t(lang, 'ui_pick')}
           </Text>
-        </Box>
-        {you.count === 0 ? (
-          <Box flexDirection="column" gap="xs">
-            <Text size="heading" weight="semibold">
-              {t(lang, 'ui_all_clear')}
-            </Text>
-            <Text size="caption" dimColor>
-              {t(lang, 'ui_all_clear_sub', you.mineOpen, vm.seenTime)}
-            </Text>
-          </Box>
-        ) : (
-          you.rows.map(line)
-        )}
-        {more('you', you.more, () => void update($, youLimit, l => l + STEP))}
-      </Box>,
-      team && (
-        <Box key="team" flexDirection="column" gap="sm">
-          <Box flexDirection="row">
-            <Button plain={true} onPress={() => void update($, teamOpen, o => !o)}>
-              {team.label}
-            </Button>
-          </Box>
-          {team.rows.map(line)}
-          {more('team', team.more, () => void update($, teamLimit, l => l + STEP))}
+          {vm.repos.map(repoRow)}
         </Box>
       ),
-      <Box key="age" flexDirection="row" flexWrap="wrap" gap="md" alignItems="center">
-        {hasSvg && <ui.Svg source={age.svg} alt={age.line} width={240} height={40} isInteractive={false} />}
-        <Box flexDirection="column" gap="xs" flexGrow={1}>
-          <Text size="caption">{t(lang, 'ui_age_of', age.total)}</Text>
-          <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
-            <Text size="caption">{t(lang, 'ui_oldest', age.oldest.age)}</Text>
-            <Link href={age.oldest.url} label={`#${age.oldest.number}`} />
-            <Text size="caption">· {age.oldest.repo}</Text>
-          </Box>
-          <Text size="caption" dimColor tabular>
-            {age.line}
-          </Text>
+      vm.clean > 0 && (
+        <Text key="clean" size="caption" dimColor>
+          {t(lang, 'ui_clean', vm.clean)}
+        </Text>
+      ),
+      vm.repos.length > 0 && (
+        <Box key="legend" flexDirection="row" flexWrap="wrap" columnGap="md" rowGap="xs">
+          {COLUMNS.map(c => (
+            <Box key={c} flexDirection="row" alignItems="center" gap="xs">
+              {icon(c)}
+              <Text size="caption" dimColor>
+                {t(lang, `ui_col_${c}`)}
+              </Text>
+            </Box>
+          ))}
         </Box>
-      </Box>,
+      ),
+      vm.repos.length > 0 && (
+        <Box key="send" flexDirection="row">
+          {send.count ? (
+            <Button key="send" variant="primary" onPress={() => void sendNow()}>
+              {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
+            </Button>
+          ) : (
+            <Button key="send" plain={true} dimColor={true} onPress={() => {}}>
+              {t(lang, 'ui_send', 0)}
+            </Button>
+          )}
+        </Box>
+      ),
     )
   })
 }
