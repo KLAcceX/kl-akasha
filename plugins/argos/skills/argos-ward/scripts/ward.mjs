@@ -132,6 +132,8 @@ function main(args) {
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
     author: pr.author?.login ?? "",
+    // someone else's PR I already left a review on: the pane counts what is left to look at
+    reviewed: kind !== "mine" && pr.latestReviews.nodes.some((r) => r.author?.login === me),
     signals: { mine: () => mySignals(pr, me), review: () => reviewSignals(pr, me), other: () => othersSignals(pr, me) }[kind](),
   });
   const mine = search(`is:pr is:open archived:false author:${me} ${extra}`).map(shape("mine")).sort(byAge);

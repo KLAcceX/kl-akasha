@@ -52,6 +52,13 @@ export function ageShort(iso: string, now: number, lang: string): string {
   return d < 14 ? t(lang, 'u_d', d) : t(lang, 'u_w', Math.floor(d / 7))
 }
 
+// The one or two words on a PR's action button: what the press asks the AI to do.
+export function act(p: Item, lang: string): string {
+  if (p.kind === 'review') return t(lang, 'a_review')
+  const k = top(p)?.split(':')[0]
+  return t(lang, k ? `a_${k}` : 'a_open')
+}
+
 // The four columns of a repo row, in this order everywhere (icons, legend, tests).
 export const COLUMNS = ['comments', 'changed', 'blocked', 'review'] as const
 export type Column = (typeof COLUMNS)[number]
@@ -81,8 +88,8 @@ export function reason(error: string, lang: string) {
   return t(lang, 'err_generic')
 }
 
-// The pane's own state: the repos picked for the AI, the repo opened to show its PRs,
-// and the last selection put in the prompt (`${round.at}|repo,repo`).
+// The pane's own state: the PRs picked for the AI (repo#number), the repo opened to show
+// its PRs, and the last selection put in the prompt (`${round.at}|repo#n,repo#n`).
 export type Ui = { selected: string[]; open: string; sent: string }
 export const UI: Ui = { selected: [], open: '', sent: '' }
 
@@ -125,28 +132,31 @@ export function toViewModel(r: Round | null, o: Opts) {
   if (!all.length) return { ...head, state: 'noPRs' as const, repos: connected.length }
 
   const names = [...new Set([...connected, ...all.map(p => p.repo)])]
+  const picks = new Set(ui.selected)
   const repos = names.map(repo => {
     const prs = all.filter(p => p.repo === repo && counts(p)).sort(byRank)
     const sum = Object.fromEntries(COLUMNS.map(c => [c, prs.reduce((n, p) => n + cells(p)[c], 0)])) as Counts
-    const first = prs[0]
-    const oldest = prs.reduce<Item | undefined>((o, p) => (!o || p.createdAt < o.createdAt ? p : o), undefined)
+    const chosen = prs.filter(p => picks.has(keyOf(p))).length
     return {
       repo,
       name: shortRepo(repo),
       counts: sum,
-      tone: tone(sum),
-      isSelected: ui.selected.includes(repo),
+      // the repo's checkbox: all of its PRs picked, some, or none
+      pick: chosen === 0 ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const),
+      keys: prs.map(keyOf),
       isOpen: ui.open === repo,
-      next: first ? { verb: verb(first, lang), number: first.number, url: first.url } : null,
-      meta: oldest ? t(lang, 'ui_repo_meta', ageShort(oldest.createdAt, now, lang)) : '',
       prs: prs.map(p => ({
         key: keyOf(p),
         url: p.url,
         number: p.number,
         title: p.title,
         verb: verb(p, lang),
+        act: act(p, lang),
         tone: tone(cells(p)),
         age: ageShort(p.createdAt, now, lang),
+        isPicked: picks.has(keyOf(p)),
+        // its own request, for the action button on its line
+        prompt: prompt([p], lang),
       })),
       items: prs,
     }
@@ -159,30 +169,33 @@ export function toViewModel(r: Round | null, o: Opts) {
       const [wa, wb] = [weight(a.counts), weight(b.counts)]
       return wb.map((n, i) => n - wa[i]!).find(Boolean) ?? a.name.localeCompare(b.name)
     })
-  const totals = Object.fromEntries(COLUMNS.map(c => [c, busy.reduce((n, x) => n + x.counts[c], 0)])) as Counts
-  const picked = busy.filter(x => x.isSelected)
-  const items = picked.flatMap(x => x.items)
+  // The top line's tally of the work: every open PR once, mine, and the others split by
+  // whether I already reviewed them. The four always add up.
+  const others = all.filter(p => p.kind !== 'mine')
+  const reviewed = others.filter(p => p.reviewed).length
+  const tally = { open: all.length, mine: all.length - others.length, reviewed, unreviewed: others.length - reviewed }
+  const items = busy.flatMap(x => x.items).filter(p => picks.has(keyOf(p)))
   const fix = items.filter(p => p.kind === 'mine').length
-  const sendKey = `${r.at}|${picked.map(x => x.repo).join(',')}`
+  const sendKey = `${r.at}|${items.map(keyOf).join(',')}`
   // What the send button checks before it fills the prompt, worst first.
-  const block = !picked.length ? t(lang, 'ui_send_none') : o.running ? t(lang, 'ui_send_wait') : null
+  const block = !items.length ? t(lang, 'ui_send_none') : o.running ? t(lang, 'ui_send_wait') : null
   const warn = r.error || isLate ? t(lang, 'ui_send_stale', okAt ? hhmm(okAt) : '') : items.length > MANY ? t(lang, 'ui_send_many', items.length) : null
+  const allKeys = busy.flatMap(x => x.keys)
 
   return {
     ...head,
     state: 'ok' as const,
-    headline: t(lang, 'ui_headline', busy.length),
-    totals,
-    tone: tone(totals),
+    counts: tally,
     repos: busy.map(({ items, ...x }) => x),
     clean: repos.length - busy.length,
-    allSelected: busy.length > 0 && picked.length === busy.length,
+    allKeys,
+    allSelected: allKeys.length > 0 && allKeys.every(k => picks.has(k)),
     send: {
-      count: picked.length,
+      count: items.length,
       prompt: prompt(items, lang),
       key: sendKey,
-      inPrompt: picked.length > 0 && ui.sent === sendKey,
-      summary: picked.length ? t(lang, 'ui_send_summary', fix, items.length - fix) : '',
+      inPrompt: items.length > 0 && ui.sent === sendKey,
+      summary: items.length ? t(lang, 'ui_send_summary', fix, items.length - fix) : '',
       block,
       warn,
     },

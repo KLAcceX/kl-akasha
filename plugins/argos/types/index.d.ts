@@ -6,6 +6,8 @@ export type Item = {
   url: string
   author?: string
   isDraft?: boolean
+  // someone else's PR the user already reviewed
+  reviewed?: boolean
   createdAt: string
   signals: string[]
 }
@@ -30,7 +32,9 @@ declare module 'claude-code' {
       round: Round | null
       isHidden: boolean
       isRunning: boolean
-      // repos picked to send to the AI (owner/name)
+      // showing the sample round from /argos demo
+      isDemo: boolean
+      // PRs picked to send to the AI (owner/name#number)
       selected: string[]
       // the repo whose PRs are shown; '' = none
       open: string

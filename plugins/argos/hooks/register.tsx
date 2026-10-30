@@ -17,6 +17,8 @@ const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
 const HIDDEN = { plugin: 'argos', key: 'isHidden' } as const
 const RUNNING = { plugin: 'argos', key: 'isRunning' } as const
+// /argos demo shows a sample round; rounds and loads wait until a plain /argos
+const DEMO = { plugin: 'argos', key: 'isDemo' } as const
 const round = atom(ROUND, null)
 const isHidden = atom(HIDDEN, false)
 const isRunning = atom(RUNNING, false)
@@ -70,12 +72,7 @@ const GLYPHS: Record<Column, string> = {
   changed: REFRESH,
 }
 const ICONS = {
-  unchecked: stroke('<rect x="4" y="4" width="16" height="16" rx="3"/>'),
-  checked:
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="#D97757"/>' +
-    '<path d="M8 12.5l2.6 2.6l5.4 -5.6" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  right: stroke('<path d="M9 6l6 6l-6 6"/>'),
-  down: stroke('<path d="M6 9l6 6l6 -6"/>'),
+  elbow: stroke('<path d="M9 0v11a3 3 0 0 0 3 3h9"/>'),
   refresh: stroke(REFRESH),
   pr: stroke(
     '<path d="M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M16 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>' +
@@ -85,8 +82,8 @@ const ICONS = {
 }
 const LAYER = 'rgba(127, 127, 127, 0.10)'
 const PICKED = 'rgba(217, 119, 87, 0.12)'
-// Below this many cells a card drops its age line and keeps the essentials.
-const NARROW = 44
+// Below this many cells the tally leaves the title line for a line of its own.
+const NARROW = 72
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -102,6 +99,7 @@ async function roundFile($: any) {
 
 // Shows what the last round (from any session) wrote.
 async function load($: any): Promise<Round | null> {
+  if ((await $.state.get(DEMO)).value) return (await $.state.get(ROUND)).value
   try {
     const last: Round = JSON.parse(await $.fs.read(await roundFile($)))
     await $.state.set(ROUND, last)
@@ -111,10 +109,15 @@ async function load($: any): Promise<Round | null> {
   }
 }
 
+async function openPane($: any, options: PluginOptions) {
+  await load($)
+  await $.ui.open({ id: PANE, title: 'Argos' })
+}
+
 // One round. Open sessions share last-round.json: a session skips the round
 // when another one ran it within the interval, and only shows it.
 async function tick($: any, options: PluginOptions, force: boolean) {
-  if ((await $.state.get(RUNNING)).value) return
+  if ((await $.state.get(RUNNING)).value || (await $.state.get(DEMO)).value) return
   const { minutes, account, qualifiers, lang } = config(options)
   const last = await load($)
   const now = await $.clock.now()
@@ -140,7 +143,6 @@ async function tick($: any, options: PluginOptions, force: boolean) {
 
 export const register: Register = (on, options) => {
   const { lang, minutes } = config(options)
-  const title = t(lang, 'ui_title')
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -166,8 +168,17 @@ export const register: Register = (on, options) => {
       if (args[1] === 'add' || args[1] === 'remove') void tick($, options, true)
       return { text: (stdout || stderr).trim() }
     }
-    await load($)
-    await $.ui.open({ id: PANE, title })
+    // a sample round with several repos and every signal, to look at the pane without one
+    if (args[0] === 'demo') {
+      const sample: Round = JSON.parse(await $.fs.read(`${$.plugin.root}/hooks/demo-round.json`))
+      const at = new Date(await $.clock.now()).toISOString()
+      await $.state.set(DEMO, true)
+      await $.state.set(ROUND, { ...sample, at, okAt: at })
+      await $.ui.open({ id: PANE, title: 'Argos' })
+      return { text: t(lang, 'ui_demo') }
+    }
+    await $.state.set(DEMO, false)
+    await openPane($, options)
     void tick($, options, true)
     return { text: t(lang, 'ui_opened') }
   })
@@ -191,7 +202,7 @@ export const register: Register = (on, options) => {
             {t(lang, 'ui_needs', band.count)} · {band.verb}: {band.ref}{' '}
           </Text>
         )}
-        <Button key="open" onPress={() => void load($).then(() => $.ui.open({ id: PANE, title }))}>
+        <Button key="open" onPress={() => void openPane($, options)}>
           {t(lang, 'ui_see')}
         </Button>
         <Button key="hide" role="dismiss" onPress={() => void update($, isHidden, () => true)}>
@@ -218,18 +229,53 @@ export const register: Register = (on, options) => {
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
 
-    const header = (
-      <Box flexDirection="row" alignItems="center" gap="sm" flexWrap="wrap">
-        {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={16} height={16} />}
-        <Text weight="semibold">Argos</Text>
-        <Text size="caption" dimColor wrap="truncate">
-          {vm.seen}
-        </Text>
-        <Box flexGrow={1} />
-        {hasSvg && <ui.Svg source={ICONS.refresh} alt="" width={14} height={14} />}
-        <Button key="check" plain={true} hotkey="r" dimColor={running} onPress={checkNow}>
-          {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
-        </Button>
+    // The top bar, the dashboard's head: the mark and "Argos" with when it last looked at
+    // the far left, the tally of open work beside them, Check now at the far right. It
+    // wraps on a narrow pane.
+    type Tally = { open: number; mine: number; reviewed: number; unreviewed: number }
+    const TALLY = [
+      ['open', 'tally_open'],
+      ['mine', 'tally_mine'],
+      ['reviewed', 'tally_reviewed'],
+      ['unreviewed', 'tally_todo'],
+    ] as const
+    const tallyLine = (tally: Tally) => (
+      <Box key="tally" flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
+        {TALLY.map(([k, word], i) => (
+          <Box key={`tally:${k}`} flexDirection="row" alignItems="center" gap="xs">
+            {i > 0 && (
+              <Text size="caption" dimColor>
+                ·
+              </Text>
+            )}
+            <Text size="caption" weight="semibold" tabular dimColor={tally[k] === 0}>
+              {String(tally[k])}
+            </Text>
+            <Text size="caption" dimColor>
+              {t(lang, word)}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+    )
+    const top = (tally?: Tally) => (
+      <Box key="top" flexDirection="column" gap="xs">
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={18} height={18} />}
+          <Text weight="semibold">Argos</Text>
+          <Text size="caption" dimColor>
+            {vm.seen}
+          </Text>
+          {tally && !isNarrow && tallyLine(tally)}
+          <Box flexGrow={1} />
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            {hasSvg && <ui.Svg source={ICONS.refresh} alt={t(lang, 'ui_check')} width={14} height={14} />}
+            <Button key="check" plain={true} hotkey="r" dimColor={running} onPress={checkNow}>
+              {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
+            </Button>
+          </Box>
+        </Box>
+        {tally && isNarrow && tallyLine(tally)}
       </Box>
     )
     const svgIcon = (name: keyof typeof ICONS, alt: string, size = 14) =>
@@ -244,13 +290,15 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-    const page = (...body: any[]) => (
-      <Box flexDirection="column" gap="md" padding="md">
-        {header}
+    const frame = (first: any, ...body: any[]) => (
+      <Box flexDirection="column" gap="lg" padding="md">
+        {first}
         {status}
         {body}
       </Box>
     )
+    // Every state but the list leads with the bare top row; the list puts it in its summary.
+    const page = (...body: any[]) => frame(top(), ...body)
 
     if (vm.state === 'loading') return page(<Text key="b">{t(lang, 'ui_loading')}</Text>)
     if (vm.state === 'never') return page(<Text key="b">{t(lang, 'ui_never')}</Text>)
@@ -282,89 +330,93 @@ export const register: Register = (on, options) => {
     if (vm.state !== 'ok') return page()
 
     const fill = (color: string) => (hasSvg ? color : undefined)
-    // A count as a pill in its column's colour; colour marks the counts only, never the
-    // frame around a repo, so red appears once per blocked count and nowhere else.
-    const chips = (id: string, counts: Record<Column, number>) => (
-      <Box flexDirection="row" flexWrap="wrap" gap="xs">
-        {COLUMNS.map(
-          c =>
-            counts[c] > 0 && (
-              <Box
-                key={`${id}:${c}`}
-                flexDirection="row"
-                alignItems="center"
-                gap="xs"
-                backgroundColor={fill(TINT[c])}
-                borderStyle={hasSvg ? 'round' : undefined}
-                borderColor={fill(TINT[c])}
-                paddingX="sm"
-              >
-                {svgIcon(c, '', 12)}
-                <Text color={TONE[c]} weight="semibold">
-                  {t(lang, `chip_${c}`, counts[c])}
-                </Text>
-              </Box>
-            ),
+    const toggle = (keys: string[], pick: boolean) =>
+      void update($, selected, list => (pick ? [...new Set([...list, ...keys])] : list.filter(k => !keys.includes(k))))
+    // A checkbox is a one-glyph button: the kit's own way to a control that is only a mark,
+    // so the box itself takes the press (focus and pointer invert it). The terminal writes
+    // brackets.
+    const GLYPH = hasSvg ? { all: '☑', some: '⊟', none: '☐' } : { all: '[x]', some: '[-]', none: '[ ]' }
+    const check = (key: string, state: 'all' | 'some' | 'none', onPress: () => void) => (
+      <Button key={key} plain={true} hover={{ color: 'claude' }} onPress={onPress}>
+        <Text color={state === 'none' ? undefined : 'claude'}>{GLYPH[state]}</Text>
+      </Button>
+    )
+
+    type Repo = (typeof vm.repos)[number]
+    // A count in a fixed slot, so the columns line up from row to row; a zero leaves the
+    // slot empty. The terminal has no icons, so it writes the word and takes its width.
+    const count = (id: string, c: Column, n: number) => (
+      <Box key={`${id}:${c}`} flexDirection="row" alignItems="center" gap="xs" width={hasSvg ? 4 : undefined}>
+        {n > 0 && svgIcon(c, t(lang, `chip_${c}`, n), 13)}
+        {n > 0 && (
+          <Text color={TONE[c]} weight="semibold" tabular>
+            {hasSvg ? String(n) : t(lang, `chip_${c}`, n)}
+          </Text>
         )}
       </Box>
     )
-    const toggle = (repo: string) => () =>
-      void update($, selected, list => (list.includes(repo) ? list.filter(x => x !== repo) : [...list, repo]))
-
-    type Repo = (typeof vm.repos)[number]
-    // One card per repo on the neutral layer, until picked (then the accent frame and fill).
-    // Left: the checkbox with the repo name, one control. Right: "N PRs ▸", which lists
-    // them. Between: the next action and the counts.
-    const card = (x: Repo) => (
+    // Puts one request in the prompt without sending it: appended on a new line when there
+    // is a draft, never twice.
+    const fillPrompt = async (request: string) => {
+      const { text } = await $.prompt.read()
+      if (!text.includes(request)) await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
+    }
+    // One repo. Its line: the checkbox, the name (which picks too, a larger target), the
+    // counts in their slots, and the expand control: "2 PRs" with a chevron in the accent,
+    // one button. Opened, each PR hangs under the repo on a tree elbow: its checkbox, its
+    // title in the quieter caption size (the repo leads), its age and number, and at the
+    // far right a short action in the signal's colour that puts that one PR in the prompt.
+    // A repo is tinted only when all its PRs are picked; a partial pick shows in its box.
+    const row = (x: Repo) => (
       <Box
         key={x.repo}
         flexDirection="column"
         gap="xs"
-        borderStyle="round"
-        borderColor={x.isSelected ? 'claude' : undefined}
-        backgroundColor={fill(x.isSelected ? PICKED : LAYER)}
-        paddingX="sm"
-        paddingY="xs"
+        backgroundColor={fill(x.pick === 'all' ? PICKED : LAYER)}
+        borderStyle={hasSvg ? 'round' : undefined}
+        borderColor={fill(x.pick === 'all' ? PICKED : LAYER)}
+        paddingX="md"
+        paddingY="sm"
       >
-        <Box flexDirection="row" alignItems="center" justifyContent="space-between" gap="sm">
-          <Box flexDirection="row" alignItems="center" gap="sm" flexShrink={1} minWidth={0}>
-            {svgIcon(x.isSelected ? 'checked' : 'unchecked', t(lang, x.isSelected ? 'ui_alt_picked' : 'ui_alt_unpicked'), 16)}
-            <Button key={`pick:${x.repo}`} plain={true} onPress={toggle(x.repo)}>
-              {!hasSvg && <Text color={x.isSelected ? 'claude' : undefined}>{x.isSelected ? '[x] ' : '[ ] '}</Text>}
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {check(`box:${x.repo}`, x.pick, () => toggle(x.keys, x.pick !== 'all'))}
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Button key={`pick:${x.repo}`} plain={true} hover={{ color: 'claude' }} onPress={() => toggle(x.keys, x.pick !== 'all')}>
               <Text weight="semibold">{x.name}</Text>
             </Button>
           </Box>
           <Box flexDirection="row" alignItems="center" gap="xs">
-            <Button key={`open:${x.repo}`} plain={true} dimColor={!x.isOpen} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
-              {hasSvg ? t(lang, 'ui_prs', x.prs.length) : `${t(lang, 'ui_prs', x.prs.length)} ${x.isOpen ? '▾' : '▸'}`}
+            {COLUMNS.map(c => (!hasSvg && x.counts[c] === 0 ? null : count(x.repo, c, x.counts[c])))}
+          </Box>
+          <Box flexDirection="row" justifyContent="flex-end" marginLeft="md" width={hasSvg ? 9 : undefined}>
+            <Button key={`open:${x.repo}`} plain={true} hover={{ color: 'claude' }} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
+              <Text dimColor={!x.isOpen}>{t(lang, 'ui_prs', x.prs.length)}</Text>
+              <Text color="claude" weight="semibold">{x.isOpen ? '  ▴' : '  ▾'}</Text>
             </Button>
-            {svgIcon(x.isOpen ? 'down' : 'right', '')}
           </Box>
         </Box>
-        {x.next && (
-          <Box flexDirection="row" alignItems="center" gap="sm">
-            <Text wrap="truncate">{x.next.verb}</Text>
-            <Link href={x.next.url} label={`#${x.next.number}`} />
-          </Box>
-        )}
-        {chips(x.repo, x.counts)}
-        {!isNarrow && (
-          <Text size="caption" dimColor wrap="truncate">
-            {x.meta}
-          </Text>
-        )}
         {x.isOpen && (
           <Box flexDirection="column" gap="xs" paddingTop="xs">
             {x.prs.map(p => (
               <Box key={p.key} flexDirection="row" alignItems="center" gap="sm">
-                {svgIcon('pr', '')}
-                <Link href={p.url} label={`#${p.number}`} />
-                <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-                  <Text wrap="truncate">{p.verb}</Text>
-                  <Text size="caption" dimColor wrap="truncate">
-                    {p.title} · {p.age}
-                  </Text>
+                {hasSvg ? <ui.Svg source={ICONS.elbow} alt={t(lang, 'ui_alt_in', x.name)} width={16} height={16} /> : <Text dimColor>└</Text>}
+                {check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked))}
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Button key={`pick:${p.key}`} plain={true} dimColor={true} hover={{ color: 'claude' }} onPress={() => toggle([p.key], !p.isPicked)}>
+                    <Text size="caption" wrap="truncate">
+                      {p.title}
+                    </Text>
+                  </Button>
                 </Box>
+                <Text size="caption" dimColor tabular>
+                  {p.age}
+                </Text>
+                <Link href={p.url} label={`#${p.number}`} />
+                <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt)}>
+                  <Text size="caption" color={TONE[p.tone]} weight="semibold">
+                    {`${p.act} ›`}
+                  </Text>
+                </Button>
               </Box>
             ))}
           </Box>
@@ -378,9 +430,7 @@ export const register: Register = (on, options) => {
     const { send } = vm
     const sendNow = async () => {
       if (send.block) return
-      const { text } = await $.prompt.read()
-      if (!text.includes(send.prompt))
-        await $.prompt.fill(text.trim() ? { text: `\n${send.prompt}`, mode: 'append' } : { text: send.prompt, mode: 'replace' })
+      await fillPrompt(send.prompt)
       await update($, sent, () => send.key)
     }
     const footer = (
@@ -407,15 +457,27 @@ export const register: Register = (on, options) => {
             </Text>
           )}
         </Box>
-        <Button key="send" variant={send.block ? 'secondary' : 'primary'} onPress={() => void sendNow()}>
-          {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
-        </Button>
+        {vm.allKeys.length > 1 && (
+          <Button key="pick-all" plain={true} dimColor={true} onPress={() => void update($, selected, () => (vm.allSelected ? [] : vm.allKeys))}>
+            {vm.allSelected ? t(lang, 'ui_pick_none') : t(lang, 'ui_pick_all')}
+          </Button>
+        )}
+        {running ? (
+          <Button key="send" plain={true} dimColor={true} onPress={() => {}}>
+            {t(lang, 'ui_checking')}
+          </Button>
+        ) : (
+          <Button key="send" variant={send.block ? 'secondary' : 'primary'} onPress={() => void sendNow()}>
+            {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
+          </Button>
+        )}
       </Box>
     )
 
     if (vm.repos.length === 0)
-      return page(
-        <Text key="clear" size="heading" weight="semibold">
+      return frame(
+        top(vm.counts),
+        <Text key="clear" weight="semibold">
           {t(lang, 'ui_nothing')}
         </Text>,
         vm.clean > 0 && (
@@ -425,31 +487,10 @@ export const register: Register = (on, options) => {
         ),
       )
 
-    return page(
-      <Box
-        key="summary"
-        flexDirection="column"
-        gap="sm"
-        backgroundColor={fill(LAYER)}
-        borderStyle={hasSvg ? 'round' : undefined}
-        borderColor={fill(LAYER)}
-        paddingX="md"
-        paddingY="sm"
-      >
-        <Box flexDirection="row" alignItems="center" justifyContent="space-between" gap="sm">
-          <Text size="heading" weight="semibold">
-            {vm.headline}
-          </Text>
-          {vm.repos.length > 1 && (
-            <Button key="pick-all" plain={true} dimColor={true} onPress={() => void update($, selected, () => (vm.allSelected ? [] : vm.repos.map(x => x.repo)))}>
-              {vm.allSelected ? t(lang, 'ui_pick_none') : t(lang, 'ui_pick_all')}
-            </Button>
-          )}
-        </Box>
-        {chips('total', vm.totals)}
-      </Box>,
+    return frame(
+      top(vm.counts),
       <Box key="list" flexDirection="column" gap="sm">
-        {vm.repos.map(card)}
+        {vm.repos.map(row)}
         {vm.clean > 0 && (
           <Text size="caption" dimColor>
             {t(lang, 'ui_clean', vm.clean)}
