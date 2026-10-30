@@ -4,12 +4,14 @@
 //
 // Usage:
 //   node repos.mjs list [--json] [--lang pt-BR|en]
-//   node repos.mjs add <folder> [--lang ...]       reads the folder's git origin
-//   node repos.mjs remove <owner/repo | folder> [--lang ...]
+//   node repos.mjs add [folder | owner/name | GitHub URL] [--lang ...]
+//       a folder (default: the current one) is read from its git origin; a name or URL
+//       needs no clone and is checked with `gh repo view`
+//   node repos.mjs remove <owner/name | URL | folder> [--lang ...]
 //   node repos.mjs --self-test
 // Env: ARGOS_PAVO_STATE overrides the state file path (repos.json sits beside it).
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +25,25 @@ const FILE = join(dirname(STATE), "repos.json");
 // alias such as "git@github-work:acme/api.git" → "acme/api"
 export const repoFromRemote = (url) =>
   url.trim().match(/^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?[^:/]*github[^:/]*[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/)?.[1];
+
+// What the user typed, when it names a GitHub repo: "acme/api", any github.com link
+// (a PR or file link too) or a remote URL → "acme/api". Folders give undefined.
+export const repoFromArg = (arg) => {
+  const a = arg.trim();
+  const link = a.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#].*)?$/i);
+  if (link) return `${link[1]}/${link[2]}`;
+  return /^[A-Za-z0-9-]+\/[\w.-]+$/.test(a) ? a : repoFromRemote(a);
+};
+
+const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+
+// t() returns the key when i18n.mjs has no such entry yet; say it in English then.
+const say = (lang, key, en, ...args) => {
+  const s = t(lang, key, ...args);
+  return s === key ? en : s;
+};
+
+const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 
 export const read = () => {
   try {
@@ -43,29 +64,45 @@ function main(args) {
   const [verb = "list", ...rest] = args.filter((a, i) => a !== "--json" && (l < 0 || (i !== l && i !== l + 1)));
   const target = rest.join(" ").trim();
   const list = read();
+  const fail = (msg) => {
+    console.log(`Argos: ${msg}`);
+    process.exit(1);
+  };
 
-  if (verb === "add" && target) {
-    const path = resolve(target);
+  if (verb === "add") {
+    const arg = target || ".";
+    let path = resolve(arg);
     let repo;
-    try {
-      repo = repoFromRemote(execFileSync("git", ["-C", path, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-    } catch {}
-    if (!repo) {
-      console.log(`Argos: ${t(lang, "not_github", path)}`);
-      process.exit(1);
+    if (existsSync(path)) {
+      try {
+        repo = repoFromRemote(run("git", ["-C", path, "remote", "get-url", "origin"]));
+      } catch {}
+      if (!repo && !repoFromArg(arg)) fail(t(lang, "not_github", path));
     }
-    const next = [...list.filter((r) => r.repo !== repo), { path, repo }];
+    if (!repo) {
+      path = undefined;
+      const name = repoFromArg(arg);
+      if (!name) fail(say(lang, "not_repo", `${arg} is not a folder or a GitHub repository (owner/name or URL).`, arg));
+      try {
+        repo = run("gh", ["repo", "view", name, "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
+      } catch {}
+      if (!repo) fail(say(lang, "repo_not_found", `${name} was not found on GitHub, or this gh account cannot see it.`, name));
+    }
+    // adding by name keeps the folder an earlier add recorded
+    const old = list.find((r) => same(r.repo, repo));
+    const next = [...list.filter((r) => r !== old), { ...old, repo, ...(path && { path }) }];
     write(next);
     return console.log(`Argos: ${t(lang, "connected", repo, next.length)}`);
   }
   if (verb === "remove" && target) {
-    const next = list.filter((r) => r.repo !== target && r.path !== resolve(target));
+    const name = repoFromArg(target) ?? target;
+    const next = list.filter((r) => !same(r.repo, name) && r.path !== resolve(target));
     write(next);
-    return console.log(`Argos: ${t(lang, next.length < list.length ? "removed" : "not_connected", target)}`);
+    return console.log(`Argos: ${t(lang, next.length < list.length ? "removed" : "not_connected", name)}`);
   }
   if (args.includes("--json")) return console.log(JSON.stringify(list));
   if (!list.length) return console.log(`Argos: ${t(lang, "no_repos")}`);
-  console.log([`Argos: ${t(lang, "list_title")}`, ...list.map((r) => `- ${r.repo}  (${r.path})`)].join("\n"));
+  console.log([`Argos: ${t(lang, "list_title")}`, ...list.map((r) => `- ${r.repo}${r.path ? `  (${r.path})` : ""}`)].join("\n"));
 }
 
 function selfTest() {
@@ -75,6 +112,21 @@ function selfTest() {
   assert.equal(repoFromRemote("git@github-work:acme/portal.git"), "acme/portal");
   assert.equal(repoFromRemote("ssh://git@github.com/acme/api.git"), "acme/api");
   assert.equal(repoFromRemote("https://gitlab.com/acme/web"), undefined);
+
+  // names and links
+  assert.equal(repoFromArg("acme/api"), "acme/api");
+  assert.equal(repoFromArg(" KLAcceX/kl-akasha "), "KLAcceX/kl-akasha");
+  assert.equal(repoFromArg("acme/my_repo.js"), "acme/my_repo.js");
+  assert.equal(repoFromArg("https://github.com/acme/api"), "acme/api");
+  assert.equal(repoFromArg("github.com/acme/api.git"), "acme/api");
+  assert.equal(repoFromArg("https://github.com/acme/api/pull/42"), "acme/api");
+  assert.equal(repoFromArg("https://github.com/acme/api/pull/42/files#diff-1"), "acme/api");
+  assert.equal(repoFromArg("https://www.github.com/acme/api?tab=readme"), "acme/api");
+  assert.equal(repoFromArg("git@github.com:acme/api.git"), "acme/api");
+  // folders
+  for (const f of [".", "..", "./api", "../acme/api", "api", "/home/me/api", "C:\code\api", "D:/Projects/api", "~/api", "a/b/c"])
+    assert.equal(repoFromArg(f), undefined, f);
+  assert.equal(repoFromArg("https://gitlab.com/acme/api"), undefined);
   console.log("self-test ok");
 }
 
