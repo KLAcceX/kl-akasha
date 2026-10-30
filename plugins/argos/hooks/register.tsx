@@ -223,6 +223,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    await load($)
     await $.command.register({ name: 'argos', description: t(lang, 'ui_command') })
     $.clock.every(minutes * 6e4, () => void tick($, options, false))
     $.clock.after(5_000, () => void tick($, options, false))
@@ -244,6 +245,7 @@ export const register: Register = (on, options) => {
       if (args[1] === 'add' || args[1] === 'remove') void tick($, options, true)
       return { text: (stdout || stderr).trim() }
     }
+    await load($)
     await $.ui.open({ id: PANE, title })
     void tick($, options, true)
     return { text: t(lang, 'ui_opened') }
@@ -278,7 +280,7 @@ export const register: Register = (on, options) => {
           </Text>
         )}
         {!running && late > 0 && <Text dimColor>· {t(lang, 'ui_others', late)} </Text>}
-        <Button key="open" onPress={() => void $.ui.open({ id: PANE, title })}>
+        <Button key="open" onPress={() => void load($).then(() => $.ui.open({ id: PANE, title }))}>
           {t(lang, 'ui_see')}
         </Button>
         <Button key="hide" role="dismiss" onPress={() => void update($, isHidden, () => true)}>
@@ -300,7 +302,7 @@ export const register: Register = (on, options) => {
     // States with nothing to portray yet
     if (!r && running)
       return (
-        <Box flexDirection="column" alignItems="center" gap={8} padding={12}>
+        <Box flexDirection="column" alignItems="center" gap="sm" padding="sm">
           {hasSvg && <ui.Svg source={LOADING} alt="KL · Akasha" width={56} height={56} isInteractive />}
           <Text dimColor>{t(lang, 'ui_first_vigil')}</Text>
         </Box>
@@ -308,7 +310,7 @@ export const register: Register = (on, options) => {
     const refresh = () => void tick($, options, true)
     if (!r)
       return (
-        <Box flexDirection="column" gap={8} padding={12}>
+        <Box flexDirection="column" gap="sm" padding="sm">
           <Text>{t(lang, 'ui_never')}</Text>
           <Button key="first" variant="primary" onPress={refresh}>
             {t(lang, 'ui_refresh')}
@@ -321,7 +323,7 @@ export const register: Register = (on, options) => {
     }
     if (!(r.repos ?? []).length || r.needsRepos)
       return (
-        <Box flexDirection="column" gap={8} padding={12}>
+        <Box flexDirection="column" gap="sm" padding="sm">
           <Text weight="bold">{t(lang, 'ui_no_repos_title')}</Text>
           <Text>{t(lang, 'ui_no_repos_body')}</Text>
           <Code source="/argos repos add <folder>" />
@@ -383,8 +385,8 @@ export const register: Register = (on, options) => {
     )
     const signals = (p: Item) => p.signals.map(c => `${ALERT.has(base(c)) ? '▲ ' : ''}${label(lang, c)}`).join(' · ')
     const row = (p: Item) => (
-      <Box key={p.url} flexDirection="column" gap={2}>
-        <Box flexDirection="row" gap={6} alignItems="center">
+      <Box key={p.url} flexDirection="column" gap="xs">
+        <Box flexDirection="row" gap="xs" alignItems="center">
           <Text tabular dimColor>
             {days(p.createdAt, now)}d
           </Text>
@@ -401,10 +403,10 @@ export const register: Register = (on, options) => {
           {signals(p) || (p.kind === 'other' ? t(lang, 'idle_other') : '')}
         </Text>
         {open === p.url && (
-          <Box flexDirection="column" gap={4} marginLeft={12}>
+          <Box flexDirection="column" gap="xs" marginLeft="md">
             <Text weight="bold">{action(p, lang, now)}</Text>
             {!hasSvg && <Text dimColor>{p.url}</Text>}
-            <Box flexDirection="row" gap={8}>
+            <Box flexDirection="row" gap="sm">
               {aiButton(p)}
               <Button key={`copy:${p.url}`} onPress={copy(p)}>
                 {copyLabel(p)}
@@ -441,9 +443,9 @@ export const register: Register = (on, options) => {
     const ageLabels = t(lang, 'age_buckets') as unknown as string[]
 
     return (
-      <Box flexDirection="column" gap={12} padding={12}>
+      <Box flexDirection="column" gap="md" padding="sm">
         {/* 1 · Header */}
-        <Box flexDirection="row" alignItems="center" gap={8}>
+        <Box flexDirection="row" alignItems="center" gap="sm">
           {hasSvg ? (
             <ui.Svg source={running ? LOADING : ICON} alt="KL · Akasha" width={24} height={24} isInteractive={running} />
           ) : (
@@ -452,7 +454,7 @@ export const register: Register = (on, options) => {
           <Text weight="bold" size="heading">
             Argos
           </Text>
-          <Text dimColor tabular>
+          <Text dimColor tabular wrap="truncate">
             {status}
           </Text>
           <Box flexGrow={1} />
@@ -463,12 +465,12 @@ export const register: Register = (on, options) => {
 
         {/* Failed round: say so, keep the last good data */}
         {r.error && (
-          <Box flexDirection="column" gap={4}>
+          <Box flexDirection="column" gap="xs">
             <Text weight="bold">
               {s.okAt ? t(lang, 'ui_err_title', hhmm(Date.parse(r.at)), hhmm(Date.parse(s.okAt))) : errorText(r.error, lang)}
             </Text>
             {s.okAt && <Text dimColor>{errorText(r.error, lang)}</Text>}
-            <Box flexDirection="row" gap={8}>
+            <Box flexDirection="row" gap="sm">
               <Button key="retry" onPress={refresh}>
                 {t(lang, 'ui_retry')}
               </Button>
@@ -482,10 +484,12 @@ export const register: Register = (on, options) => {
 
         {/* 2 · Do this now */}
         {hero ? (
-          <Box flexDirection="column" gap={4}>
-            <Text size="caption" weight="bold" backgroundColor="#51408A" color="#F3EEFB">
-              {` ${t(lang, 'ui_now')} `}
-            </Text>
+          <Box flexDirection="column" gap="xs">
+            <Box flexDirection="row">
+              <Text size="caption" weight="bold" backgroundColor="#51408A" color="#F3EEFB">
+                {` ${t(lang, 'ui_now')} `}
+              </Text>
+            </Box>
             <Text size="heading" weight="bold" dimColor={s.isStale || Boolean(r.error)}>
               {s.isStale ? t(lang, 'act_check') : action(hero, lang, now)}
             </Text>
@@ -493,7 +497,7 @@ export const register: Register = (on, options) => {
             <Text dimColor tabular>
               {days(hero.createdAt, now)}d{hero.kind !== 'mine' ? ` · @${hero.author || '?'}` : ''}
             </Text>
-            <Box flexDirection="row" gap={8}>
+            <Box flexDirection="row" gap="sm">
               <Link href={hero.url} label={`${t(lang, 'ui_open_github')} →`} />
               {aiButton(hero, true)}
               <Button key="hero-copy" plain={true} onPress={copy(hero)}>
@@ -506,7 +510,7 @@ export const register: Register = (on, options) => {
         )}
 
         {/* 3 · Three numbers */}
-        <Box flexDirection="row" gap={16}>
+        <Box flexDirection="row" gap="lg">
           {kpi('you', t(lang, 'kpi_you'), s.you, <Text size="caption" dimColor>{t(lang, 'kpi_you_split', s.mine, s.reviews)}</Text>)}
           {kpi('team', t(lang, 'kpi_team'), s.teamStuck)}
           {kpi(
@@ -532,7 +536,7 @@ export const register: Register = (on, options) => {
 
         {/* 5 · Signals, which are also filters */}
         {s.bySignal.length > 0 && (
-          <Box flexDirection="row" gap={6} flexWrap="wrap">
+          <Box flexDirection="row" gap="xs" flexWrap="wrap">
             {s.bySignal.map(([code, n]) => (
               <Button key={`sig:${code}`} plain={true} onPress={() => void update($, signal, cur => (cur === code ? '' : code))}>
                 {`${sig === code ? '✓ ' : ALERT.has(code) ? '▲ ' : ''}${label(lang, code).replace(/^\d+\s*/, '')} ${n}`}
@@ -542,11 +546,11 @@ export const register: Register = (on, options) => {
         )}
 
         {/* Queue controls */}
-        <Box flexDirection="row" gap={8}>
+        <Box flexDirection="row" gap="sm">
           {tab('you', t(lang, 'tab_you', s.you))}
           {tab('team', t(lang, 'tab_team', s.team))}
         </Box>
-        <Box flexDirection="row" gap={8} flexWrap="wrap">
+        <Box flexDirection="row" gap="sm" flexWrap="wrap">
           <Select key="author" label={t(lang, 'sel_author')} value={who} options={authorOptions} onSelect={(val: string) => void update($, author, () => val)} />
           {(r.repos ?? []).length > 1 && (
             <Select key="repo" label={t(lang, 'sel_repo')} value={repo} options={repoOptions} onSelect={(val: string) => void update($, repoFilter, () => val)} />
@@ -572,7 +576,7 @@ export const register: Register = (on, options) => {
           <Text dimColor>{hasFilter ? t(lang, 'ui_filter_empty') : t(lang, 'ui_queue_empty')}</Text>
         ) : order === 'repo' ? (
           grouped(items, r.repos ?? []).map(g => (
-            <Box key={g.repo} flexDirection="column" gap={4}>
+            <Box key={g.repo} flexDirection="column" gap="xs">
               <Text weight="bold">
                 {g.repo} · {g.items.length}
               </Text>
