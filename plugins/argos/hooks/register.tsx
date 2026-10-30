@@ -1,8 +1,9 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one argos-pavo round over
 // the connected repos. The band above the prompt shows the most urgent PR; /argos opens
-// the pane: one row per repo with what it holds (open comments, changed since my review,
-// blocked, review requested), a box to pick it, and one button that sends the picked
-// repos' PRs to the AI. Words and numbers come from toViewModel (view.ts).
+// the pane: filters over the list, one row per repo with what it holds (open comments,
+// changed since my review, blocked, review requested), a box to pick it, a way to add a
+// repo, and one button that sends the picked PRs to the AI. Words and numbers come from
+// toViewModel (view.ts).
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
@@ -25,6 +26,7 @@ const isRunning = atom(RUNNING, false)
 const selected = atom({ plugin: 'argos', key: 'selected' } as const, UI.selected)
 const open = atom({ plugin: 'argos', key: 'open' } as const, UI.open)
 const sent = atom({ plugin: 'argos', key: 'sent' } as const, UI.sent)
+const filter = atom({ plugin: 'argos', key: 'filter' } as const, UI.filter)
 
 // The KL · Akasha mark (brand/kl/final): the face centred in a full L-coloured frame,
 // on its own dark ground so it reads in both themes.
@@ -107,6 +109,13 @@ async function load($: any): Promise<Round | null> {
   }
 }
 
+// Puts "/argos repos add " in the prompt for the person to finish with a folder or
+// owner/name, unless it is already there.
+async function addRepo($: any) {
+  const { text } = await $.prompt.read()
+  if (!text.includes('/argos repos add')) await $.prompt.fill({ text: '/argos repos add ', mode: 'replace' })
+}
+
 async function openPane($: any, options: PluginOptions) {
   await load($)
   await $.ui.open({ id: PANE, title: 'Argos' })
@@ -151,11 +160,13 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  // /argos opens the pane; /argos repos [add <folder> | remove <repo>] goes through repos.mjs,
-  // the same command the AI uses from the argos-pavo skill.
+  // /argos opens the pane; /argos repos [add <folder | owner/name> | remove <repo>] goes
+  // through repos.mjs, the same command the AI uses from the argos-pavo skill. A bare
+  // `add` connects the session's folder, named here so it never falls to the mod's own.
   on('command.run', { command: 'argos' }, async ($, e) => {
     const args = e.args.trim().split(/\s+/).filter(Boolean)
     if (args[0] === 'repos') {
+      if (args.length === 2 && args[1] === 'add') args.push(await $.session.cwd())
       const { stdout, stderr } = await $.process.run([
         'node',
         `${$.plugin.root}/skills/argos-pavo/scripts/repos.mjs`,
@@ -221,7 +232,7 @@ export const register: Register = (on, options) => {
       lang,
       minutes,
       running,
-      ui: { selected: await read($, selected), open: await read($, open), sent: await read($, sent) },
+      ui: { selected: await read($, selected), open: await read($, open), sent: await read($, sent), filter: await read($, filter) },
     })
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
@@ -306,16 +317,9 @@ export const register: Register = (on, options) => {
             {t(lang, 'ui_no_repos_title')}
           </Text>
           <Text>{t(lang, 'ui_no_repos_body')}</Text>
-          <Code source="/argos repos add <folder>" />
+          <Code source="/argos repos add <folder or owner/name>" />
           <Box flexDirection="row">
-            <Button
-              key="connect"
-              variant="primary"
-              onPress={async () => {
-                const { text } = await $.prompt.read()
-                if (!text.includes('/argos repos add')) await $.prompt.fill({ text: '/argos repos add ', mode: 'replace' })
-              }}
-            >
+            <Button key="connect" variant="primary" onPress={() => void addRepo($)}>
               {t(lang, 'ui_connect')}
             </Button>
           </Box>
@@ -494,10 +498,41 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    // The filters under the head, each with its count: the active one a real button, the
+    // others plain and dim. Picks survive a switch; the send bar counts the hidden ones.
+    const filters = (
+      <Box key="filters" flexDirection="row" alignItems="center" flexWrap="wrap" gap="sm">
+        {vm.filters.map(f =>
+          f.isActive ? (
+            <Button key={`filter:${f.id}`} variant="secondary" onPress={() => {}}>
+              {f.label}
+            </Button>
+          ) : (
+            <Button key={`filter:${f.id}`} plain={true} dimColor={true} onPress={() => void update($, filter, () => f.id)}>
+              {f.label}
+            </Button>
+          ),
+        )}
+      </Box>
+    )
+    // The list ends with a way to watch one more repo: the same request as the empty state.
+    const addRow = (
+      <Box key="add-repo-row" flexDirection="row" alignItems="center" flexWrap="wrap" gap="sm" paddingX="md">
+        <Button key="add-repo" plain={true} hover={{ color: 'claude' }} onPress={() => void addRepo($)}>
+          <Text color="claude">{t(lang, 'ui_add_repo')}</Text>
+        </Button>
+        <Text size="caption" dimColor>
+          {t(lang, 'ui_add_repo_hint')}
+        </Text>
+      </Box>
+    )
+
     return frame(
       top(vm.counts),
+      filters,
       <Box key="list" flexDirection="column" gap="sm">
         {vm.repos.map(row)}
+        {addRow}
       </Box>,
       footer,
     )

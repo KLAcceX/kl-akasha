@@ -40,6 +40,8 @@ declare module 'claude-code' {
       open: string
       // `${round.at}|repo,repo` of the last selection put in the prompt
       sent: string
+      // the list's filter: every open PR, the ones that need my help, mine to fix, all mine
+      filter: 'all' | 'help' | 'fix' | 'mine'
     }
   }
 }

@@ -124,6 +124,47 @@ test('failures and late rounds say so in words', () => {
   expect(ok(vmOf({ ...round, pending: [], mine: [], others: [] })).counts).toEqual({ open: 0, mine: 0, reviewed: 0, unreviewed: 0 })
 })
 
+test('each filter keeps every repo, counts what it shows, and labels its total', () => {
+  const draft = item({ kind: 'other', repo: 'acme/api', number: 10, url: 'u10', author: 'dani', isDraft: true, signals: ['no_review'] })
+  const r = { ...round, others: [changed, theirs, draft] }
+  const view = (filter: string) => ok(vmOf(r, { filter }))
+  expect(view('all').filters.map(f => [f.label, f.isActive])).toEqual([
+    ['All · 7', true],
+    ['Need my help · 3', false],
+    ['To fix · 1', false],
+    ['Mine · 3', false],
+  ])
+  const shape = (filter: string) => view(filter).repos.map(x => [x.name, x.prs.map(p => p.number)])
+  // a teammate's draft never asks for help
+  expect(shape('help')).toEqual([
+    ['web', [7, 8]],
+    ['api', [9]],
+    ['docs', []],
+    ['portal', []],
+  ])
+  expect(shape('fix')).toEqual([
+    ['portal', [219]],
+    ['api', []],
+    ['docs', []],
+    ['web', []],
+  ])
+  expect(shape('mine')[0]).toEqual(['portal', [219, 220, 221]])
+  expect(view('fix').repos[0]?.counts).toEqual({ comments: 2, changed: 0, blocked: 1, review: 0 })
+  // the tally stays about every open PR; an unknown filter falls back to all
+  expect(view('fix').counts).toEqual(view('all').counts)
+  expect(view('nope').filters.find(f => f.isActive)?.id).toBe('all')
+})
+
+test('picks outlive the filter: send carries the hidden ones and says how many', () => {
+  const vm = ok(vmOf(round, { filter: 'fix', selected: ['acme/portal#219', 'acme/web#7'] }))
+  expect([vm.send.count, vm.allKeys]).toEqual([2, ['acme/portal#219']])
+  expect(vm.allSelected).toBe(true)
+  expect(vm.send.summary).toBe('Going to the AI: 1 to fix, 1 to review. 1 of them is outside this filter.')
+  expect(ok(vmOf(round, { filter: 'help', selected: ['acme/portal#219', 'acme/portal#220'] }, 'pt-BR')).send.summary).toBe(
+    'Vai para a IA: 2 para corrigir, 0 para revisar. 2 deles estão fora deste filtro.',
+  )
+})
+
 test('the band shows the most urgent PR with its verb', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
@@ -248,4 +289,56 @@ test('a round in progress turns the send button into Checking; a partial pick sh
   expect((await ui.find({ key: 'box:acme/web' }))?.text).toBe('⊟')
   expect((await ui.find({ key: 'box:acme/portal' }))?.text).toBe('☐')
   await ui.unmount()
+})
+
+test('the filter row marks the active filter; the list ends with a way to add a repo', async ($, on) => {
+  const fills: unknown[] = []
+  // the round from here, the pane's own atoms from the real store, so a press shows
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
+  )
+  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    return { isFilled: true }
+  })
+  on('clock.now', clock)
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'filter:all' }))?.text).toBe('All · 6')
+  await ui.press({ key: 'filter:help' })
+  expect((await ui.find({ key: 'filter:help' }))?.text).toBe('Need my help · 3')
+  expect((await ui.find({ key: 'open:acme/web' }))?.text).toBe('2 PRs  ▾')
+  expect(await ui.find({ key: 'open:acme/portal' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: 'portal' }))?.text).toBe('portal')
+  expect((await ui.find({ key: 'tally:mine' }))?.text).toBe('3yours')
+  await ui.press({ key: 'filter:fix' })
+  expect((await ui.find({ key: 'open:acme/portal' }))?.text).toBe('1 PR  ▾')
+  expect(await ui.find({ key: 'open:acme/web' })).toBeUndefined()
+  expect((await ui.find({ key: 'add-repo' }))?.text).toBe('+ Add a repository')
+  expect((await ui.find({ type: 'Text', text: 'a local folder or owner/name' }))?.text).toBe('a local folder or owner/name')
+  await ui.press({ key: 'add-repo' })
+  expect(fills).toEqual(['/argos repos add '])
+  await ui.unmount()
+})
+
+test('a bare /argos repos add connects the session folder', async ($, on) => {
+  const runs: string[][] = []
+  // each add starts a round; a round already running makes it return at once
+  let reads = 0
+  let settle = () => {}
+  const ticked = new Promise<void>(r => (settle = r))
+  on('state.get', () => {
+    if (++reads === 2) settle()
+    return { value: { value: true, version: 1 } }
+  })
+  on('session.cwd', () => ({ value: 'D:/work/shop' }))
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: 'connected', stderr: '' } }
+  })
+  await $.command.run({ command: 'argos', args: 'repos add' })
+  expect(runs[0]?.slice(2)).toEqual(['add', 'D:/work/shop', '--lang', 'en'])
+  await $.command.run({ command: 'argos', args: 'repos add acme/web' })
+  expect(runs.find(a => a.includes('acme/web'))?.slice(2)).toEqual(['add', 'acme/web', '--lang', 'en'])
+  await ticked
 })

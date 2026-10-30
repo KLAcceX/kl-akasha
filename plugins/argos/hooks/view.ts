@@ -88,10 +88,23 @@ export function reason(error: string, lang: string) {
   return t(lang, 'err_generic')
 }
 
+// The list's filters, in button order. help: teammates' PRs that wait on me (a review
+// asked, or one with no review yet or changed since mine), drafts aside. fix: my PRs that
+// came back with something to correct. mine: every PR I opened.
+export const FILTERS = ['all', 'help', 'fix', 'mine'] as const
+export type Filter = (typeof FILTERS)[number]
+const MATCH: Record<Filter, (p: Item) => boolean> = {
+  all: () => true,
+  help: p => p.kind !== 'mine' && !p.isDraft && (p.kind === 'review' || has(p, 'no_review', 'changed')),
+  fix: p => p.kind === 'mine' && has(p, 'changes_requested', 'threads', 'unanswered', 'new_reviews', 'conflict', 'ci_failed'),
+  mine: p => p.kind === 'mine',
+}
+
 // The pane's own state: the PRs picked for the AI (repo#number), the repo opened to show
-// its PRs, and the last selection put in the prompt (`${round.at}|repo#n,repo#n`).
-export type Ui = { selected: string[]; open: string; sent: string }
-export const UI: Ui = { selected: [], open: '', sent: '' }
+// its PRs, the last selection put in the prompt (`${round.at}|repo#n,repo#n`), and the
+// filter on the list.
+export type Ui = { selected: string[]; open: string; sent: string; filter: Filter }
+export const UI: Ui = { selected: [], open: '', sent: '', filter: 'all' }
 
 // The request the send button puts in the prompt: my PRs to fix, the others to review.
 export function prompt(prs: Item[], lang: string) {
@@ -132,9 +145,13 @@ export function toViewModel(r: Round | null, o: Opts) {
 
   const names = [...new Set([...connected, ...all.map(p => p.repo)])]
   const picks = new Set(ui.selected)
+  const filter = FILTERS.includes(ui.filter) ? ui.filter : 'all'
+  const shown = MATCH[filter]
   const repos = names.map(repo => {
     // every open PR of the repo: the ones that need something first, then the rest
-    const prs = all.filter(p => p.repo === repo).sort((a, b) => Number(counts(b)) - Number(counts(a)) || byRank(a, b))
+    const items = all.filter(p => p.repo === repo).sort((a, b) => Number(counts(b)) - Number(counts(a)) || byRank(a, b))
+    // the row, its counts and its checkbox follow the filter
+    const prs = items.filter(shown)
     const sum = Object.fromEntries(COLUMNS.map(c => [c, prs.reduce((n, p) => n + cells(p)[c], 0)])) as Counts
     const chosen = prs.filter(p => picks.has(keyOf(p))).length
     return {
@@ -165,7 +182,7 @@ export function toViewModel(r: Round | null, o: Opts) {
         // its own request, for the action button on its line
         prompt: prompt([p], lang),
       })),
-      items: prs,
+      items,
     }
   })
   // Every connected repo stays on the list, with zeros when it has nothing: blocked first,
@@ -180,8 +197,10 @@ export function toViewModel(r: Round | null, o: Opts) {
   const others = all.filter(p => p.kind !== 'mine')
   const reviewed = others.filter(p => p.reviewed).length
   const tally = { open: all.length, mine: all.length - others.length, reviewed, unreviewed: others.length - reviewed }
+  // Send carries every pick, also one the filter hides; the summary says how many.
   const items = busy.flatMap(x => x.items).filter(p => picks.has(keyOf(p)))
   const fix = items.filter(p => p.kind === 'mine').length
+  const hidden = items.filter(p => !shown(p)).length
   const sendKey = `${r.at}|${items.map(keyOf).join(',')}`
   // What the send button checks before it fills the prompt, worst first.
   const block = !items.length ? t(lang, 'ui_send_none') : o.running ? t(lang, 'ui_send_wait') : null
@@ -192,6 +211,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     ...head,
     state: 'ok' as const,
     counts: tally,
+    filters: FILTERS.map(id => ({ id, label: `${t(lang, `f_${id}`)} · ${all.filter(MATCH[id]).length}`, isActive: id === filter })),
     repos: busy.map(({ items, ...x }) => x),
     allKeys,
     allSelected: allKeys.length > 0 && allKeys.every(k => picks.has(k)),
@@ -200,7 +220,9 @@ export function toViewModel(r: Round | null, o: Opts) {
       prompt: prompt(items, lang),
       key: sendKey,
       inPrompt: items.length > 0 && ui.sent === sendKey,
-      summary: items.length ? t(lang, 'ui_send_summary', fix, items.length - fix) : '',
+      summary: !items.length
+        ? ''
+        : t(lang, 'ui_send_summary', fix, items.length - fix) + (hidden ? ` ${t(lang, 'ui_send_hidden', hidden)}` : ''),
       block,
       warn,
     },
