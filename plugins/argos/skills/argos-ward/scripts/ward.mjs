@@ -63,6 +63,19 @@ export function mySignals(pr, me, now = Date.now()) {
 // Signals for a PR waiting for my review.
 export const reviewSignals = (pr, now = Date.now()) => (isLate(pr, now) ? ["atrasada > 1 dia"] : []);
 
+// Signals for a teammate's PR nobody asked me to review: where a proactive look helps.
+export function othersSignals(pr, now = Date.now()) {
+  if (pr.isDraft) return [];
+  const author = pr.author?.login;
+  const s = [];
+  if (pr.reviewDecision === "CHANGES_REQUESTED") s.push("mudanças pedidas");
+  if (["FAILURE", "ERROR"].includes(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state)) s.push("CI falhou");
+  if (pr.mergeable === "CONFLICTING") s.push("conflito");
+  const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, author));
+  if (!anyReview && isLate(pr, now)) s.push("sem review > 1 dia");
+  return s;
+}
+
 function search(q) {
   const out = execFileSync("gh", ["api", "graphql", "-f", `query=${QUERY}`, "-f", `q=${q}`], {
     encoding: "utf8",
@@ -83,8 +96,9 @@ const byAge = (a, b) => a.createdAt.localeCompare(b.createdAt);
 function row(p) {
   const draft = p.isDraft ? " _(draft)_" : "";
   const title = p.title.replace(/\|/g, "\\|");
-  const idle = p.kind === "review" ? "no prazo" : "aguardando review";
-  return `| ${age(p.createdAt)} | [${p.repo}#${p.number}](${p.url}) ${title}${draft} | ${p.signals.join(", ") || idle} |`;
+  const idle = { mine: "aguardando review", review: "no prazo", other: "em andamento" }[p.kind];
+  const by = p.kind === "other" ? ` · @${p.author}` : "";
+  return `| ${age(p.createdAt)} | [${p.repo}#${p.number}](${p.url}) ${title}${draft}${by} | ${p.signals.join(", ") || idle} |`;
 }
 
 function main(args) {
@@ -101,14 +115,23 @@ function main(args) {
     isDraft: pr.isDraft,
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
-    signals: kind === "mine" ? mySignals(pr, me) : reviewSignals(pr),
+    author: pr.author?.login ?? "",
+    signals: { mine: () => mySignals(pr, me), review: () => reviewSignals(pr), other: () => othersSignals(pr) }[kind](),
   });
   const mine = search(`is:pr is:open archived:false author:${me} ${extra}`).map(shape("mine")).sort(byAge);
   const toReview = search(`is:pr is:open archived:false review-requested:${me} ${extra}`)
     .map(shape("review"))
     .sort(byAge);
+  // Teammates' PRs only make sense inside named repos (repo: qualifiers), never all of GitHub.
+  const asked = new Set(toReview.map((p) => p.url));
+  const others = /\brepo:/.test(extra)
+    ? search(`is:pr is:open archived:false -author:${me} ${extra}`)
+        .map(shape("other"))
+        .filter((p) => !asked.has(p.url))
+        .sort(byAge)
+    : [];
 
-  if (json) return console.log(JSON.stringify({ me, mine, toReview }, null, 2));
+  if (json) return console.log(JSON.stringify({ me, mine, toReview, others }, null, 2));
 
   const head = "| Idade | PR | Sinais |\n|---|---|---|";
   const needs = mine.filter((p) => p.signals.length).length;
@@ -116,6 +139,9 @@ function main(args) {
   console.log(mine.length ? [head, ...mine.map(row)].join("\n") : "_Nenhum._");
   console.log(`\n## Esperando minha revisão: ${toReview.length}\n`);
   console.log(toReview.length ? [head, ...toReview.map(row)].join("\n") : "_Nenhum._");
+  if (!/\brepo:/.test(extra)) return;
+  console.log(`\n## Dos outros: ${others.length}\n`);
+  console.log(others.length ? [head, ...others.map(row)].join("\n") : "_Nenhum._");
 }
 
 function selfTest() {
@@ -142,6 +168,15 @@ function selfTest() {
   assert.deepEqual(mySignals(pr({ latestReviews: reviewed }), me, day3), []);
   assert.deepEqual(reviewSignals(pr({}), day1), []);
   assert.deepEqual(reviewSignals(pr({}), day3), ["atrasada > 1 dia"]);
+  // teammates' PRs: the author's own review never counts, drafts stay quiet
+  const theirs = (over) => pr({ author: user("bia"), ...over });
+  assert.deepEqual(othersSignals(theirs({}), day1), []);
+  assert.deepEqual(othersSignals(theirs({}), day3), ["sem review > 1 dia"]);
+  assert.deepEqual(othersSignals(theirs({ isDraft: true }), day3), []);
+  const byAuthor = { nodes: [{ state: "COMMENTED", submittedAt: "2026-10-01T01:00:00Z", author: user("bia") }] };
+  assert.deepEqual(othersSignals(theirs({ latestReviews: byAuthor }), day3), ["sem review > 1 dia"]);
+  assert.deepEqual(othersSignals(theirs({ latestReviews: reviewed }), day3), []);
+  assert.deepEqual(othersSignals(theirs({ reviewDecision: "CHANGES_REQUESTED", latestReviews: reviewed }), day3), ["mudanças pedidas"]);
 
   assert.deepEqual(mySignals(pr({}), me, day1), []);
   assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED" }), me, day1), ["aprovado: pronto pra merge"]);

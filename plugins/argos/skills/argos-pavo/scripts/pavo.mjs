@@ -7,6 +7,8 @@
 //   node pavo.mjs org:acme --account me-at-work
 //   node pavo.mjs --self-test
 // Every round also writes last-round.json next to the state (the Argos mod reads it).
+// Connected repos: repos.json next to the state ([{ path, repo }], written by the mod's
+// /argos repos commands) adds repo: qualifiers, which also turns on teammates' PRs.
 // Env: ARGOS_PAVO_STATE overrides the state file path.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -20,8 +22,9 @@ const WARD = join(here, "..", "..", "argos-ward", "scripts", "ward.mjs");
 const STATE = process.env.ARGOS_PAVO_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "pavo-state.json");
 
 // State = { [url]: "signal|signal" } for my PRs that need action, plus { [url]: "review|..." } for my review queue.
-export function snapshot({ mine, toReview }) {
+export function snapshot({ mine, toReview, others = [] }) {
   const s = {};
+  for (const p of others) if (p.signals.length) s[p.url] = ["other", ...p.signals].join("|");
   for (const p of mine) if (p.signals.length) s[p.url] = [...p.signals].sort().join("|");
   for (const p of toReview) s[p.url] = ["review", ...p.signals].join("|");
   return s;
@@ -30,12 +33,17 @@ export function snapshot({ mine, toReview }) {
 // New = a PR that now needs action and did not, or whose signals changed.
 export function news(prev, ward) {
   const cur = snapshot(ward);
-  const all = [...ward.mine, ...ward.toReview];
+  const all = [...ward.mine, ...ward.toReview, ...(ward.others ?? [])];
   return all.filter((p) => cur[p.url] && cur[p.url] !== prev[p.url]);
 }
 
 // A review request reads as such, plus its lateness when late.
-export const describe = (p) => (p.kind === "review" ? ["pede sua revisão", ...p.signals].join(", ") : p.signals.join(", "));
+export const describe = (p) =>
+  p.kind === "review" ? ["pede sua revisão", ...p.signals].join(", ") : p.kind === "other" ? [`@${p.author}`, ...p.signals].join(", ") : p.signals.join(", ");
+
+// repo: qualifiers for the connected repos, unless the caller already scoped the search.
+export const repoQualifiers = (list, qualifiers) =>
+  qualifiers.some((q) => q.startsWith("repo:")) ? [] : list.map((r) => `repo:${r.repo}`);
 
 export function notification(items) {
   const parts = items.map((p) => `${p.repo.split("/")[1]}#${p.number} ${describe(p)}`);
@@ -56,7 +64,12 @@ function main(args) {
   const json = args.includes("--json");
   const i = args.indexOf("--account");
   const account = i >= 0 ? args[i + 1] : undefined;
-  const qualifiers = args.filter((a, j) => a !== "--json" && j !== i && j !== i + 1);
+  let qualifiers = args.filter((a, j) => a !== "--json" && j !== i && j !== i + 1);
+  let repos = [];
+  try {
+    repos = JSON.parse(readFileSync(join(dirname(STATE), "repos.json"), "utf8"));
+  } catch {}
+  qualifiers = [...qualifiers, ...repoQualifiers(repos, qualifiers)];
 
   let ward;
   try {
@@ -82,7 +95,15 @@ function main(args) {
   } catch {} // first round: everything that needs action is new
   const items = news(prev, ward).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   writeFileSync(STATE, JSON.stringify(snapshot(ward), null, 2));
-  const round = { at, me: ward.me, pending: pending(ward), news: items, notify: items.length ? notification(items) : null };
+  const round = {
+    at,
+    me: ward.me,
+    repos: repos.map((r) => r.repo),
+    pending: pending(ward),
+    others: ward.others ?? [],
+    news: items,
+    notify: items.length ? notification(items) : null,
+  };
   writeFileSync(ROUND, JSON.stringify(round, null, 2));
 
   if (json) return console.log(JSON.stringify(round));
@@ -124,6 +145,15 @@ function selfTest() {
   assert.equal(describe(late.toReview[0]), "pede sua revisão, atrasada > 1 dia");
   // pending lists everything needing action, oldest first, idle PRs left out
   assert.deepEqual(pending(ward).map((p) => p.url), ["a", "r"]);
+  // teammates' PRs: news only when they start needing a look, never in the band's pending count
+  const other = (url, signals) => ({ kind: "other", url, repo: "acme/api", number: 3, title: "t", author: "bia", signals, createdAt: "2026-10-03" });
+  const team = { ...ward, others: [other("o1", []), other("o2", ["sem review > 1 dia"])] };
+  assert.deepEqual(news(snapshot(ward), team).map((p) => p.url), ["o2"]);
+  assert.deepEqual(pending(team).map((p) => p.url), ["a", "r"]);
+  assert.equal(describe(team.others[1]), "@bia, sem review > 1 dia");
+  // connected repos scope the search unless the caller already did
+  assert.deepEqual(repoQualifiers([{ repo: "acme/api" }, { repo: "acme/web" }], ["--x"]), ["repo:acme/api", "repo:acme/web"]);
+  assert.deepEqual(repoQualifiers([{ repo: "acme/api" }], ["repo:acme/web"]), []);
   console.log("self-test ok");
 }
 

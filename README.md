@@ -64,6 +64,8 @@ Hera mandou Argos vigiar Io. Ele tinha cem olhos e nunca fechava todos ao mesmo 
 
 **Os olhos dentro do Claude.** O plugin traz um mod que roda a vigília num timer próprio, sem gastar tokens. Ele mostra uma faixa acima do prompt (`👁 Argos: 1 PR(s) pedem ação · portal#219 conflito`), avisa por toast quando aparece novidade, e o comando `/argos` abre a lista completa num painel. A conta do `gh`, o filtro (ex.: `org:minha-empresa`) e o intervalo se configuram nas opções do plugin. Com várias sessões abertas, só uma roda a vigília em cada intervalo.
 
+**Repositórios conectados.** O comando `/argos repos add <pasta>` lê o `git remote` da pasta (inclusive apelidos de SSH) e conecta o repositório. Depois disso, a vigília olha só os repositórios conectados e passa a incluir **todos os PRs abertos dos colegas**, pedindo ou não a sua revisão. O painel agrupa os PRs por repositório e tem três visões ("Pra corrigir", "Dos outros", "Tudo") e um filtro por autor. Para ver a lista, use `/argos repos`. Para tirar um repositório, use `/argos repos remove <owner/repo>`.
+
 **A criticidade é adaptável.** Primeiro vale a sua régua pessoal (`~/.claude/kl-akasha/criticality.md`, uma seção por repositório). Se não houver, vale a régua padrão do plugin (o Priority do Jira). Se nada for encontrado, a skill pergunta. Labels como `hotfix` e `security` e áreas sensíveis do código só sobem o nível.
 
 ---
