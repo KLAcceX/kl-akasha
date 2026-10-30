@@ -24,24 +24,20 @@ export type Round = {
   needsRepos?: boolean
 }
 
-// The queue tabs: what is for me, or my teammates' PRs.
-export type View = 'you' | 'team'
-export type Sort = 'rank' | 'oldest' | 'repo'
-
 declare module 'claude-code' {
   interface PluginState {
     argos: {
       round: Round | null
       isHidden: boolean
       isRunning: boolean
-      view: View
-      author: string
-      repo: string
-      sort: Sort
-      signal: string
+      // the open row's repo#number; '' = the first row, '-' = none
       expanded: string
+      teamOpen: boolean
+      youLimit: number
+      teamLimit: number
+      // `${round.at}|${repo#number}` of the last request put in the prompt
+      sent: string
       copied: string
-      details: boolean
     }
   }
 }

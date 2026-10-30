@@ -1,16 +1,16 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one argos-pavo round over
 // the connected repos. The band above the prompt shows the most urgent PR; /argos opens
-// the pane: a portrait at the top (do this now, three numbers, the age of open PRs,
-// signal chips) and a queue below with tabs, selects and per-PR actions.
-// Words come from the skills' i18n.mjs, in the plugin's `language` option.
+// the pane: one work list in two sections ("For you" open, "Team" folded), the first
+// row expanded as the next action, and the age of open PRs in the footer.
+// Words and numbers come from toViewModel (view.ts), in the plugin's `language` option.
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
-import { label, t } from '../skills/argos-ward/scripts/i18n.mjs'
-import { ALERT, ageDots, ageHeight, ageText, base, buckets, days, has } from './chart'
-import type { Item, Round, Sort, View } from '../types'
+import { t } from '../skills/argos-ward/scripts/i18n.mjs'
+import { STEP, UI, toViewModel } from './view'
+import type { Round } from '../types'
 
-export { ageDots, ageHeight, ageText, buckets, days } from './chart'
+export { ageShort, ageStrip, byRank, rank, reason, toViewModel, verb } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
@@ -19,107 +19,24 @@ const RUNNING = { plugin: 'argos', key: 'isRunning' } as const
 const round = atom(ROUND, null)
 const isHidden = atom(HIDDEN, false)
 const isRunning = atom(RUNNING, false)
-const view = atom({ plugin: 'argos', key: 'view' } as const, 'you' as View)
-const author = atom({ plugin: 'argos', key: 'author' } as const, '')
-const repoFilter = atom({ plugin: 'argos', key: 'repo' } as const, '')
-const sort = atom({ plugin: 'argos', key: 'sort' } as const, 'rank' as Sort)
-const signal = atom({ plugin: 'argos', key: 'signal' } as const, '')
-const expanded = atom({ plugin: 'argos', key: 'expanded' } as const, '')
-const copied = atom({ plugin: 'argos', key: 'copied' } as const, '')
-const details = atom({ plugin: 'argos', key: 'details' } as const, false)
+const expanded = atom({ plugin: 'argos', key: 'expanded' } as const, UI.expanded)
+const teamOpen = atom({ plugin: 'argos', key: 'teamOpen' } as const, UI.teamOpen)
+const youLimit = atom({ plugin: 'argos', key: 'youLimit' } as const, UI.youLimit)
+const teamLimit = atom({ plugin: 'argos', key: 'teamLimit' } as const, UI.teamLimit)
+const sent = atom({ plugin: 'argos', key: 'sent' } as const, UI.sent)
+const copied = atom({ plugin: 'argos', key: 'copied' } as const, UI.copied)
 
-// The KL · Akasha mark (brand/kl/final). The icon is the face centred in a full
-// L-coloured frame; the loading one travels from the whole mark to the face and back.
+// The KL · Akasha mark (brand/kl/final): the face centred in a full L-coloured frame,
+// on its own dark ground so it reads in both themes.
 const GLYPH =
   '<path fill="#7E5CC0" d="M104 96L160 40A56 56 0 0 1 160 152Z"/><path fill="#A98BE0" d="M160 40L104 96L160 152L122 96Z"/>' +
   '<path fill="#F3EEFB" d="M172 68L178 90L200 96L178 102L172 124L166 102L144 96L166 90Z"/>'
-const MARK =
-  '<g transform="translate(-6 0)"><path fill="#51408A" d="M40 40H96V136Q96 160 120 160H200A28 28 0 0 1 200 216H40Z"/>' +
-  `${GLYPH}</g>`
 const ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="56" fill="#1E1430"/>' +
   '<rect x="22" y="22" width="212" height="212" rx="40" fill="none" stroke="#51408A" stroke-width="18"/>' +
   `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
-const LOADING =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><animate attributeName="viewBox" values="0 0 256 256;66 20 156 156;0 0 256 256" dur="1.6s" repeatCount="indefinite" calcMode="spline" keySplines="0.65 0 0.35 1;0.65 0 0.35 1"/>' +
-  `<rect x="-200" y="-200" width="656" height="656" rx="48" fill="#1E1430"/>${MARK}</svg>`
-
-// What to do first: merge, then a late review that blocks a teammate, then unblock mine,
-// answer, review on time, ask for review; teammates' PRs after, drafts last.
-export function rank(p: Item): number {
-  if (p.kind === 'mine') {
-    if (has(p, 'ready')) return 1
-    if (has(p, 'conflict', 'ci_failed', 'changes_requested')) return 3
-    if (has(p, 'threads', 'unanswered', 'new_reviews')) return 4
-    if (has(p, 'no_review')) return 6
-    return 9
-  }
-  if (p.kind === 'review') return has(p, 'late') ? 2 : 5
-  if (p.isDraft) return 10
-  if (has(p, 'no_review')) return 7
-  return p.signals.length ? 8 : 9
-}
-export const byRank = (a: Item, b: Item) => rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt)
-export const byAge = (a: Item, b: Item) => a.createdAt.localeCompare(b.createdAt)
-
-// The verb for a PR: what the user does about it, from its most urgent signal.
-const ACTION_ORDER = ['ready', 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews', 'no_review']
-export function action(p: Item, lang: string, now: number) {
-  const d = days(p.createdAt, now)
-  if (p.kind === 'review') return has(p, 'late') ? t(lang, 'act_review_late', d) : t(lang, 'act_review')
-  if (p.kind === 'other') return has(p, 'no_review') ? t(lang, 'act_team_look', d) : p.signals.map(c => label(lang, c)).join(', ') || t(lang, 'idle_other')
-  const code = ACTION_ORDER.map(k => p.signals.find(s => base(s) === k)).find(Boolean)
-  if (!code) return t(lang, 'idle_mine')
-  const [k, n] = code.split(':')
-  return n === undefined ? t(lang, `act_${k}`) : t(lang, `act_${k}`, Number(n))
-}
-
-// The portrait's numbers, all from one place: the pane, the chart and the band agree.
-export function summary(r: Round | null, now: number, minutes = 60) {
-  const pending = r?.pending ?? []
-  const mine = r?.mine ?? pending.filter(p => p.kind === 'mine')
-  const reviews = pending.filter(p => p.kind === 'review')
-  const team = (r?.others ?? []).filter(p => !p.isDraft)
-  const teamStuck = team.filter(p => p.signals.length)
-  const seen = new Set<string>()
-  const open = [...mine, ...reviews, ...team].filter(p => !seen.has(p.url) && Boolean(seen.add(p.url)))
-  const counts = new Map<string, number>()
-  for (const p of [...pending, ...teamStuck]) for (const c of new Set(p.signals.map(base))) counts.set(c, (counts.get(c) ?? 0) + 1)
-  const okAt = r?.okAt ?? (r?.error ? null : r?.at)
-  const ageH = okAt ? (now - Date.parse(okAt)) / 36e5 : 0
-  return {
-    you: pending.length,
-    mine: pending.filter(p => p.kind === 'mine').length,
-    reviews: reviews.length,
-    teamStuck: teamStuck.length,
-    team: team.length,
-    oldest: [...open].sort(byAge)[0] ?? null,
-    buckets: buckets(open, now),
-    bySignal: [...counts].sort((a, b) => b[1] - a[1]),
-    okAt,
-    isStale: Boolean(okAt) && ageH > (2 * minutes) / 60,
-    ageH: Math.floor(ageH),
-  }
-}
-
-// What a queue tab shows; author, repo and signal narrow it.
-export function visible(r: Round | null, v: View, who = '', repo = '', sig = '') {
-  const list = v === 'team' ? (r?.others ?? []) : (r?.pending ?? [])
-  const me = r?.me ?? ''
-  return list.filter(p => (!who || (p.author || me) === who) && (!repo || p.repo === repo) && (!sig || p.signals.some(s => base(s) === sig)))
-}
-
-// The same items in repo groups, connected repos first even when empty.
-export function grouped(items: Item[], repos: string[]) {
-  const names = [...new Set([...repos, ...items.map(p => p.repo)])]
-  return names.map(repo => ({ repo, items: items.filter(p => p.repo === repo) }))
-}
-
-const hhmm = (ms: number) => {
-  const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-const shortRepo = (repo: string) => repo.split('/')[1] ?? repo
+const PURPLE = '#7E5CC0'
+const RED = '#E5384A'
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -127,13 +44,6 @@ const config = (options: PluginOptions) => ({
   qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
   lang: String(options.language ?? 'en'),
 })
-
-// A known failure in words; the raw text stays behind "Details".
-export function errorText(error: string, lang: string) {
-  if (/gh auth|not logged/i.test(error)) return t(lang, 'ui_err_gh_auth')
-  if (/timed out|ETIMEDOUT|timeoutMs/i.test(error)) return t(lang, 'ui_err_timeout')
-  return t(lang, 'ui_err_generic')
-}
 
 async function roundFile($: any) {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
@@ -213,34 +123,26 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const r = await read($, round)
     const running = await read($, isRunning)
-    const now = await $.clock.now()
-    const list = [...(r?.pending ?? [])].sort(byRank)
-    const late = (r?.others ?? []).filter(p => !p.isDraft && p.signals.length).length
-    if (e.props.hasSurvey || (await read($, isHidden)) || (!running && !list.length && !late && !r?.error)) return next(e)
+    const vm = toViewModel(await read($, round), { now: await $.clock.now(), lang, minutes, running })
+    const band = vm.state === 'ok' ? vm.band : null
+    const stuck = vm.state === 'ok' ? (vm.team?.stuck ?? 0) : 0
+    if (e.props.hasSurvey || (await read($, isHidden)) || (!running && !band && !stuck && !vm.status)) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
-    const mark =
-      e.surface !== 'terminal' ? (
-        <ui.Svg source={running ? LOADING : ICON} alt="KL · Akasha" width={18} height={18} isInteractive={running} />
-      ) : (
-        <Text color="magenta">◆ </Text>
-      )
-    const first = list[0]
     return (
       <Box>
-        {mark}
+        {e.surface !== 'terminal' && <ui.Svg source={ICON} alt="KL · Akasha" width={16} height={16} />}
         <Text> Argos </Text>
-        {running && <Text dimColor>{t(lang, 'ui_running')} </Text>}
-        {!running && r?.error && <Text>{t(lang, 'ui_failed')} · </Text>}
-        {!running && first && (
+        {running && <Text dimColor>{t(lang, 'ui_checking')} </Text>}
+        {!running && vm.status && <Text>{t(lang, 'ui_failed')} · </Text>}
+        {!running && band && (
           <Text>
-            {t(lang, 'ui_needs', list.length)} · {action(first, lang, now)}: {shortRepo(first.repo)}#{first.number}{' '}
+            {t(lang, 'ui_needs', band.count)} · {band.verb}: {band.ref}{' '}
           </Text>
         )}
-        {!running && late > 0 && <Text dimColor>· {t(lang, 'ui_others', late)} </Text>}
+        {!running && stuck > 0 && <Text dimColor>· {t(lang, 'ui_others', stuck)} </Text>}
         <Button key="open" onPress={() => void load($).then(() => $.ui.open({ id: PANE, title }))}>
           {t(lang, 'ui_see')}
         </Button>
@@ -253,309 +155,207 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Button, Text, Select, Link, Code } = ui
+    const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
-    const r = await read($, round)
     const running = await read($, isRunning)
-    const now = await $.clock.now()
+    const vm = toViewModel(await read($, round), {
+      now: await $.clock.now(),
+      lang,
+      minutes,
+      running,
+      ui: {
+        expanded: await read($, expanded),
+        teamOpen: await read($, teamOpen),
+        youLimit: await read($, youLimit),
+        teamLimit: await read($, teamLimit),
+        sent: await read($, sent),
+        copied: await read($, copied),
+      },
+    })
+    // tick returns at once while a round runs, so pressing twice does nothing
+    const checkNow = () => void tick($, options, true)
 
-    // States with nothing to portray yet
-    if (!r && running)
-      return (
-        <Box flexDirection="column" alignItems="center" gap="sm" padding="sm">
-          {hasSvg && <ui.Svg source={LOADING} alt="KL · Akasha" width={56} height={56} isInteractive />}
-          <Text dimColor>{t(lang, 'ui_first_vigil')}</Text>
-        </Box>
-      )
-    const refresh = () => void tick($, options, true)
-    if (!r)
-      return (
-        <Box flexDirection="column" gap="sm" padding="sm">
-          <Text>{t(lang, 'ui_never')}</Text>
-          <Button key="first" variant="primary" onPress={refresh}>
-            {t(lang, 'ui_refresh')}
+    const header = (
+      <Box flexDirection="row" alignItems="center" gap="sm">
+        {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={16} height={16} />}
+        <Text weight="semibold">Argos</Text>
+        <Text size="caption" dimColor wrap="truncate">
+          {vm.seen}
+        </Text>
+        <Box flexGrow={1} />
+        <Button key="check" plain={true} hotkey="r" dimColor={running} onPress={checkNow}>
+          {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
+        </Button>
+      </Box>
+    )
+    const status = vm.status && (
+      <Box borderStyle="round" borderColor={RED} paddingX="sm" flexDirection="column" gap="xs">
+        <Text>{vm.status}</Text>
+        <Box flexDirection="row">
+          <Button key="retry" plain={true} onPress={checkNow}>
+            {vm.isLate ? t(lang, 'ui_check') : t(lang, 'ui_retry')}
           </Button>
         </Box>
-      )
-    const fillPrompt = async (ask: string) => {
-      const { text } = await $.prompt.read()
-      await $.prompt.fill(text.trim() ? { text: `\n${ask}`, mode: 'append' } : { text: ask, mode: 'replace' })
-    }
-    if (!(r.repos ?? []).length || r.needsRepos)
-      return (
-        <Box flexDirection="column" gap="sm" padding="sm">
-          <Text weight="bold">{t(lang, 'ui_no_repos_title')}</Text>
+      </Box>
+    )
+    const page = (...body: any[]) => (
+      <Box flexDirection="column" gap="md" padding="md">
+        {header}
+        {status}
+        {body}
+      </Box>
+    )
+
+    if (vm.state === 'loading') return page(<Text key="b">{t(lang, 'ui_loading')}</Text>)
+    if (vm.state === 'never') return page(<Text key="b">{t(lang, 'ui_never')}</Text>)
+    if (vm.state === 'noData') return page(<Text key="b">{t(lang, 'ui_no_data')}</Text>)
+    if (vm.state === 'noPRs') return page(<Text key="b">{t(lang, 'ui_no_prs', vm.repos)}</Text>)
+    if (vm.state === 'noRepos')
+      return page(
+        <Box key="b" flexDirection="column" gap="sm">
+          <Text size="heading" weight="semibold">
+            {t(lang, 'ui_no_repos_title')}
+          </Text>
           <Text>{t(lang, 'ui_no_repos_body')}</Text>
           <Code source="/argos repos add <folder>" />
-          <Button key="connect" variant="primary" onPress={() => void fillPrompt('/argos repos add ')}>
-            {t(lang, 'ui_connect')}
-          </Button>
-        </Box>
+          <Box flexDirection="row">
+            <Button
+              key="connect"
+              variant="primary"
+              onPress={async () => {
+                const { text } = await $.prompt.read()
+                if (!text.includes('/argos repos add')) await $.prompt.fill({ text: '/argos repos add ', mode: 'replace' })
+              }}
+            >
+              {t(lang, 'ui_connect')}
+            </Button>
+          </Box>
+        </Box>,
       )
 
-    const v: View = (await read($, view)) === 'team' ? 'team' : 'you'
-    const who = await read($, author)
-    const repo = await read($, repoFilter)
-    const storedOrder = await read($, sort)
-    const order: Sort = storedOrder === 'oldest' || storedOrder === 'repo' ? storedOrder : 'rank'
-    const sig = await read($, signal)
-    const open = await read($, expanded)
-    const copiedUrl = await read($, copied)
-    const showDetails = await read($, details)
-    const s = summary(r, now, minutes)
-    const me = r.me ?? ''
-    const hasFilter = Boolean(who || repo || sig)
-    const hero = [...(r.pending ?? [])].sort(byRank)[0] ?? [...(r.others ?? [])].filter(p => !p.isDraft && has(p, 'no_review')).sort(byRank)[0]
-
-    const status = running
-      ? t(lang, 'ui_running')
-      : s.isStale
-        ? t(lang, 'ui_stale', s.ageH)
-        : s.okAt
-          ? t(lang, 'ui_status', hhmm(Date.parse(s.okAt)), hhmm(Date.parse(s.okAt) + minutes * 6e4))
-          : ''
-
-    const copy = (p: Item) => async (press: any) => {
-      const res = await $.ui.copy({ text: p.url, surface: press.surface })
-      await update($, copied, () => (res.isCopied ? p.url : `fail:${p.url}`))
+    type Row = (typeof vm.you.rows)[number]
+    // Puts the request in the prompt without sending it: appended on a new line when
+    // there is a draft, never twice. The label says "In prompt ✓" until the next round.
+    const putInPrompt = async (row: Row) => {
+      if (!row.ai) return
+      const { text } = await $.prompt.read()
+      if (!text.includes(row.ai.prompt))
+        await $.prompt.fill(text.trim() ? { text: `\n${row.ai.prompt}`, mode: 'append' } : { text: row.ai.prompt, mode: 'replace' })
+      await update($, sent, () => `${vm.at}|${row.key}`)
+    }
+    const copy = (row: Row) => async (press: any) => {
+      const res = await $.ui.copy({ text: row.url, surface: press.surface })
+      await update($, copied, () => (res.isCopied ? row.key : `fail:${row.key}`))
       $.clock.after(2_000, () => void update($, copied, () => ''))
     }
-    const copyLabel = (p: Item) =>
-      copiedUrl === p.url ? t(lang, 'ui_copied') : copiedUrl === `fail:${p.url}` ? t(lang, 'ui_copy_failed') : t(lang, 'ui_copy')
-    const aiButton = (p: Item, primary = false) => (
-      <Button
-        key={`ai:${p.url}`}
-        variant={primary ? 'primary' : undefined}
-        onPress={() =>
-          void fillPrompt(p.kind === 'mine' ? t(lang, 'prompt_ward', p.url, action(p, lang, now)) : t(lang, 'prompt_panoptes', p.url))
-        }
-      >
-        {p.kind === 'mine' ? t(lang, 'ui_ward') : t(lang, 'ui_panoptes')}
-      </Button>
-    )
-    const kpi = (key: string, name: string, value: string | number, sub?: any) => (
-      <Box key={key} flexDirection="column">
+
+    // The active row: the one with a border, a heading and the only primary button.
+    const active = (row: Row) => (
+      <Box key={row.key} flexDirection="column" gap="sm" padding="md" borderStyle="round" borderColor={PURPLE}>
+        <Text size="heading" weight="semibold">
+          {row.verb}
+        </Text>
+        <Text>{row.fullTitle}</Text>
         <Text size="caption" dimColor>
-          {name}
+          {row.metaLong}
         </Text>
-        <Text size="title" weight="bold" tabular>
-          {String(value)}
-        </Text>
-        {sub}
-      </Box>
-    )
-    const signals = (p: Item) => p.signals.map(c => `${ALERT.has(base(c)) ? '▲ ' : ''}${label(lang, c)}`).join(' · ')
-    const row = (p: Item) => (
-      <Box key={p.url} flexDirection="column" gap="xs">
-        <Box flexDirection="row" gap="xs" alignItems="center">
-          <Text tabular dimColor>
-            {days(p.createdAt, now)}d
-          </Text>
-          <Link href={p.url} label={`#${p.number} ${p.title}`} />
-          <Box flexGrow={1} />
-          <Button key={`more:${p.url}`} plain={true} onPress={() => void update($, expanded, cur => (cur === p.url ? '' : p.url))}>
-            {open === p.url ? '−' : '⋯'}
+        {!hasSvg && <Text dimColor>{row.url}</Text>}
+        <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
+          {row.ai && (
+            <Button key={`ai:${row.key}`} variant="primary" onPress={() => void putInPrompt(row)}>
+              {row.inPrompt ? t(lang, 'ui_in_prompt') : row.ai.label}
+            </Button>
+          )}
+          <Link href={row.url} label={t(lang, 'ui_open_github')} />
+          <Button key={`copy:${row.key}`} plain={true} onPress={copy(row)}>
+            {row.copyLabel}
+          </Button>
+          <Button key={`close:${row.key}`} plain={true} dimColor={true} onPress={() => void update($, expanded, () => '-')}>
+            {t(lang, 'ui_close')}
           </Button>
         </Box>
-        <Text size="caption" dimColor wrap="truncate">
-          {order === 'repo' ? '' : `${shortRepo(p.repo)} · `}
-          {p.kind !== 'mine' ? `@${p.author || '?'} · ` : ''}
-          {p.isDraft ? `${t(lang, 'ui_draft')} · ` : ''}
-          {signals(p) || (p.kind === 'other' ? t(lang, 'idle_other') : '')}
-        </Text>
-        {open === p.url && (
-          <Box flexDirection="column" gap="xs" marginLeft="md">
-            <Text weight="bold">{action(p, lang, now)}</Text>
-            {!hasSvg && <Text dimColor>{p.url}</Text>}
-            <Box flexDirection="row" gap="sm">
-              {aiButton(p)}
-              <Button key={`copy:${p.url}`} onPress={copy(p)}>
-                {copyLabel(p)}
-              </Button>
-            </Box>
-          </Box>
-        )}
       </Box>
     )
-
-    const pool = visible(r, v, who, repo, sig)
-    const items = [...pool].sort(order === 'oldest' ? byAge : byRank)
-    const all = [...(r.pending ?? []), ...(r.others ?? [])]
-    const authors = [...new Set(all.map(p => p.author || me).filter(Boolean))].sort()
-    const count = (f: (p: Item) => boolean) => all.filter(f).length
-    const authorOptions = [
-      { value: '', label: t(lang, 'opt_everyone') },
-      ...authors.map(a => ({ value: a, label: `${a === me ? t(lang, 'opt_me', a) : `@${a}`} (${count(p => (p.author || me) === a)})` })),
-    ]
-    const repoOptions = [
-      { value: '', label: t(lang, 'opt_all_repos') },
-      ...(r.repos ?? []).map(n => ({ value: n, label: `${n} (${count(p => p.repo === n)})` })),
-    ]
-    const orderOptions = [
-      { value: 'rank', label: t(lang, 'opt_rank') },
-      { value: 'oldest', label: t(lang, 'opt_oldest') },
-      { value: 'repo', label: t(lang, 'opt_by_repo') },
-    ]
-    const tab = (id: View, word: string) =>
-      v === id ? (
-        <Button key={`tab:${id}`} onPress={() => void update($, view, () => id)}>
-          {word}
-        </Button>
+    const line = (row: Row) =>
+      row.isActive ? (
+        active(row)
       ) : (
-        <Button key={`tab:${id}`} plain={true} dimColor={true} onPress={() => void update($, view, () => id)}>
-          {word}
-        </Button>
-      )
-    const ageLabels = t(lang, 'age_buckets') as unknown as string[]
-
-    return (
-      <Box flexDirection="column" gap="md" padding="sm">
-        {/* 1 · Header */}
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          {hasSvg ? (
-            <ui.Svg source={running ? LOADING : ICON} alt="KL · Akasha" width={24} height={24} isInteractive={running} />
-          ) : (
-            <Text color="magenta">◆</Text>
-          )}
-          <Text weight="bold" size="heading">
-            Argos
+        <Box key={row.key} flexDirection="row" alignItems="center" gap="sm">
+          <Text mono tabular dimColor>
+            {row.age}
           </Text>
-          <Text dimColor tabular wrap="truncate">
-            {status}
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text wrap="truncate">{row.title}</Text>
+            <Text size="caption" dimColor wrap="truncate">
+              {row.meta}
+            </Text>
+          </Box>
+          <Button key={`open:${row.key}`} plain={true} onPress={() => void update($, expanded, () => row.key)}>
+            {t(lang, 'ui_actions')}
+          </Button>
+        </Box>
+      )
+    const more = (id: string, n: number, onPress: () => void) =>
+      n > 0 && (
+        <Box key={`more:${id}`} flexDirection="row">
+          <Button plain={true} onPress={onPress}>
+            {t(lang, 'ui_show_more', n)}
+          </Button>
+        </Box>
+      )
+    const { you, team, age } = vm
+
+    return page(
+      <Box key="you" flexDirection="column" gap="sm">
+        <Box flexDirection="row" gap="sm">
+          <Text size="caption" weight="semibold">
+            {t(lang, 'ui_for_you', you.count)}
           </Text>
           <Box flexGrow={1} />
-          <Button key="refresh" hotkey="r" plain={true} dimColor={running} onPress={refresh}>
-            {running ? t(lang, 'ui_running') : t(lang, 'ui_refresh')}
-          </Button>
+          <Text size="caption" dimColor>
+            {t(lang, 'ui_of_mine', you.mineOpen)}
+          </Text>
         </Box>
-
-        {/* Failed round: say so, keep the last good data */}
-        {r.error && (
+        {you.count === 0 ? (
           <Box flexDirection="column" gap="xs">
-            <Text weight="bold">
-              {s.okAt ? t(lang, 'ui_err_title', hhmm(Date.parse(r.at)), hhmm(Date.parse(s.okAt))) : errorText(r.error, lang)}
+            <Text size="heading" weight="semibold">
+              {t(lang, 'ui_all_clear')}
             </Text>
-            {s.okAt && <Text dimColor>{errorText(r.error, lang)}</Text>}
-            <Box flexDirection="row" gap="sm">
-              <Button key="retry" onPress={refresh}>
-                {t(lang, 'ui_retry')}
-              </Button>
-              <Button key="details" plain={true} onPress={() => void update($, details, d => !d)}>
-                {t(lang, 'ui_details')}
-              </Button>
-            </Box>
-            {showDetails && <Code source={r.error} />}
-          </Box>
-        )}
-
-        {/* 2 · Do this now */}
-        {hero ? (
-          <Box flexDirection="column" gap="xs">
-            <Box flexDirection="row">
-              <Text size="caption" weight="bold" backgroundColor="#51408A" color="#F3EEFB">
-                {` ${t(lang, 'ui_now')} `}
-              </Text>
-            </Box>
-            <Text size="heading" weight="bold" dimColor={s.isStale || Boolean(r.error)}>
-              {s.isStale ? t(lang, 'act_check') : action(hero, lang, now)}
+            <Text size="caption" dimColor>
+              {t(lang, 'ui_all_clear_sub', you.mineOpen, vm.seenTime)}
             </Text>
-            <Box flexDirection="row" gap="sm" alignItems="center">
-              <Link href={hero.url} label={`${shortRepo(hero.repo)}#${hero.number} ${hero.title}`} />
-              <Text dimColor tabular>
-                {days(hero.createdAt, now)}d{hero.kind !== 'mine' ? ` · @${hero.author || '?'}` : ''}
-              </Text>
-            </Box>
-            <Box flexDirection="row" gap="sm">
-              <Link href={hero.url} label={`${t(lang, 'ui_open_github')} →`} />
-              {aiButton(hero, true)}
-              <Button key="hero-copy" plain={true} onPress={copy(hero)}>
-                {copyLabel(hero)}
-              </Button>
-            </Box>
           </Box>
         ) : (
-          <Text>{t(lang, 'ui_all_clear')}</Text>
+          you.rows.map(line)
         )}
-
-        {/* 3 · Three numbers */}
-        <Box flexDirection="row" gap="lg">
-          {kpi('you', t(lang, 'kpi_you'), s.you, <Text size="caption" dimColor>{t(lang, 'kpi_you_split', s.mine, s.reviews)}</Text>)}
-          {kpi('team', t(lang, 'kpi_team'), s.teamStuck)}
-          {kpi(
-            'oldest',
-            t(lang, 'kpi_oldest'),
-            s.oldest ? `${days(s.oldest.createdAt, now)}d` : '–',
-            s.oldest && <Link href={s.oldest.url} label={`#${s.oldest.number}`} />,
-          )}
-        </Box>
-
-        {/* 4 · Age of open PRs (the signature) */}
-        {hasSvg ? (
-          <ui.Svg
-            source={ageDots(s.buckets, ageLabels, now)}
-            alt={t(lang, 'age_alt', s.buckets.map(c => c.length))}
-            width={300}
-            height={ageHeight(s.buckets)}
-            isInteractive
-          />
-        ) : (
-          <Text tabular>{ageText(s.buckets, ageLabels)}</Text>
-        )}
-
-        {/* 5 · Signals, which are also filters */}
-        {s.bySignal.length > 0 && (
-          <Box flexDirection="row" gap="xs" flexWrap="wrap">
-            {s.bySignal.map(([code, n]) => (
-              <Button key={`sig:${code}`} onPress={() => void update($, signal, cur => (cur === code ? '' : code))}>
-                {`${sig === code ? '✓ ' : ALERT.has(code) ? '▲ ' : ''}${label(lang, code).replace(/^\d+\s*/, '')} ${n}`}
-              </Button>
-            ))}
+        {more('you', you.more, () => void update($, youLimit, l => l + STEP))}
+      </Box>,
+      team && (
+        <Box key="team" flexDirection="column" gap="sm">
+          <Box flexDirection="row">
+            <Button plain={true} onPress={() => void update($, teamOpen, o => !o)}>
+              {team.label}
+            </Button>
           </Box>
-        )}
-
-        {/* Queue controls */}
-        <Box flexDirection="row" gap="sm">
-          {tab('you', t(lang, 'tab_you', s.you))}
-          {tab('team', t(lang, 'tab_team', s.team))}
+          {team.rows.map(line)}
+          {more('team', team.more, () => void update($, teamLimit, l => l + STEP))}
         </Box>
-        <Box flexDirection="row" gap="sm" flexWrap="wrap">
-          <Select key="author" label={t(lang, 'sel_author')} value={who} options={authorOptions} onSelect={(val: string) => void update($, author, () => val)} />
-          {(r.repos ?? []).length > 1 && (
-            <Select key="repo" label={t(lang, 'sel_repo')} value={repo} options={repoOptions} onSelect={(val: string) => void update($, repoFilter, () => val)} />
-          )}
-          <Select key="sort" label={t(lang, 'sel_order')} value={order} options={orderOptions} onSelect={(val: string) => void update($, sort, () => val as Sort)} />
+      ),
+      <Box key="age" flexDirection="row" flexWrap="wrap" gap="md" alignItems="center">
+        {hasSvg && <ui.Svg source={age.svg} alt={age.line} width={240} height={40} isInteractive={false} />}
+        <Box flexDirection="column" gap="xs" flexGrow={1}>
+          <Text size="caption">{t(lang, 'ui_age_of', age.total)}</Text>
+          <Box flexDirection="row" gap="xs" flexWrap="wrap" alignItems="center">
+            <Text size="caption">{t(lang, 'ui_oldest', age.oldest.age)}</Text>
+            <Link href={age.oldest.url} label={`#${age.oldest.number}`} />
+            <Text size="caption">· {age.oldest.repo}</Text>
+          </Box>
+          <Text size="caption" dimColor tabular>
+            {age.line}
+          </Text>
         </Box>
-        {hasFilter && (
-          <Button
-            key="clear"
-            plain={true}
-            onPress={() => {
-              void update($, author, () => '')
-              void update($, repoFilter, () => '')
-              void update($, signal, () => '')
-            }}
-          >
-            {t(lang, 'ui_clear')}
-          </Button>
-        )}
-
-        {/* Queue */}
-        {items.length === 0 ? (
-          <Text dimColor>{hasFilter ? t(lang, 'ui_filter_empty') : t(lang, 'ui_queue_empty')}</Text>
-        ) : order === 'repo' ? (
-          grouped(items, r.repos ?? []).map(g => (
-            <Box key={g.repo} flexDirection="column" gap="xs">
-              <Text weight="bold">
-                {g.repo} · {g.items.length}
-              </Text>
-              {g.items.length ? g.items.map(row) : <Text key={`${g.repo}:empty`} dimColor>{t(lang, 'ui_empty')}</Text>}
-            </Box>
-          ))
-        ) : (
-          items.map(row)
-        )}
-      </Box>
+      </Box>,
     )
   })
 }
