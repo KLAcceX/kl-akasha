@@ -116,7 +116,7 @@ function main(args) {
         author: p.author?.login,
         isDraft: p.isDraft,
         branch: p.headRefName,
-        base: p.baseRefName,
+        baseBranch: p.baseRefName,
         labels,
         taskKey: taskKey(p.headRefName, p.title, p.body),
         size: { lines, additions: p.additions, deletions: p.deletions, files: p.changedFiles },
