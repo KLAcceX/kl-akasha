@@ -207,13 +207,13 @@ function selfTest() {
   assert.deepEqual(mySignals(pr({ commits: { nodes: [] } }), me, day1), []);
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-01T05:00:00Z")), "5h");
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-04T01:00:00Z")), "3d");
-  // codes read as words in either language; unknown languages fall back to pt-BR
+  // codes read as words in either language; unknown languages fall back to en
   assert.equal(label("pt-BR", "threads:2"), "2 thread(s) sem resposta");
   assert.equal(label("en", "threads:2"), "2 unanswered thread(s)");
   assert.equal(label("en", "no_review"), "no review > 1 day");
-  assert.equal(label("xx", "conflict"), "conflito");
+  assert.equal(label("xx", "conflict"), "conflict");
   assert.equal(langArg(["repo:a/b", "--lang", "en"]), "en");
-  assert.equal(langArg([]), "pt-BR");
+  assert.equal(langArg([]), "en");
   console.log("self-test ok");
 }
 

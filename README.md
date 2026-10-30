@@ -2,116 +2,109 @@
 
 # KL · Akasha
 
-**O registro de todo o saber: biblioteca pessoal de skills para IA.**
+**The record of all knowledge: a personal skill library for AI.**
 
-![Status](https://img.shields.io/badge/status-em%20constru%C3%A7%C3%A3o-orange)
+![Status](https://img.shields.io/badge/status-in%20progress-orange)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin%20marketplace-D97757?logo=anthropic&logoColor=white)
 ![Plugins](https://img.shields.io/badge/plugins-1-blue)
-![Skills](https://img.shields.io/badge/skills-3-blue)
-![Idioma](https://img.shields.io/badge/idioma-pt--BR-green)
+![Skills](https://img.shields.io/badge/skills-2-blue)
+![Languages](https://img.shields.io/badge/UI-en%20%7C%20pt--BR-green)
 
 </div>
 
 ---
 
-## Em resumo
+## At a glance
 
 | | |
 |---|---|
-| **O que é** | Uma coleção de skills para Claude Code, organizadas por domínio e instaláveis como plugins |
-| **Para quem** | Para mim no trabalho e em qualquer outro projeto onde eu use IA |
-| **Primeiro domínio** | Pull requests: revisar, vigiar e não deixar nenhum PR envelhecer |
-| **Formato** | Marketplace de plugins do Claude Code: cada domínio é um plugin e cada plugin tem as suas skills |
+| **What** | A collection of Claude Code skills, grouped by domain and installable as plugins |
+| **For** | My own work and any other project where I use AI |
+| **First domain** | Pull requests: watch, review and never let a PR go stale |
+| **Format** | A Claude Code plugin marketplace: one domain = one plugin, each with its skills |
 
 ---
 
-## Por que "Akasha"
+## Why "Akasha"
 
-Em sânscrito, *ākāśa* é o éter, o espaço que contém todas as coisas. Mais tarde várias tradições adotaram a ideia dos **registros akáshicos**, uma biblioteca cósmica onde ficaria guardado todo o conhecimento que já existiu.
+In Sanskrit, *ākāśa* is the ether, the space that holds everything. Many traditions later took up the idea of the **Akashic records**: a cosmic library holding all knowledge that ever existed.
 
-É isso que este repositório quer ser: o lugar onde fica guardado cada "como fazer" que vale a pena ensinar a uma IA.
+That is what this repository aims to be: the place where every "how to" worth teaching an AI is kept.
 
-Ele é irmão do [`kl-ouroboros`](#), a serpente que devora a própria cauda.
+It is a sibling of `kl-ouroboros`, the serpent that eats its own tail.
 
 ---
 
-## Panteão
+## Pantheon
 
-Cada domínio recebe o nome de uma entidade, tirada de qualquer mitologia, cuja natureza combina com a função do domínio.
+Each domain takes the name of an entity, from any mythology, whose nature fits the domain's job.
 
-| Plugin | Domínio | Origem do nome | Status |
+| Plugin | Domain | Name origin | Status |
 |---|---|---|---|
-| **Argos** | Pull requests | Argos Panoptes, o gigante de cem olhos que nunca dormia por inteiro | 🚧 em construção |
-| **Anúbis** | Triangulação: pesa o que a task pede contra o que foi implementado e o que está no PR | Anúbis, que pesa o coração contra a pena da verdade | 💭 planejado |
-| *a definir* | Qualidade de código | | 💭 planejado |
-| *a definir* | Segurança | | 💭 planejado |
+| **Argos** | Pull requests | Argos Panoptes, the hundred-eyed giant who never fully slept | 🚧 in progress |
+| **Anubis** | Triangulation: weighs what the task asks against what was built and what the PR says | Anubis, who weighs the heart against the feather of truth | 💭 planned |
+| *tbd* | Code quality | | 💭 planned |
+| *tbd* | Security | | 💭 planned |
 
-**Reservados:** **Janus**, deus das portas, para merge, release e deploy, e **Thoth**, o escriba que anota a pesagem, para registro de dívidas e tarefas.
+**Reserved:** **Janus**, god of doorways, for merge, release and deploy; **Thoth**, the scribe who records the weighing, for tech-debt and task logging.
 
-> Todo nome passa pelo conselho antes de entrar aqui.
+> Every name goes through the council before it lands here.
 
-### Argos: o vigia dos PRs
+### Argos: the PR watcher
 
-A meta de volume de PRs faz muitos PRs serem abertos, e os que ficam esquecidos pesam no *stale time*. O Argos existe para que nenhum PR fique parado sem alguém perceber.
+A PR-count target means many PRs get opened, and the forgotten ones weigh on *stale time*. Argos exists so no PR sits idle without someone noticing.
 
-Hera mandou Argos vigiar Io. Ele tinha cem olhos e nunca fechava todos ao mesmo tempo. Quando morreu, Hera pôs os olhos dele na cauda do pavão, onde ainda estão abertos.
+Hera set Argos to guard Io. He had a hundred eyes and never closed them all at once. When he fell, Hera set his eyes on the peacock's tail, where they still watch.
 
-| Skill | Lenda | O que faz |
+| Skill | Myth | What it does |
 |---|---|---|
-| `argos-ward` | O que está sob a guarda dele | Vigia os meus PRs abertos (comentários, reviews e pedidos de mudança) e os PRs que esperam a minha revisão. Ordena do mais antigo para o mais novo, porque o mais antigo é o que mais pesa no *stale time*. |
-| `argos-pavo` | Os olhos no pavão, que vigiam quando ele não está | Roda o `argos-ward` de tempos em tempos por meio de uma tarefa agendada do Claude, e só notifica quando há novidade. |
-| `argos-panoptes` | "O que tudo vê" | Revisa o PR de um colega abrindo de poucos a cem olhos, conforme a criticidade da task. Usa os cenários Gherkin da task como base, sabendo que o QA completa o resto. Anota no fim o que merecer virar outra tarefa. **Ele vê e você julga**: nada é publicado sem a sua aprovação. |
+| `argos-ward` | What lies under his guard | Watches my open PRs (comments, reviews, change requests, CI, conflicts), the PRs waiting for my review, and teammates' PRs in the connected repos. Oldest first, because the oldest weighs most on stale time. |
+| `argos-pavo` | The eyes on the peacock, watching while he is away | Runs a vigil round over the connected repos and reports only what changed. Also connects and disconnects repos when asked in plain language. |
 
-**Os olhos dentro do Claude.** O plugin traz um mod que roda a vigília num timer próprio, sem gastar tokens. Ele mostra uma faixa acima do prompt (`👁 Argos: 1 PR(s) pedem ação · portal#219 conflito`), avisa por toast quando aparece novidade, e o comando `/argos` abre a lista completa num painel. A conta do `gh`, o filtro (ex.: `org:minha-empresa`) e o intervalo se configuram nas opções do plugin. Com várias sessões abertas, só uma roda a vigília em cada intervalo.
+**The eyes inside Claude.** The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the KL · Akasha mark (it zooms in while a round runs), toasts what is new, and `/argos` opens a pane grouped by repository, with views (to fix, teammates, all) and an author filter. With several sessions open, only one runs each round.
 
-**Repositórios conectados.** O comando `/argos repos add <pasta>` lê o `git remote` da pasta (inclusive apelidos de SSH) e conecta o repositório. Depois disso, a vigília olha só os repositórios conectados e passa a incluir **todos os PRs abertos dos colegas**, pedindo ou não a sua revisão. O painel agrupa os PRs por repositório e tem três visões ("Pra corrigir", "Dos outros", "Tudo") e um filtro por autor. Para ver a lista, use `/argos repos`. Para tirar um repositório, use `/argos repos remove <owner/repo>`. Também dá para pedir à IA em linguagem natural, como "conecta a pasta X no Argos". Sem nenhum repositório conectado, a vigília não busca nada.
+**Connected repositories.** `/argos repos add <folder>` reads the folder's git remote (SSH host aliases included) and connects it; `/argos repos` lists them and `/argos repos remove <owner/repo>` drops one. Asking the AI works too ("connect folder X to Argos"). The vigil watches only connected repos: with none, it searches nothing. Once connected, it also lists **all teammates' open PRs**, asked for review or not.
 
-**Idioma.** A opção `language` do plugin (`pt-BR` ou `en`) troca os textos da faixa, do painel e dos avisos. Os sinais ficam guardados como códigos, então trocar o idioma não faz PRs antigos aparecerem como novidade.
-
-**A criticidade é adaptável.** Primeiro vale a sua régua pessoal (`~/.claude/kl-akasha/criticality.md`, uma seção por repositório). Se não houver, vale a régua padrão do plugin (o Priority do Jira). Se nada for encontrado, a skill pergunta. Labels como `hotfix` e `security` e áreas sensíveis do código só sobem o nível.
+**Language.** The plugin's `language` option (`en` or `pt-BR`) switches the words of the band, the pane and the notices. Signals are stored as codes, so switching never shows old PRs as new.
 
 ---
 
-## Arquitetura
+## Layout
 
 ```
 kl-akasha/
 ├── .claude-plugin/
-│   └── marketplace.json        # catálogo: lista todos os plugins do repositório
+│   └── marketplace.json        # catalog: every plugin in this repo
 ├── plugins/
-│   └── argos/                  # um domínio = um plugin = uma entidade
+│   └── argos/                  # one domain = one plugin = one entity
 │       ├── .claude-plugin/
-│       │   └── plugin.json     # nome, versão e descrição do plugin
-│       ├── README.md           # o que o domínio cobre e as suas skills
+│       │   └── plugin.json     # name, version, options
+│       ├── hooks/              # the in-Claude mod (band, pane, timer)
+│       ├── types/              # the mod's state contract
 │       └── skills/
 │           ├── argos-ward/
-│           │   └── SKILL.md    # instruções da skill
-│           ├── argos-pavo/
-│           │   └── SKILL.md
-│           └── argos-panoptes/
+│           │   ├── SKILL.md
+│           │   └── scripts/    # ward.mjs, i18n.mjs
+│           └── argos-pavo/
 │               ├── SKILL.md
-│               └── references/ # material de apoio carregado sob demanda
-│                   └── criticality.md   # régua padrão de criticidade
-├── docs/
-│   ├── PRD-kl-akasha-v1.md     # o que a v1 entrega e por quê
-│   └── conventions.md          # como nomear, criar e versionar skills
+│               └── scripts/    # pavo.mjs, repos.mjs
 └── README.md
 ```
 
-A configuração pessoal fica **fora** do repositório, em `~/.claude/kl-akasha/`, para não encostar nos repositórios do time.
+Personal state and settings live **outside** the repo, in `~/.claude/kl-akasha/`, so nothing touches team repositories.
 
-### Regras de organização
+### Rules
 
-1. **Um domínio, um plugin.** Qualidade de código, segurança e tarefas vão cada um para a sua pasta em `plugins/`. Quem procura algo de PR olha em `plugins/argos/` e em nenhum outro lugar.
-2. **A skill tem o prefixo da entidade.** É `argos-review`, não `review`. Assim o nome nunca colide com uma skill de outro plugin, e na hora de invocar dá para saber de onde ela veio.
-3. **Cada plugin se basta.** Quando o Claude Code instala um plugin, ele copia só a pasta daquele plugin, então nada pode depender de arquivos de fora dela. Uma regra compartilhada entre domínios (por exemplo, a régua de criticidade) é copiada para dentro de cada plugin que a usa, e o `docs/conventions.md` diz qual cópia é a fonte.
-4. **O `SKILL.md` fica enxuto.** Checklists, réguas e modelos longos vão para `references/` e só são carregados quando a skill precisa deles.
-5. **Dá para instalar só uma parte.** Como cada domínio é um plugin, um projeto pode instalar só o Argos sem trazer o resto.
+1. **One domain, one plugin.** Code quality, security and tasks each get their own folder under `plugins/`. Looking for something about PRs? Go to `plugins/argos/` and nowhere else.
+2. **Skills carry the entity's prefix.** `argos-ward`, not `ward`: no clashes across plugins, and the origin is clear when invoking.
+3. **Each plugin stands alone.** Claude Code copies only the plugin's folder on install, so nothing may depend on files outside it.
+4. **Keep `SKILL.md` lean.** Long checklists and references go in supporting files, loaded only when needed.
+5. **Install only what you need.** Each domain is a plugin, so a project can take Argos without the rest.
 
 ---
 
 <div align="center">
 
-*Uso e instalação: em breve.*
+*Usage and installation: coming soon.*
 
 </div>

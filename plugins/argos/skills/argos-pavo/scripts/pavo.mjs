@@ -3,7 +3,7 @@
 // with the last round and prints only what is new. State lives outside any repo.
 //
 // Usage:
-//   node pavo.mjs [extra search qualifiers...] [--account <gh login>] [--lang pt-BR|en] [--json]
+//   node pavo.mjs [extra search qualifiers...] [--account <gh login>] [--lang en|pt-BR] [--json]
 //   node pavo.mjs --account me-at-work --lang en
 //   node pavo.mjs --self-test
 // The vigil only watches what was connected on purpose: repos.json next to the state
@@ -40,7 +40,7 @@ export function news(prev, ward) {
 }
 
 // What a person reads about a PR: a review request says so, a teammate's PR names its author.
-export function describe(p, lang = "pt-BR") {
+export function describe(p, lang = "en") {
   const words = p.signals.map((c) => label(lang, c));
   if (p.kind === "review") return [t(lang, "asks_review"), ...words].join(", ");
   if (p.kind === "other") return [`@${p.author}`, ...words].join(", ");
@@ -51,7 +51,7 @@ export function describe(p, lang = "pt-BR") {
 export const repoQualifiers = (list, qualifiers) =>
   qualifiers.some((q) => q.startsWith("repo:")) ? [] : list.map((r) => `repo:${r.repo}`);
 
-export function notification(items, lang = "pt-BR") {
+export function notification(items, lang = "en") {
   const parts = items.map((p) => `${p.repo.split("/")[1]}#${p.number} ${describe(p, lang)}`);
   const msg = `Argos: ${t(lang, "news", items.length)}: ${parts.join("; ")}`;
   return msg.length > 190 ? msg.slice(0, 187) + "..." : msg;
@@ -150,13 +150,13 @@ function selfTest() {
   // notification stays short, in either language
   const many = { mine: Array.from({ length: 30 }, (_, i) => mine(`u${i}`, ["changes_requested"])), toReview: [] };
   assert.ok(notification(news({}, many)).length <= 190);
-  assert.equal(notification([rev("r")]), "Argos: 1 novidade(s): web#2 pede sua revisão");
+  assert.equal(notification([rev("r")], "pt-BR"), "Argos: 1 novidade(s): web#2 pede sua revisão");
   assert.equal(notification([rev("r")], "en"), "Argos: 1 new: web#2 asks for your review");
   // a review request turning late is news once, then quiet
   const late = { ...ward, toReview: [{ ...rev("r"), signals: ["late"] }] };
   assert.deepEqual(news(snapshot(ward), late).map((p) => p.url), ["r"]);
   assert.deepEqual(news(snapshot(late), late), []);
-  assert.equal(describe(late.toReview[0]), "pede sua revisão, atrasada > 1 dia");
+  assert.equal(describe(late.toReview[0], "pt-BR"), "pede sua revisão, atrasada > 1 dia");
   assert.equal(describe(late.toReview[0], "en"), "asks for your review, late > 1 day");
   // pending lists everything needing action, oldest first, idle PRs left out
   assert.deepEqual(pending(ward).map((p) => p.url), ["a", "r"]);
@@ -165,7 +165,7 @@ function selfTest() {
   const team = { ...ward, others: [other("o1", []), other("o2", ["no_review"])] };
   assert.deepEqual(news(snapshot(ward), team).map((p) => p.url), ["o2"]);
   assert.deepEqual(pending(team).map((p) => p.url), ["a", "r"]);
-  assert.equal(describe(team.others[1]), "@bia, sem review > 1 dia");
+  assert.equal(describe(team.others[1]), "@bia, no review > 1 day");
   // connected repos scope the search unless the caller already did
   assert.deepEqual(repoQualifiers([{ repo: "acme/api" }, { repo: "acme/web" }], ["--x"]), ["repo:acme/api", "repo:acme/web"]);
   assert.deepEqual(repoQualifiers([{ repo: "acme/api" }], ["repo:acme/web"]), []);

@@ -97,9 +97,9 @@ const WORDS = {
 
 export const LANGS = Object.keys(WORDS);
 
-// Unknown languages fall back to pt-BR, the default.
+// Unknown languages fall back to en, the default.
 export function t(lang, key, ...args) {
-  const w = (WORDS[lang] ?? WORDS["pt-BR"])[key];
+  const w = (WORDS[lang] ?? WORDS.en)[key];
   return typeof w === "function" ? w(...args) : (w ?? key);
 }
 
@@ -109,8 +109,8 @@ export function label(lang, code) {
   return n === undefined ? t(lang, key) : t(lang, key, Number(n));
 }
 
-// --lang <code> from a CLI argument list, defaulting to pt-BR.
+// --lang <code> from a CLI argument list, defaulting to en.
 export function langArg(args) {
   const i = args.indexOf("--lang");
-  return i >= 0 ? args[i + 1] : "pt-BR";
+  return i >= 0 ? args[i + 1] : "en";
 }

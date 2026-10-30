@@ -1,0 +1,10 @@
+# Local-only safeguard: brand work and planning docs stay on this machine.
+brand/
+docs/
+
+# Written by the Claude Code mod engine when it loads a plugin.
+plugins/*/tsconfig.json
+plugins/*/.claude-plugin/types/
+
+# Personal Claude instructions for this checkout.
+CLAUDE.local.md

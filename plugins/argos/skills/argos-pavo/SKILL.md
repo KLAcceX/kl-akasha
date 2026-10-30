@@ -34,7 +34,7 @@ Run `add` once per folder the user named. Report each line the script prints. A 
 
 ## Change the language
 
-The mod's words follow the plugin option `language` (`pt-BR` or `en`): tell the user to set it in `/config` under the argos plugin. For scripts, pass `--lang en` (default `pt-BR`). Signals are stored as codes, so switching language never shows old PRs as new.
+The mod's words follow the plugin option `language` (`en` or `pt-BR`): tell the user to set it in `/config` under the argos plugin. For scripts, pass `--lang pt-BR` (default `en`). Signals are stored as codes, so switching language never shows old PRs as new.
 
 ## Run a round
 

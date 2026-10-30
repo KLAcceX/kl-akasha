@@ -36,7 +36,7 @@ const round = { at: '2026-10-29T12:00:00.000Z', me: 'me', repos: ['acme/portal',
 const stored = (values: Record<string, unknown>) => (_: unknown, e: { key: string }) =>
   e.key in values ? { value: { value: values[e.key], version: 1 } } : { value: { value: undefined, version: 0 } }
 
-test('the band shows the count, the oldest PR and teammates waiting', async ($, on) => {
+test('the band shows the count, the oldest PR and teammates waiting', { options: { language: 'pt-BR' } }, async ($, on) => {
   on('state.get', stored({ round }))
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
@@ -46,7 +46,7 @@ test('the band shows the count, the oldest PR and teammates waiting', async ($, 
   }
 })
 
-test('the band speaks English when the language option says so', { options: { language: 'en' } }, async ($, on) => {
+test('the band speaks English by default', async ($, on) => {
   on('state.get', stored({ round }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /need/ }))?.text).toContain('portal#219 conflict')
@@ -54,7 +54,7 @@ test('the band speaks English when the language option says so', { options: { la
   await ui.unmount()
 })
 
-test('the band says it is watching while a round runs', async ($, on) => {
+test('the band says it is watching while a round runs', { options: { language: 'pt-BR' } }, async ($, on) => {
   on('state.get', stored({ round, isRunning: true }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /vigiando/ }))?.text).toContain('vigiando')
@@ -72,7 +72,7 @@ test('the band stays out of the way when nothing needs action', async ($, on) =>
   await ui.unmount()
 })
 
-test('the pane groups by repo, empty connected repos included', async ($, on) => {
+test('the pane groups by repo, empty connected repos included', { options: { language: 'pt-BR' } }, async ($, on) => {
   on('state.get', stored({ round, view: 'all' }))
   on('clock.now', () => ({ value: Date.parse('2026-10-29T12:00:00Z') }))
   const ui = await $.ui.mount(PANE)

@@ -45,7 +45,7 @@ const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
   account: String(options.account ?? '').trim(),
   qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
-  lang: String(options.language ?? 'pt-BR'),
+  lang: String(options.language ?? 'en'),
 })
 
 // Which items a view shows, oldest first; the author filter narrows any view.

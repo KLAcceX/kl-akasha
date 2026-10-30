@@ -1,33 +1,33 @@
 {
   "name": "argos",
   "version": "0.3.0",
-  "description": "Argos, o vigia de cem olhos: nenhum PR fica parado sem alguém perceber.",
+  "description": "Argos, the hundred-eyed watcher: no PR sits idle without someone noticing.",
   "author": { "name": "KLAcceX" },
   "types": "./types/index.d.ts",
   "userConfig": {
     "account": {
       "type": "string",
-      "title": "Conta do gh",
-      "description": "Login do gh usado na vigília. Vazio = conta ativa.",
+      "title": "gh account",
+      "description": "gh login used by the vigil. Empty = the active account.",
       "default": ""
     },
     "qualifiers": {
       "type": "string",
-      "title": "Filtro da busca",
-      "description": "Qualificadores extras de busca do GitHub (ex.: is:draft). A vigília só olha os repositórios conectados com /argos repos add.",
+      "title": "Extra search filter",
+      "description": "Extra GitHub search qualifiers (e.g. is:draft). The vigil only watches repos connected with /argos repos add.",
       "default": ""
     },
     "language": {
       "type": "string",
-      "title": "Idioma / Language",
-      "description": "Idioma da faixa, do painel e dos avisos. Language of the band, pane and notices.",
-      "options": ["pt-BR", "en"],
-      "default": "pt-BR"
+      "title": "Language",
+      "description": "Language of the band, the pane and the notices.",
+      "options": ["en", "pt-BR"],
+      "default": "en"
     },
     "intervalMinutes": {
       "type": "number",
-      "title": "Intervalo (min)",
-      "description": "De quantos em quantos minutos a vigília roda. Mínimo 5.",
+      "title": "Interval (min)",
+      "description": "How often the vigil runs, in minutes. Minimum 5.",
       "default": 60
     }
   }
