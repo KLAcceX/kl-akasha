@@ -3,6 +3,7 @@
   "version": "0.8.0",
   "description": "Argos, the hundred-eyed watcher: no PR sits idle without someone noticing.",
   "author": { "name": "KLAcceX" },
+  "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
     "account": {

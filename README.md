@@ -106,6 +106,10 @@ Personal state and settings live **outside** the repo, in `~/.claude/kl-akasha/`
 4. **Keep `SKILL.md` lean.** Long checklists and references go in supporting files, loaded only when needed.
 5. **Install only what you need.** Each domain is a plugin, so a project can take Argos without the rest.
 
+## License
+
+[MIT](LICENSE) © 2026 KLAcceX. The Argos pane's icons are from [Tabler Icons](https://tabler.io/icons), also MIT.
+
 ---
 
 <div align="center">
