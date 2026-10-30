@@ -4,9 +4,9 @@
 //
 // Usage:
 //   node repos.mjs list [--json] [--lang pt-BR|en]
-//   node repos.mjs add [folder | owner/name | GitHub URL] [--lang ...]
+//   node repos.mjs add [folder | owner/name | GitHub URL] [--account <gh login>] [--lang ...]
 //       a folder (default: the current one) is read from its git origin; a name or URL
-//       needs no clone and is checked with `gh repo view`
+//       needs no clone and is checked with `gh repo view` as that account (default: the active one)
 //   node repos.mjs remove <owner/name | URL | folder> [--lang ...]
 //   node repos.mjs --self-test
 // Env: ARGOS_PAVO_STATE overrides the state file path (repos.json sits beside it).
@@ -37,13 +37,7 @@ export const repoFromArg = (arg) => {
 
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 
-// t() returns the key when i18n.mjs has no such entry yet; say it in English then.
-const say = (lang, key, en, ...args) => {
-  const s = t(lang, key, ...args);
-  return s === key ? en : s;
-};
-
-const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+const run = (cmd, args, env = process.env) => execFileSync(cmd, args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "ignore"] }).trim();
 
 export const read = () => {
   try {
@@ -60,8 +54,9 @@ const write = (list) => {
 
 function main(args) {
   const lang = langArg(args);
-  const l = args.indexOf("--lang");
-  const [verb = "list", ...rest] = args.filter((a, i) => a !== "--json" && (l < 0 || (i !== l && i !== l + 1)));
+  const account = args.includes("--account") ? args[args.indexOf("--account") + 1] : undefined;
+  const flags = new Set(["--lang", "--account"].flatMap((f) => (args.includes(f) ? [args.indexOf(f), args.indexOf(f) + 1] : [])));
+  const [verb = "list", ...rest] = args.filter((a, i) => a !== "--json" && !flags.has(i));
   const target = rest.join(" ").trim();
   const list = read();
   const fail = (msg) => {
@@ -82,11 +77,13 @@ function main(args) {
     if (!repo) {
       path = undefined;
       const name = repoFromArg(arg);
-      if (!name) fail(say(lang, "not_repo", `${arg} is not a folder or a GitHub repository (owner/name or URL).`, arg));
+      if (!name) fail(t(lang, "not_repo", arg));
       try {
-        repo = run("gh", ["repo", "view", name, "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
+        // as the vigil's account, so a repo private to it is found
+        const env = account ? { ...process.env, GH_TOKEN: run("gh", ["auth", "token", "-u", account]) } : process.env;
+        repo = run("gh", ["repo", "view", name, "--json", "nameWithOwner", "-q", ".nameWithOwner"], env);
       } catch {}
-      if (!repo) fail(say(lang, "repo_not_found", `${name} was not found on GitHub, or this gh account cannot see it.`, name));
+      if (!repo) fail(t(lang, "repo_not_found", name));
     }
     // adding by name keeps the folder an earlier add recorded
     const old = list.find((r) => same(r.repo, repo));

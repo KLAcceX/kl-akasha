@@ -149,7 +149,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
 }
 
 export const register: Register = (on, options) => {
-  const { lang, minutes } = config(options)
+  const { lang, minutes, account } = config(options)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -162,7 +162,8 @@ export const register: Register = (on, options) => {
 
   // /argos opens the pane; /argos repos [add <folder | owner/name> | remove <repo>] goes
   // through repos.mjs, the same command the AI uses from the argos-pavo skill. A bare
-  // `add` connects the session's folder, named here so it never falls to the mod's own.
+  // `add` connects the session's folder, named here so it never falls to the mod's own; a
+  // name is checked as the vigil's account.
   on('command.run', { command: 'argos' }, async ($, e) => {
     const args = e.args.trim().split(/\s+/).filter(Boolean)
     if (args[0] === 'repos') {
@@ -173,6 +174,7 @@ export const register: Register = (on, options) => {
         ...(args.length > 1 ? args.slice(1) : ['list']),
         '--lang',
         lang,
+        ...(account ? ['--account', account] : []),
       ])
       if (args[1] === 'add' || args[1] === 'remove') void tick($, options, true)
       return { text: (stdout || stderr).trim() }
