@@ -7,7 +7,7 @@
 ![Status](https://img.shields.io/badge/status-in%20progress-orange)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin%20marketplace-D97757?logo=anthropic&logoColor=white)
 ![Plugins](https://img.shields.io/badge/plugins-1-blue)
-![Skills](https://img.shields.io/badge/skills-2-blue)
+![Skills](https://img.shields.io/badge/skills-3-blue)
 ![Languages](https://img.shields.io/badge/UI-en%20%7C%20pt--BR-green)
 
 </div>
@@ -60,6 +60,7 @@ Hera set Argos to guard Io. He had a hundred eyes and never closed them all at o
 |---|---|---|
 | `argos-ward` | What lies under his guard | Watches my open PRs (comments, reviews, change requests, CI, conflicts), the PRs waiting for my review, and teammates' PRs in the connected repos. Oldest first, because the oldest weighs most on stale time. |
 | `argos-pavo` | The eyes on the peacock, watching while he is away | Runs a vigil round over the connected repos and reports only what changed. Also connects and disconnects repos when asked in plain language. |
+| `argos-panoptes` | "The all-seeing" | Reviews a teammate's PR with as many eyes as the task deserves: reads the task (Jira key from the branch), sets the level from its priority (raised by risky paths or labels, never lowered), checks the Gherkin scenarios, splits reviews over 400 lines, and drafts findings by severity plus suggested tasks. **Argos sees, you judge:** nothing is posted without your yes. |
 
 **The eyes inside Claude.** The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the KL · Akasha mark (it zooms in while a round runs), toasts what is new, and `/argos` opens a pane grouped by repository, with views (to fix, teammates, all) and an author filter. With several sessions open, only one runs each round.
 
@@ -85,9 +86,13 @@ kl-akasha/
 │           ├── argos-ward/
 │           │   ├── SKILL.md
 │           │   └── scripts/    # ward.mjs, i18n.mjs
-│           └── argos-pavo/
+│           ├── argos-pavo/
+│           │   ├── SKILL.md
+│           │   └── scripts/    # pavo.mjs, repos.mjs
+│           └── argos-panoptes/
 │               ├── SKILL.md
-│               └── scripts/    # pavo.mjs, repos.mjs
+│               ├── scripts/    # facts.mjs
+│               └── references/ # criticality rubric, review levels
 └── README.md
 ```
 
