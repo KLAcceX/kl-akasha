@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// argos-panoptes facts: the countable part of a PR, gathered fast through the GitHub CLI.
+// Argos facts: the countable part of a PR, gathered fast through the GitHub CLI.
 // Size, files, task key, risk hints and a suggested level. The model decides the real
 // level after reading the task and the diff (see references/criticality.md).
 //

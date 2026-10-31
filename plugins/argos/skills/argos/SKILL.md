@@ -1,0 +1,32 @@
+---
+name: argos
+description: Watch pull requests so none goes stale. Reports which of the user's PRs need them now (comments, change requests, failing CI, conflicts) and which PRs wait for their review; fixes the user's own PR after review (code changes and draft replies); reviews a teammate's PR with depth matched to how critical its task is, against the task's acceptance criteria and Gherkin scenarios and the project's own review rules, and approves or merges it only after that review; runs the vigil on a schedule and connects or disconnects the repositories it watches. Drafts first: nothing is pushed, posted, approved or merged without the user's yes. Use whenever the user mentions PRs, reviews, review comments, CI on a PR, approving or merging, watching repos, or picks anything in the Argos pane, even with just a PR link. Portuguese requests count too, such as "algum PR meu precisa de mim?", "tem review pra eu fazer?", "corrigir meu PR", "revisa o PR da Bia", "esse PR tá ok pra merge?", "aprova e faz o merge", "conecta essa pasta no Argos", "me avisa quando alguém comentar".
+compatibility: The bundled scripts and the Argos mod need the GitHub CLI and Node.js. Without the CLI, use a GitHub connector and compute the same signals.
+---
+
+# Argos
+
+Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here he watches PRs: he opens a few eyes or all hundred, depending on how critical the task is. **Argos sees; the user judges.**
+
+## Pick the job
+
+| The user wants | Read |
+|---|---|
+| what needs them now, across their PRs and their review queue | `references/mine.md`, "Job 1" |
+| to fix their own PR: review comments, a failing CI, a conflict (pane: Resolve, Reply, Address, Fix CI, "to fix with Argos") | `references/mine.md`, "Job 2", and `references/address.md` |
+| to review, approve or merge a teammate's PR (pane: Review, Approve, Approve and merge, "to review with Argos") | `references/review.md` |
+| to connect, list or remove a repository, change the language, run a round, or have PRs watched on a schedule | `references/vigil.md` |
+
+## For every job
+
+- **Sources:** read `../../references/sources.md` once per conversation, to learn what this machine has for PRs and tasks.
+- **Scope:** watch only connected or named repositories. `node scripts/repos.mjs list --json` lists them; never search all of GitHub.
+- **Accounts:** use the account that owns the repo: `GH_TOKEN=$(gh auth token -u <login>)` for that command only, or `--account <login>` where a script takes one. Never `gh auth switch`.
+- **Scripts:** run them from this skill's directory.
+- **Nothing leaves the chat without a yes:** that covers pushes, replies, reviews, approvals and merges. A prompt sent from the pane's Approve buttons counts as that yes, but only after the review in `references/review.md` finds no blocker.
+
+## Self-check
+
+```bash
+node scripts/queue.mjs --self-test && node scripts/round.mjs --self-test && node scripts/facts.mjs --self-test
+```

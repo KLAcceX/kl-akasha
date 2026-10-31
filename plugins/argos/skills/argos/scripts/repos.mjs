@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // argos repos: the connected repositories the vigil watches, kept in repos.json
-// next to the pavo state. Used by the AI (argos-pavo skill) and by /argos repos.
+// next to the vigil state. Used by the AI (argos skill) and by /argos repos.
 //
 // Usage:
 //   node repos.mjs list [--json] [--lang pt-BR|en]
@@ -9,16 +9,16 @@
 //       needs no clone and is checked with `gh repo view` as that account (default: the active one)
 //   node repos.mjs remove <owner/name | URL | folder> [--lang ...]
 //   node repos.mjs --self-test
-// Env: ARGOS_PAVO_STATE overrides the state file path (repos.json sits beside it).
+// Env: ARGOS_STATE overrides the state file path (repos.json sits beside it).
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
-import { langArg, t } from "../../argos-ward/scripts/i18n.mjs";
+import { langArg, t } from "./i18n.mjs";
 
-const STATE = process.env.ARGOS_PAVO_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "pavo-state.json");
+const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "repos.json");
 
 // "git@github.com:acme/api.git", "https://github.com/acme/api" or an SSH host
@@ -127,7 +127,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-// Run as a command only; pavo.mjs imports read() without triggering it.
+// Run as a command only; round.mjs imports read() without triggering it.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const args = process.argv.slice(2);
   args.includes("--self-test") ? selfTest() : main(args);

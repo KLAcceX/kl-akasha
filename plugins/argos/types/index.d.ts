@@ -12,7 +12,7 @@ export type Item = {
   signals: string[]
 }
 
-// What pavo.mjs writes to last-round.json.
+// What round.mjs writes to last-round.json.
 export type Round = {
   at: string
   okAt?: string | null

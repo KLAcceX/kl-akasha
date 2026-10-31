@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// argos-ward feedback: everything reviewers said on one of my PRs, classified and grouped by
+// Argos feedback: everything reviewers said on one of my PRs, classified and grouped by
 // file into a plan (blocking first). Read-only: it never replies, resolves or pushes.
 //
 // Usage:
 //   node feedback.mjs <pr-url | owner/repo#n> [--account <gh login>] [--json]
 //   node feedback.mjs --self-test
-// Classes follow Conventional Comments (see references/evidence.md, "Triage the comments").
+// Classes follow Conventional Comments (see references/evidence-fix.md, "Triage the comments").
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";

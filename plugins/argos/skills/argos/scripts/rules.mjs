@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// argos-panoptes rules: the project's own review rules, found read-only through the GitHub
+// Argos rules: the project's own review rules, found read-only through the GitHub
 // contents API. When a project has rules they lead the review; Argos' references only fill
-// the gaps (see SKILL.md, "Project rules").
+// the gaps (see references/review.md, "Project rules").
 //
 // Usage:
 //   node rules.mjs <owner/repo> [--ref <branch>] [--json] [--account <gh login>]

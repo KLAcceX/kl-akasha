@@ -1,10 +1,4 @@
----
-name: argos-pavo
-description: Keep watching the user's pull requests on a schedule and tell them only what changed, and manage which repositories Argos watches. Use whenever the user wants PRs watched automatically, wants to be notified about new comments, reviews or review requests, wants to connect, list or disconnect a repository or folder from Argos, wants Argos in another language, or when a scheduled task asks for an Argos round. Portuguese requests count too, such as "conecta essa pasta no Argos", "me avisa quando alguém comentar nos meus PRs", "deixa o Argos em inglês". Not for a one-off look at PRs (use argos-ward).
-compatibility: Needs the GitHub CLI and Node.js. The Argos mod that ships with this plugin runs the same rounds inside Claude.
----
-
-# Argos Pavo
+# Vigil and repositories
 
 Watch the connected repositories round after round and surface only what is new. The Argos mod already does this inside Claude on a timer, at no token cost, with a band above the prompt and `/argos` for the pane; reach for a scheduled task only when the user wants rounds while no Claude session is open.
 
@@ -50,7 +44,7 @@ The mod follows the plugin option `language` (`en` or `pt-BR`), set in `/config`
 ## Run a round
 
 ```bash
-node scripts/pavo.mjs --account <gh login> --lang <en|pt-BR>
+node scripts/round.mjs --account <gh login> --lang <en|pt-BR>
 ```
 
 Use the account that owns the connected repos (see `../../references/sources.md`). The first line tells what happened:
@@ -66,5 +60,5 @@ A round only reports; it never replies, pushes or merges.
 ## Set up a scheduled task
 
 1. Ask in one message, with defaults: when (hourly, 9h–18h, Monday to Friday → `0 9-18 * * 1-5`), the account, the language.
-2. `create_scheduled_task` with taskId `argos-pavo`, the cron, and a self-contained prompt: "Use the argos-pavo skill to run one Argos round. gh account: <login>. Language: <en|pt-BR>. Notify me only if something is new."
+2. `create_scheduled_task` with taskId `argos-vigil`, the cron, and a self-contained prompt: "Use the argos skill to run one Argos round. gh account: <login>. Language: <en|pt-BR>. Notify me only if something is new."
 3. Tell the user tasks run only while the Claude app is open.

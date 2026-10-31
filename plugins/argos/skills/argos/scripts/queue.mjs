@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// argos-ward: lists my open PRs and the PRs waiting for my review, oldest first,
+// Argos queue: lists my open PRs and the PRs waiting for my review, oldest first,
 // with the signals that say a PR needs action.
 //
 // Usage:
-//   node ward.mjs [extra search qualifiers...] [--json] [--lang pt-BR|en]
-//   node ward.mjs repo:acme/api repo:acme/web --lang en
-//   node ward.mjs --self-test
+//   node queue.mjs [extra search qualifiers...] [--json] [--lang pt-BR|en]
+//   node queue.mjs repo:acme/api repo:acme/web --lang en
+//   node queue.mjs --self-test
 // Signals are stable codes (see i18n.mjs); text output translates them.
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";

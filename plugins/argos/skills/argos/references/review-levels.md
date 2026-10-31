@@ -1,6 +1,6 @@
 # Review levels: how many eyes open
 
-Argos sees; the user judges. Every level reads the whole diff. What changes is how deep each look goes and which findings are worth the reader's time. Everything here is **Argos' recommendation**: when the project's own rules (found by `scripts/rules.mjs`) say something different, theirs win. The data behind these defaults is in `evidence.md`.
+Argos sees; the user judges. Every level reads the whole diff. What changes is how deep each look goes and which findings are worth the reader's time. Everything here is **Argos' recommendation**: when the project's own rules (found by `scripts/rules.mjs`) say something different, theirs win. The data behind these defaults is in `evidence-review.md`.
 
 ## Findings by severity
 
@@ -17,7 +17,7 @@ Labels are [Conventional Comments](https://conventionalcomments.org/). They matt
 
 ## Don't invent blockers
 
-Most of what review finds is not defects: about 14 to 15% of review comments point to a possible bug (evidence.md, "What to check"). A review with no blocker is a normal result, not a lazy one. A blocker needs a `file:line` and how it fails (input, path, outcome); if you need a paragraph to justify it, it is a suggestion or a question. Never block on personal style that no project rule asks for.
+Most of what review finds is not defects: about 14 to 15% of review comments point to a possible bug (evidence-review.md, "What to check"). A review with no blocker is a normal result, not a lazy one. A blocker needs a `file:line` and how it fails (input, path, outcome); if you need a paragraph to justify it, it is a suggestion or a question. Never block on personal style that no project rule asks for.
 
 ## Order of the look
 
@@ -47,7 +47,7 @@ Follow Google's order, so the expensive problems surface first:
 
 ## Size
 
-When `facts.mjs` returns `parts`, the PR is critical and above 400 changed lines: review one part at a time and report findings per part. The reason is **quality, not speed**: past about 400 lines, or 60 to 90 minutes, a reviewer finds markedly fewer defects, while smaller PRs have not been shown to merge faster on their own (evidence.md, "Size and attention").
+When `facts.mjs` returns `parts`, the PR is critical and above 400 changed lines: review one part at a time and report findings per part. The reason is **quality, not speed**: past about 400 lines, or 60 to 90 minutes, a reviewer finds markedly fewer defects, while smaller PRs have not been shown to merge faster on their own (evidence-review.md, "Size and attention").
 
 A very large PR (Google calls ~1,000 lines usually too large) may earn a `suggestion (non-blocking):` to split future work, with that reason. It is not a blocker unless a project rule sets a size limit. When you reviewed only part of the PR, say which part.
 

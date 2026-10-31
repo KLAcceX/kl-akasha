@@ -1,6 +1,6 @@
 # Addressing review on the user's PR
 
-Details for "Fix my PR" in SKILL.md. Why each step is shaped this way, with sources: [evidence.md](evidence.md).
+Details for "Fix my PR" in mine.md. Why each step is shaped this way, with sources: [evidence-fix.md](evidence-fix.md).
 
 ## Contents
 
@@ -41,7 +41,7 @@ Out-of-scope requests: offer a follow-up issue instead of growing the PR, and sa
 
 ## Changing the code
 
-1. Find the clone: `node ../argos-pavo/scripts/repos.mjs list --json` gives `{repo, path}`. No clone: show the changes as diffs in chat and offer to clone; do not clone on your own.
+1. Find the clone: `node scripts/repos.mjs list --json` gives `{repo, path}`. No clone: show the changes as diffs in chat and offer to clone; do not clone on your own.
 2. `git -C <path> status --porcelain`. Uncommitted work there is the user's: stop and tell them, never stash or discard it.
 3. Get on the PR branch, current with the remote: `git -C <path> fetch origin <branch>`, then `git switch <branch>` and `git pull --ff-only`. A branch that cannot fast-forward means someone pushed elsewhere: stop and say so.
 4. One commit per concern, in the project's commit style (rules.mjs, then `git log --oneline -15` on the base). Fixes only: no reformatting or drive-by refactors in the same commit. If the project squashes on merge, `git commit --fixup=<sha>` is fine.

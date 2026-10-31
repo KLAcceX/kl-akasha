@@ -95,9 +95,9 @@ test('the send button carries the picked PRs: mine to fix, the others to review'
   expect(vm.send.prompt).toBe(
     [
       'Work on these PRs with Argos.',
-      'My PRs, to fix with argos-ward:',
+      'My PRs, to fix with Argos:',
       '- u219: Resolve the conflict',
-      'To review with argos-panoptes (draft only, nothing is posted without my yes):',
+      'To review with Argos (draft only, nothing is posted without my yes):',
       '- u7',
       '- u8',
     ].join('\n'),

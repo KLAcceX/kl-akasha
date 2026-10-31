@@ -1,14 +1,8 @@
----
-name: argos-panoptes
-description: Review a teammate's pull request with depth matched to how critical its task is, checked against the task's acceptance criteria and Gherkin scenarios and led by the project's own review rules (CONTRIBUTING, PR template, CODEOWNERS, AGENTS.md, CLAUDE.md), drafted for the user before anything is posted. Also approves, or approves and merges, a teammate's PR after reviewing it first, stopping on a blocker. Use whenever the user asks to review, look at, check, approve or merge someone else's PR, wants to know if a PR is safe to merge, or picks a PR from the Argos pane (Review, Approve, Approve and merge), even if they only paste a PR link. Portuguese requests count too, such as "revisa o PR da Bia", "dá uma olhada nesse PR antes de eu aprovar", "esse PR tá ok pra merge?", "aprova o PR 42", "aprova e faz o merge". Not for the user's own PRs that need attention (use argos-ward) or for writing code.
-compatibility: Works with the GitHub CLI or a GitHub connector, and with the Atlassian CLI, an Atlassian connector, another tracker, or a pasted task. The bundled scripts need the GitHub CLI.
----
-
-# Argos Panoptes
+# Review a teammate's PR
 
 Review a PR the way a careful senior teammate on **that project** would: by the project's own rules first, deep where the task is critical, light where it is not, and always tied to what the task asked for. The result is a **draft for the user**. They judge; nothing is posted without their yes.
 
-`references/evidence.md` holds the published data behind Argos' defaults (size, order, labels, tone). Use it to explain a judgement, never to grade a teammate.
+`references/evidence-review.md` holds the published data behind Argos' defaults (size, order, labels, tone). Use it to explain a judgement, never to grade a teammate.
 
 ## 1. Sources
 
@@ -35,7 +29,7 @@ node scripts/rules.mjs <owner/repo> --ref <baseBranch> --account <gh login> --js
 It lists CONTRIBUTING, PR templates, CODEOWNERS, AGENTS.md, CLAUDE.md, `.github/copilot-instructions.md` and any `*review*` file under `.github/` or `docs/`, each with an excerpt; it never fails on a missing file. Read the full text of the ones that bear on review (`gh api -H "Accept: application/vnd.github.raw" "repos/<o>/<r>/contents/<path>?ref=<base>"`) so you can cite `path:line` or a section. When the diff sits in a package with its own AGENTS.md or CLAUDE.md, read that too: the closest file wins.
 
 - **The project's rules lead.** Their checklist, conventions, required tests, size limits and comment style come before anything in Argos' references. A PR template's checklist is something the PR body should answer; CODEOWNERS (last matching pattern wins) tells who must approve the touched paths.
-- **Argos' references fill the gaps.** Apply `review-levels.md`, `criticality.md` and `evidence.md` only where the project is silent, and mark those findings **Argos recommendation**.
+- **Argos' references fill the gaps.** Apply `review-levels.md`, `criticality.md` and `evidence-review.md` only where the project is silent, and mark those findings **Argos recommendation**.
 - **Never override a project rule with ours.** If the project allows what Argos would flag, don't flag it.
 - **No rules at all:** Argos' references apply; say so in one line in the header.
 
