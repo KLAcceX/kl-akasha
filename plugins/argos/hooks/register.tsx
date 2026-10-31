@@ -189,9 +189,6 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
-    // A sidebar is narrow; only a wide pane spells out Check now beside its icon. The pane's
-    // own width, not the window's.
-    const wide = ((e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 0) >= 60
     const running = await read($, isRunning)
     const vm = toViewModel(await read($, round), {
       now: await $.clock.now(),
@@ -205,7 +202,7 @@ export const register: Register = (on, options) => {
     const fill = (color: string) => (hasSvg ? color : undefined)
 
     // The head: the mark, "Argos", what needs me and when Argos last looked; Check now on
-    // the right, an icon on a narrow pane.
+    // the right as an icon, named for screen readers.
     const top = (summary?: string) => (
       <Box key="top" flexDirection="row" alignItems="center" gap="sm">
         {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={28} height={28} />}
@@ -221,7 +218,7 @@ export const register: Register = (on, options) => {
           )}
         </Box>
         <Button key="check" variant="secondary" dimColor={running} label={t(lang, running ? 'ui_checking' : 'ui_check')} onPress={checkNow}>
-          {running ? t(lang, 'ui_checking') : wide ? `↻  ${t(lang, 'ui_check')}` : '↻'}
+          {running ? t(lang, 'ui_checking') : '↻'}
         </Button>
       </Box>
     )
@@ -303,14 +300,25 @@ export const register: Register = (on, options) => {
         {canPick && check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked))}
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text wrap="truncate">{p.title}</Text>
-          <Box flexDirection="row" alignItems="center" gap="sm">
-            <Box flexDirection="row" alignItems="center" columnGap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
-              <Link href={p.url} label={`#${p.number}`} />
-              <Box flexShrink={1} minWidth={0}>
-                <Text size="caption" dimColor tabular wrap="truncate">
-                  {['', p.wait, p.owner, p.repo].filter(x => x !== null).join(' · ')}
+          {/* The number and the wait never shrink; whose it is and where truncate; when the
+              action does not fit beside them, it drops to its own line instead of squeezing. */}
+          <Box flexDirection="row" alignItems="center" flexWrap="wrap" justifyContent="space-between" columnGap="sm">
+            <Box flexDirection="row" alignItems="center" columnGap="xs" flexShrink={1} minWidth={0}>
+              <Box flexShrink={0}>
+                <Link href={p.url} label={`#${p.number}`} />
+              </Box>
+              <Box flexShrink={0}>
+                <Text size="caption" dimColor tabular>
+                  {`· ${p.wait}`}
                 </Text>
               </Box>
+              {(p.owner || p.repo) && (
+                <Box flexShrink={1} minWidth={0}>
+                  <Text size="caption" dimColor wrap="truncate">
+                    {['', p.owner, p.repo].filter(x => x !== null).join(' · ')}
+                  </Text>
+                </Box>
+              )}
               {p.size && (
                 <Text size="caption" color="warning" weight="semibold">
                   {p.size}
@@ -324,7 +332,7 @@ export const register: Register = (on, options) => {
             </Box>
             {p.act && p.prompt && (
               // a button draws its own text colour, so the signal's colour rides on a dot beside it
-              <Box flexDirection="row" alignItems="center" gap="xs">
+              <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="xs" flexGrow={1} flexShrink={0}>
                 {p.tone && (
                   <Text size="caption" color={p.tone}>
                     ●

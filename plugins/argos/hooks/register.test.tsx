@@ -201,15 +201,11 @@ test('a narrow pane: the summary under the title, an icon to check, sections wit
   await ui.unmount()
 })
 
-test('a wide pane spells out Check now', async ($, on) => {
+test('Check now is an icon at any width', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
-  // the pane's own width decides, not the window's
-  const narrow = await $.ui.mount({ ...PANE, viewport: { columns: 200, rows: 40 } })
-  expect((await narrow.find({ key: 'check' }))?.text).toBe('↻')
-  await narrow.unmount()
-  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 90 } })
-  expect((await ui.find({ key: 'check' }))?.text).toBe('↻  Check now')
+  const ui = await $.ui.mount({ ...PANE, viewport: { columns: 200, rows: 40 }, props: { ...PANE.props, bodyColumns: 120 } })
+  expect((await ui.find({ key: 'check' }))?.text).toBe('↻')
   await ui.unmount()
 })
 
