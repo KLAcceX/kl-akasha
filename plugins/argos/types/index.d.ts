@@ -44,8 +44,6 @@ declare module 'claude-code' {
       selected: string[]
       // the folded section the person opened ('team'); '' = none
       open: string
-      // `${round.at}|repo,repo` of the last selection put in the prompt
-      sent: string
       // the repo the list is narrowed to (owner/name); '' = every connected repo
       filter: string
     }

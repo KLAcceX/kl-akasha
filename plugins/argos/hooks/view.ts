@@ -8,6 +8,10 @@ const base = (code: string) => code.split(':')[0]
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
 const shortRepo = (repo: string) => repo.split('/')[1] ?? repo
 export const keyOf = (p: Item) => `${p.repo}#${p.number}`
+// Whether text names this PR: its URL not followed by another digit, so .../pull/1 is never
+// found inside .../pull/12.
+export const mentions = (text: string | undefined, url: string) =>
+  Boolean(text) && new RegExp(`${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`).test(text!)
 export const hhmm = (iso: string) => {
   const d = new Date(iso)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -95,8 +99,8 @@ export function act(p: Item, lang: string): { label: string; prompt: string } | 
   if (s === 'waiting') return has(p, 'no_review') ? { label: t(lang, 'a_no_review'), prompt: t(lang, 'prompt_nudge', p.url) } : null
   if (p.kind === 'review') return { label: t(lang, has(p, 'changed') ? 'a_changed' : 'a_review'), prompt: prompt([p], lang) }
   if (p.kind === 'other') return has(p, 'changed', 'no_owner', 'no_review') ? { label: t(lang, has(p, 'changed') ? 'a_changed' : 'a_review'), prompt: prompt([p], lang) } : null
-  const k = top(p)?.split(':')[0]
-  return k ? { label: t(lang, `a_${k}`), prompt: prompt([p], lang) } : null
+  const [k, n] = top(p)?.split(':') ?? []
+  return k ? { label: t(lang, `a_${k}`, Number(n)), prompt: prompt([p], lang) } : null
 }
 
 // Review quality drops past about 400 changed lines; past 1,000, most defects go unseen.
@@ -111,10 +115,9 @@ export function reason(error: string, lang: string) {
 }
 
 // The pane's own state: the PRs picked for the AI (repo#number), the folded section opened,
-// the last selection put in the prompt (`${round.at}|repo#n,repo#n`), and the repo the list
-// is narrowed to ('' = all).
-export type Ui = { selected: string[]; open: string; sent: string; filter: string }
-export const UI: Ui = { selected: [], open: '', sent: '', filter: '' }
+// and the repo the list is narrowed to ('' = all).
+export type Ui = { selected: string[]; open: string; filter: string }
+export const UI: Ui = { selected: [], open: '', filter: '' }
 
 // The request the send button puts in the prompt: my PRs to fix, the others to review.
 export function prompt(prs: Item[], lang: string) {
@@ -127,7 +130,8 @@ export function prompt(prs: Item[], lang: string) {
   ].join('\n')
 }
 
-type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui> }
+// prompt: what the prompt holds now, so a PR already asked for there shows "In prompt ✓".
+type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string }
 
 export function toViewModel(r: Round | null, o: Opts) {
   const { now, lang } = o
@@ -162,8 +166,10 @@ export function toViewModel(r: Round | null, o: Opts) {
   // a PR names its repo only when the list mixes repos
   const showRepo = names.length > 1 && !scope
 
+  const asked = (url: string) => mentions(o.prompt, url)
   const row = (p: Item) => {
     const a = act(p, lang)
+    const picked = picks.has(keyOf(p))
     return {
       key: keyOf(p),
       url: p.url,
@@ -178,21 +184,36 @@ export function toViewModel(r: Round | null, o: Opts) {
       act: a?.label ?? null,
       prompt: a?.prompt ?? null,
       tone: a ? tone(p) : null,
-      isPicked: picks.has(keyOf(p)),
+      // a PR with nothing to do says where it stands instead
+      status: a ? null : verb(p, lang),
+      // already asked for in the prompt: the action says so instead of asking twice
+      inPrompt: asked(p.url),
+      isPicked: picked,
+      // what a screen reader hears: which PR each control acts on
+      pickLabel: t(lang, picked ? 'lbl_unpick' : 'lbl_pick', p.number, p.title),
+      actLabel: a ? t(lang, 'lbl_act', a.label, p.number, p.title) : null,
     }
   }
   const sections = SECTIONS.map(id => {
     const prs = inScope.filter(p => sectionOf(p) === id).sort(byRank)
     const canPick = BATCH.includes(id)
     const chosen = canPick ? prs.filter(p => picks.has(keyOf(p))).length : 0
+    const title = t(lang, `s_${id}`)
+    const pick = chosen === 0 ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const)
+    // a folded section never hides a pick: it stays open while it holds one
+    const isFolded = FOLDED.includes(id) && ui.open !== id && chosen === 0
     return {
       id,
-      title: t(lang, `s_${id}`),
+      title,
       count: prs.length,
       canPick,
-      pick: chosen === 0 ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const),
+      picked: chosen,
+      pick,
       keys: canPick ? prs.map(keyOf) : [],
-      isFolded: FOLDED.includes(id) && ui.open !== id,
+      isFolded,
+      canFold: FOLDED.includes(id) && chosen === 0,
+      pickLabel: t(lang, pick === 'all' ? 'lbl_unpick_section' : 'lbl_pick_section', title, prs.length),
+      foldLabel: t(lang, 'lbl_fold', title, prs.length, isFolded),
       prs: prs.map(row),
     }
   })
@@ -209,17 +230,19 @@ export function toViewModel(r: Round | null, o: Opts) {
   const repos =
     names.length > 1
       ? [
-          { id: '', label: `${t(lang, 'f_all')} · ${all.length}`, isActive: !scope },
-          ...names.map(repo => ({ id: repo, label: `${short(repo)} · ${all.filter(p => p.repo === repo).length}`, isActive: scope === repo })),
+          { id: '', name: t(lang, 'f_all'), count: all.length, isActive: !scope },
+          ...names.map(repo => ({ id: repo, name: short(repo), count: all.filter(p => p.repo === repo).length, isActive: scope === repo })),
         ]
       : []
 
-  // Send carries every pick, also one outside the narrowed repo; the summary says how many.
+  // Send carries every pick, also one outside the narrowed repo; the summary says how many,
+  // and how many picks left the list (merged, closed) since they were made.
   const items = all.filter(p => BATCH.includes(sectionOf(p)) && picks.has(keyOf(p)))
   const fix = items.filter(p => p.kind === 'mine').length
   const hidden = items.filter(p => scope && p.repo !== scope).length
-  const sendKey = `${r.at}|${items.map(keyOf).join(',')}`
-  const block = o.running ? t(lang, 'ui_send_wait') : null
+  const known = new Set(all.map(keyOf))
+  const gone = ui.selected.filter(k => !known.has(k)).length
+  const block = o.running ? t(lang, 'ui_send_wait') : !items.length ? t(lang, 'ui_send_idle') : null
   const warn = r.error || isLate ? t(lang, 'ui_send_stale', okAt ? hhmm(okAt) : '') : items.length > MANY ? t(lang, 'ui_send_many', items.length) : null
 
   return {
@@ -231,14 +254,27 @@ export function toViewModel(r: Round | null, o: Opts) {
     sections,
     send: {
       count: items.length,
-      prompt: prompt(items, lang),
-      key: sendKey,
-      inPrompt: items.length > 0 && ui.sent === sendKey,
-      summary: !items.length ? '' : t(lang, 'ui_send_summary', fix, items.length - fix) + (hidden ? ` ${t(lang, 'ui_send_hidden', hidden)}` : ''),
+      // a PR already asked for in the prompt is not asked for twice
+      prompt: prompt(items.some(p => !asked(p.url)) ? items.filter(p => !asked(p.url)) : items, lang),
+      urls: items.map(p => p.url),
+      inPrompt: items.length > 0 && items.every(p => asked(p.url)),
+      summary: [
+        items.length ? t(lang, 'ui_send_summary', fix, items.length - fix) : '',
+        hidden ? t(lang, 'ui_send_hidden', hidden) : '',
+        gone ? t(lang, 'ui_send_gone', gone) : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      // the picks that still mean something, for a press to keep
+      keep: ui.selected.filter(k => known.has(k)),
       block,
       warn,
     },
-    band: pending[0] ? { count: pending.length, verb: verb(pending[0], lang), ref: `${shortRepo(pending[0].repo)}#${pending[0].number}` } : null,
+    // the band names what needs me first, the same count as Your move
+    band: (() => {
+      const move = all.filter(p => sectionOf(p) === 'move').sort(byRank)
+      return move[0] ? { count: move.length, verb: verb(move[0], lang), ref: `${shortRepo(move[0].repo)}#${move[0].number}` } : null
+    })(),
   }
 }
 export type ViewModel = ReturnType<typeof toViewModel>

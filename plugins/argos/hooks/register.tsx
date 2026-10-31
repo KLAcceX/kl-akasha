@@ -8,7 +8,8 @@ import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
-import { UI, toViewModel } from './view'
+import { DEMO_ROUND } from './demo-round'
+import { UI, mentions, toViewModel } from './view'
 import type { Round } from '../types'
 
 export { act, byRank, prompt, rank, reason, sectionOf, sizeTag, toViewModel, tone, verb } from './view'
@@ -24,7 +25,8 @@ const isHidden = atom(HIDDEN, false)
 const isRunning = atom(RUNNING, false)
 const selected = atom({ plugin: 'argos', key: 'selected' } as const, UI.selected)
 const open = atom({ plugin: 'argos', key: 'open' } as const, UI.open)
-const sent = atom({ plugin: 'argos', key: 'sent' } as const, UI.sent)
+// prompt requests being filled right now: a second press of the same one waits for nothing
+const busy = new Set<string>()
 const filter = atom({ plugin: 'argos', key: 'filter' } as const, UI.filter)
 
 // The KL · Akasha mark (brand/kl/final): the face centred in a full L-coloured frame,
@@ -39,7 +41,8 @@ const ICON =
 const RED = '#E5384A'
 
 const LAYER = 'rgba(127, 127, 127, 0.10)'
-const PICKED = 'rgba(217, 119, 87, 0.12)'
+// a picked row: a neutral lift, so the accent stays the send button's alone
+const PICKED = 'rgba(127, 127, 127, 0.16)'
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -53,15 +56,18 @@ async function roundFile($: any) {
   return `${home}/.claude/kl-akasha/argos/last-round.json`
 }
 
-// Shows what the last round (from any session) wrote.
+// Shows what the last round (from any session) wrote, unless what is on screen is newer
+// (a failure this session saw that the file does not know about).
 async function load($: any): Promise<Round | null> {
-  if ((await $.state.get(DEMO)).value) return (await $.state.get(ROUND)).value
+  const shown: Round | null = (await $.state.get(ROUND)).value ?? null
+  if ((await $.state.get(DEMO)).value) return shown
   try {
     const last: Round = JSON.parse(await $.fs.read(await roundFile($)))
+    if (shown && Date.parse(shown.at) > Date.parse(last.at)) return shown
     await $.state.set(ROUND, last)
     return last
   } catch {
-    return null
+    return shown
   }
 }
 
@@ -96,9 +102,14 @@ async function tick($: any, options: PluginOptions, force: boolean) {
       await $.state.set(HIDDEN, false)
     }
   } catch (err) {
-    const { value } = await $.state.get(ROUND)
-    // keep okAt: the data on screen is still from the last round that worked
-    await $.state.set(ROUND, { ...(value ?? {}), at: new Date(now).toISOString(), okAt: value?.okAt ?? null, error: String(err) })
+    // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
+    // this attempt's. Only a run that died before writing (killed at the time limit) gets the
+    // wrapper's message. Either way okAt stays the last round that worked.
+    const fresh = await load($)
+    if (!fresh?.error || Date.parse(fresh.at) < now) {
+      const { value } = await $.state.get(ROUND)
+      await $.state.set(ROUND, { ...(value ?? {}), at: new Date(now).toISOString(), okAt: value?.okAt ?? null, error: String(err) })
+    }
   } finally {
     await $.state.set(RUNNING, false)
   }
@@ -142,12 +153,16 @@ export const register: Register = (on, options) => {
     }
     // a sample round with several repos and every signal, to look at the pane without one
     if (args[0] === 'demo') {
-      const sample: Round = JSON.parse(await $.fs.read(`${$.plugin.root}/hooks/demo-round.json`))
       const at = new Date(await $.clock.now()).toISOString()
       await $.state.set(DEMO, true)
-      await $.state.set(ROUND, { ...sample, at, okAt: at })
+      await $.state.set(ROUND, { ...DEMO_ROUND, at, okAt: at })
       await $.ui.open({ id: PANE, title: 'Argos' })
       return { text: t(lang, 'ui_demo') }
+    }
+    // leaving the demo drops its sample, so the next load shows the real round
+    if ((await $.state.get(DEMO)).value) {
+      await $.state.set(ROUND, null)
+      await update($, selected, () => [])
     }
     await $.state.set(DEMO, false)
     await openPane($, options)
@@ -156,10 +171,10 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const running = await read($, isRunning)
-    const vm = toViewModel(await read($, round), { now: await $.clock.now(), lang, minutes, running })
+    const [running, last, hidden, now] = await Promise.all([read($, isRunning), read($, round), read($, isHidden), $.clock.now()])
+    const vm = toViewModel(last, { now, lang, minutes, running })
     const band = vm.state === 'ok' ? vm.band : null
-    if (e.props.hasSurvey || (await read($, isHidden)) || (!running && !band && !vm.status)) return next(e)
+    if (e.props.hasSurvey || hidden || (!running && !band && !vm.status)) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
@@ -189,14 +204,15 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
-    const running = await read($, isRunning)
-    const vm = toViewModel(await read($, round), {
-      now: await $.clock.now(),
-      lang,
-      minutes,
-      running,
-      ui: { selected: await read($, selected), open: await read($, open), sent: await read($, sent), filter: await read($, filter) },
-    })
+    const [running, last, picks, opened, narrowed, box] = await Promise.all([
+      read($, isRunning),
+      read($, round),
+      read($, selected),
+      read($, open),
+      read($, filter),
+      $.prompt.read().catch(() => ({ text: '' })),
+    ])
+    const vm = toViewModel(last, { now: await $.clock.now(), lang, minutes, running, ui: { selected: picks, open: opened, filter: narrowed }, prompt: box.text })
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
     const fill = (color: string) => (hasSvg ? color : undefined)
@@ -262,30 +278,47 @@ export const register: Register = (on, options) => {
       )
     // narrows vm for TypeScript; every other state returned above
     if (vm.state !== 'ok') return page()
+    const { send } = vm
 
+    // A pick starts from the picks that still mean something, so a PR that left the list is
+    // dropped by the next press instead of riding along forever.
     const toggle = (keys: string[], pick: boolean) =>
-      void update($, selected, list => (pick ? [...new Set([...list, ...keys])] : list.filter(k => !keys.includes(k))))
+      void update($, selected, () => (pick ? [...new Set([...send.keep, ...keys])] : send.keep.filter(k => !keys.includes(k))))
     // A checkbox is a one-glyph button: the kit's own way to a control that is only a mark,
-    // so the box itself takes the press (focus and pointer invert it). The terminal writes
-    // brackets.
+    // so the box itself takes the press (focus and pointer invert it). Its label says which PR
+    // or section it picks. The terminal writes brackets. A row with nothing to pick keeps the
+    // same column with an invisible box, so every title starts at one left edge.
     const GLYPH = hasSvg ? { all: '☑', some: '⊟', none: '☐' } : { all: '[x]', some: '[-]', none: '[ ]' }
-    const check = (key: string, state: 'all' | 'some' | 'none', onPress: () => void) => (
-      <Button key={key} plain={true} hover={{ color: 'claude' }} onPress={onPress}>
-        <Text color={state === 'none' ? undefined : 'claude'}>{GLYPH[state]}</Text>
+    const check = (key: string, state: 'all' | 'some' | 'none', label: string, onPress: () => void) => (
+      <Button key={key} plain={true} label={label} onPress={onPress}>
+        <Text>{GLYPH[state]}</Text>
       </Button>
     )
+    // an em space the width of a box, which a screen reader does not announce
+    const gap = <Text>{hasSvg ? '\u2003' : '   '}</Text>
     // Puts one request in the prompt without sending it: appended on a new line when there
-    // is a draft, never twice.
-    const fillPrompt = async (request: string) => {
-      const { text } = await $.prompt.read()
-      if (!text.includes(request)) await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
+    // is a draft, never twice. Two quick presses meet one lock, and a request whose PRs are
+    // all in the prompt already adds nothing.
+    const fillPrompt = async (request: string, urls: string[]) => {
+      if (busy.has(request)) return
+      busy.add(request)
+      try {
+        const { text } = await $.prompt.read()
+        // already there (asked before, or pasted by hand): add nothing, but show that it is
+        if (!urls.every(u => mentions(text, u)))
+          await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
+        $.ui.invalidate('ui.render')
+      } finally {
+        busy.delete(request)
+      }
     }
 
     type Section = (typeof vm.sections)[number]
     type Pr = Section['prs'][number]
-    // One PR on two lines, so it fits a narrow sidebar: the title, then where it lives, how
-    // long it has waited, whose it is, a size or AI mark when one applies, and on the right
-    // the one action that puts this PR in the prompt, in the colour of what it asks.
+    // One PR on two lines, so it fits a narrow sidebar: the title, then its number, how long
+    // it has waited, whose it is and where, a size or AI mark when one applies, and on the
+    // right the one action that puts this PR in the prompt, its reason in its words, its
+    // colour on the dot beside it (a button draws its own text colour).
     const prRow = (p: Pr, canPick: boolean) => (
       <Box
         key={p.key}
@@ -298,7 +331,7 @@ export const register: Register = (on, options) => {
         borderStyle={hasSvg && p.isPicked ? 'round' : undefined}
         borderColor={p.isPicked ? fill(PICKED) : undefined}
       >
-        {canPick && check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked))}
+        {canPick && p.act ? check(`box:${p.key}`, p.isPicked ? 'all' : 'none', p.pickLabel, () => toggle([p.key], !p.isPicked)) : gap}
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text wrap="truncate">{p.title}</Text>
           {/* The number and the wait never shrink; whose it is and where truncate; when the
@@ -313,37 +346,42 @@ export const register: Register = (on, options) => {
                   {`· ${p.wait}`}
                 </Text>
               </Box>
-              {(p.owner || p.repo) && (
+              {(p.owner || p.repo || p.size || p.isAI) && (
                 <Box flexShrink={1} minWidth={0}>
                   <Text size="caption" dimColor wrap="truncate">
-                    {['', p.owner, p.repo].filter(x => x !== null).join(' · ')}
+                    {['', p.owner, p.repo, p.size, p.isAI ? t(lang, 'ui_ai') : null].filter(x => x !== null).join(' · ')}
                   </Text>
                 </Box>
               )}
-              {p.size && (
-                <Text size="caption" color="warning" weight="semibold">
-                  {p.size}
-                </Text>
-              )}
-              {p.isAI && (
-                <Text size="caption" color="claude" weight="semibold">
-                  {t(lang, 'ui_ai')}
-                </Text>
-              )}
             </Box>
+            {p.status && (
+              <Box flexDirection="row" justifyContent="flex-end" flexGrow={1} flexShrink={0}>
+                <Text size="caption" dimColor>
+                  {p.status}
+                </Text>
+              </Box>
+            )}
             {p.act && p.prompt && (
-              // a button draws its own text colour, so the signal's colour rides on a dot beside it
               <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="xs" flexGrow={1} flexShrink={0}>
-                {p.tone && (
-                  <Text size="caption" color={p.tone}>
-                    ●
+                {p.inPrompt ? (
+                  <Text key={`act:${p.key}`} size="caption" dimColor>
+                    {t(lang, 'ui_in_prompt')}
                   </Text>
+                ) : (
+                  // a Box, not a fragment: the kit draws a fragment as a column
+                  <Box flexDirection="row" alignItems="center" gap="xs">
+                    {p.tone && (
+                      <Text size="caption" color={p.tone}>
+                        ●
+                      </Text>
+                    )}
+                    <Button key={`act:${p.key}`} plain={true} label={p.actLabel ?? undefined} onPress={() => void fillPrompt(p.prompt!, [p.url])}>
+                      <Text size="caption" weight="semibold">
+                        {`${p.act} ›`}
+                      </Text>
+                    </Button>
+                  </Box>
                 )}
-                <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt!)}>
-                  <Text size="caption" weight="semibold">
-                    {`${p.act} ›`}
-                  </Text>
-                </Button>
               </Box>
             )}
           </Box>
@@ -351,8 +389,9 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // One section: its title and count (a box that picks them all where a batch makes sense,
-    // a fold on the team's), then its PRs. An empty section is left out, except "Your move",
-    // which says nothing needs me.
+    // a fold on the team's), then its PRs. "Your move" leads in the body size; the rest are
+    // quiet captions. An empty section is left out, except "Your move", which says nothing
+    // needs me.
     const section = (s: Section) => {
       if (s.id === 'move' && !s.count)
         return (
@@ -361,19 +400,20 @@ export const register: Register = (on, options) => {
           </Text>
         )
       if (!s.count) return null
-      const title = `${s.title} · ${s.count}`
+      const title = `${s.title} · ${s.count}${s.picked ? ` · ${t(lang, 'ui_picked', s.picked)}` : ''}`
+      const lead = s.id === 'move'
       return (
         <Box key={`sec:${s.id}`} flexDirection="column" gap="xs">
           <Box flexDirection="row" alignItems="center" gap="sm" paddingX="sm">
-            {s.canPick && !s.isFolded && check(`box:${s.id}`, s.pick, () => toggle(s.keys, s.pick !== 'all'))}
-            {s.id === 'team' ? (
-              <Button key="fold:team" plain={true} hover={{ color: 'claude' }} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
-                <Text size="caption" weight="semibold" dimColor>
+            {s.canPick && !s.isFolded ? check(`box:${s.id}`, s.pick, s.pickLabel, () => toggle(s.keys, s.pick !== 'all')) : gap}
+            {s.canFold || s.isFolded ? (
+              <Button key={`fold:${s.id}`} plain={true} dimColor={true} label={s.foldLabel} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
+                <Text size="caption" weight="semibold">
                   {`${title}  ${s.isFolded ? '▾' : '▴'}`}
                 </Text>
               </Button>
             ) : (
-              <Text size="caption" weight="semibold" dimColor>
+              <Text size={lead ? 'body' : 'caption'} weight="semibold" dimColor={!lead}>
                 {title}
               </Text>
             )}
@@ -383,70 +423,84 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // Narrowing to one repo, when there is more than one: the active chip a real button,
-    // the others plain and dim. Picks survive; the send bar counts the ones elsewhere.
-    const repoChips = vm.repos.length > 0 && (
-      <Box key="repos" flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
-        {vm.repos.map(f =>
-          f.isActive ? (
-            <Button key={`repo:${f.id || 'all'}`} variant="secondary" onPress={() => {}}>
-              {f.label}
+    // Narrowing to one repo, when there is more than one: chips up to six repos, the active one
+    // a real button; past that a picker, so the list never starts five lines down.
+    const narrowTo = (id: string) => void update($, filter, () => id)
+    // a picker where the surface has one; chips otherwise
+    const Select = (ui as { Select?: any }).Select
+    const repoPick =
+      vm.repos.length === 0 ? null : vm.repos.length > 7 && Select ? (
+        <Select
+          key="repo-select"
+          label={t(lang, 'ui_repo')}
+          value={vm.repos.find(r => r.isActive)?.id || 'all'}
+          options={vm.repos.map(r => ({ value: r.id || 'all', label: `${r.name} · ${r.count}` }))}
+          onSelect={(v: string) => narrowTo(v === 'all' ? '' : v)}
+        />
+      ) : (
+        <Box key="repos" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="md" rowGap="xs">
+          {vm.repos.map(r => (
+            <Button
+              key={`repo:${r.id || 'all'}`}
+              variant={r.isActive ? 'secondary' : undefined}
+              plain={r.isActive ? undefined : true}
+              label={t(lang, 'lbl_repo', r.name, r.count, r.isActive)}
+              onPress={() => narrowTo(r.id)}
+            >
+              <Text size="caption">{r.name}</Text>
+              <Text size="caption" dimColor>{` ${r.count}`}</Text>
             </Button>
-          ) : (
-            <Button key={`repo:${f.id || 'all'}`} plain={true} dimColor={true} onPress={() => void update($, filter, () => f.id)}>
-              {f.label}
-            </Button>
-          ),
-        )}
-      </Box>
-    )
+          ))}
+        </Box>
+      )
     const addRow = (
       <Box key="add-repo-row" flexDirection="row" paddingX="sm">
-        <Button key="add-repo" plain={true} hover={{ color: 'claude' }} onPress={() => void addRepo($)}>
-          <Text color="claude">{t(lang, 'ui_add_repo')}</Text>
+        <Button key="add-repo" plain={true} dimColor={true} label={t(lang, 'lbl_add_repo')} onPress={() => void addRepo($)}>
+          {t(lang, 'ui_add_repo')}
         </Button>
       </Box>
     )
 
-    // The send bar shows only once something is picked: what will go, and the one button
-    // that puts it in the prompt (never sends it).
-    const { send } = vm
+    // The send bar sits under the head and keeps its place: with nothing picked it says how to
+    // use it and its button waits; with picks it says what will go and adds them to the prompt
+    // (never sends). The one accent of the pane is its button.
     const sendNow = async () => {
       if (send.block) return
-      await fillPrompt(send.prompt)
-      await update($, sent, () => send.key)
+      await fillPrompt(send.prompt, send.urls)
+      await update($, selected, () => send.keep)
     }
-    const footer = send.count > 0 && (
+    const sendBar = (
       <Box
         key="send-bar"
-        flexDirection="row"
-        alignItems="center"
-        justifyContent="space-between"
-        flexWrap="wrap"
-        gap="sm"
+        flexDirection="column"
+        gap="xs"
         backgroundColor={fill(LAYER)}
         borderStyle={hasSvg ? 'round' : undefined}
         borderColor={fill(LAYER)}
         paddingX="md"
         paddingY="sm"
       >
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text size="caption">{send.block ?? send.summary}</Text>
-          {send.warn && !send.block && (
-            <Text size="caption" color="warning">
-              {send.warn}
-            </Text>
+        <Text size="caption" dimColor={Boolean(send.block)}>
+          {send.summary || send.block}
+        </Text>
+        <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="md">
+          {send.count > 0 && (
+            <Button key="clear" plain={true} dimColor={true} onPress={() => void update($, selected, () => [])}>
+              {t(lang, 'ui_clear')}
+            </Button>
           )}
+          <Button key="send" variant={send.block ? 'secondary' : 'primary'} dimColor={Boolean(send.block)} onPress={() => void sendNow()}>
+            {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
+          </Button>
         </Box>
-        <Button key="clear" plain={true} dimColor={true} onPress={() => void update($, selected, () => [])}>
-          {t(lang, 'ui_clear')}
-        </Button>
-        <Button key="send" variant={send.block ? 'secondary' : 'primary'} dimColor={Boolean(send.block)} onPress={() => void sendNow()}>
-          {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
-        </Button>
+        {send.warn && send.count > 0 && (
+          <Text size="caption" color="warning">
+            {send.warn}
+          </Text>
+        )}
       </Box>
     )
 
-    return frame(top(vm.summary), repoChips, ...vm.sections.map(section), addRow, footer)
+    return frame(top(vm.summary), sendBar, repoPick, ...vm.sections.map(section), addRow)
   })
 }
