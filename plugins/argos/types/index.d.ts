@@ -9,6 +9,12 @@ export type Item = {
   // someone else's PR the user already reviewed
   reviewed?: boolean
   createdAt: string
+  // how long it has waited on whoever holds it (my review: since I was asked)
+  since?: string
+  // lines changed (additions + deletions)
+  size?: number
+  // opened by a coding agent (Copilot, Devin...)
+  isAI?: boolean
   signals: string[]
 }
 
@@ -36,12 +42,12 @@ declare module 'claude-code' {
       isDemo: boolean
       // PRs picked to send to the AI (owner/name#number)
       selected: string[]
-      // the repo whose PRs are shown; '' = none
+      // the folded section the person opened ('team'); '' = none
       open: string
       // `${round.at}|repo,repo` of the last selection put in the prompt
       sent: string
-      // the list's filter: every open PR, the ones that need my help, mine to fix, all mine
-      filter: 'all' | 'help' | 'fix' | 'mine'
+      // the repo the list is narrowed to (owner/name); '' = every connected repo
+      filter: string
     }
   }
 }

@@ -6,7 +6,6 @@ import type { Item, Round } from '../types'
 
 const base = (code: string) => code.split(':')[0]
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
-const num = (p: Item, code: string) => Number(p.signals.find(s => base(s) === code)?.split(':')[1] ?? 0)
 const shortRepo = (repo: string) => repo.split('/')[1] ?? repo
 export const keyOf = (p: Item) => `${p.repo}#${p.number}`
 export const hhmm = (iso: string) => {
@@ -15,24 +14,25 @@ export const hhmm = (iso: string) => {
 }
 
 // What to do first: merge, then a late review that blocks a teammate, then unblock mine,
-// answer, review on time, ask for review; teammates' PRs after, drafts last.
+// answer, review on time, find a reviewer; teammates' PRs after, drafts last.
 export function rank(p: Item): number {
   if (p.kind === 'mine') {
     if (has(p, 'ready')) return 1
     if (has(p, 'conflict', 'ci_failed', 'changes_requested')) return 3
     if (has(p, 'threads', 'unanswered', 'new_reviews')) return 4
-    if (has(p, 'no_review')) return 6
+    if (has(p, 'no_owner', 'no_review')) return 6
     return 9
   }
   if (p.kind === 'review') return has(p, 'late') ? 2 : 5
   if (p.isDraft) return 10
-  if (has(p, 'no_review')) return 7
+  if (has(p, 'no_owner', 'no_review')) return 7
   return p.signals.length ? 8 : 9
 }
-export const byRank = (a: Item, b: Item) => rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt)
+const since = (p: Item) => p.since ?? p.createdAt
+export const byRank = (a: Item, b: Item) => rank(a) - rank(b) || since(a).localeCompare(since(b))
 
 // The signal that names the verb, in a fixed order.
-const ORDER = ['conflict', 'ci_failed', 'changes_requested', 'unanswered', 'threads', 'new_reviews', 'ready', 'changed', 'no_review', 'late']
+const ORDER = ['conflict', 'ci_failed', 'changes_requested', 'unanswered', 'threads', 'new_reviews', 'ready', 'changed', 'no_owner', 'no_review', 'late']
 const top = (p: Item) => ORDER.map(k => p.signals.find(s => base(s) === k)).find(Boolean)
 
 export function verb(p: Item, lang: string): string {
@@ -52,33 +52,55 @@ export function ageShort(iso: string, now: number, lang: string): string {
   return d < 14 ? t(lang, 'u_d', d) : t(lang, 'u_w', Math.floor(d / 7))
 }
 
-// The one or two words on a PR's action button: what the press asks the AI to do.
-export function act(p: Item, lang: string): string {
-  if (p.kind === 'review') return t(lang, 'a_review')
+// The inbox: one section per next move, in this order. move: what waits on me (reviews I
+// was asked for, my PRs that came back); ready: mine to merge; waiting: mine on someone
+// else's desk; drafts: mine not out yet; team: teammates' PRs nobody asked me about.
+export const SECTIONS = ['move', 'ready', 'waiting', 'drafts', 'team'] as const
+export type Section = (typeof SECTIONS)[number]
+// Sections the person can send to the AI in a batch; the others take one action per PR.
+const BATCH: Section[] = ['move', 'team']
+// Folded until opened: the rest of the team's work is context, not a to-do.
+export const FOLDED: Section[] = ['team']
+
+export function sectionOf(p: Item): Section {
+  if (p.kind === 'review') return p.isDraft ? 'team' : 'move'
+  if (p.kind !== 'mine') return 'team'
+  if (p.isDraft) return 'drafts'
+  if (has(p, 'ready')) return 'ready'
+  if (has(p, 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews', 'no_owner')) return 'move'
+  return 'waiting'
+}
+
+// The colour of a PR's action, by what it asks: red when blocked, amber when someone
+// waits, blue for a conversation, purple for a changed PR, green to merge.
+export type Tone = 'error' | 'warning' | 'suggestion' | 'merged' | 'success'
+export function tone(p: Item): Tone | null {
+  if (p.kind === 'review') return has(p, 'changed') ? 'merged' : 'warning'
+  if (has(p, 'conflict', 'ci_failed', 'changes_requested')) return p.kind === 'mine' ? 'error' : null
+  if (has(p, 'threads', 'unanswered', 'new_reviews')) return 'suggestion'
+  if (has(p, 'ready')) return 'success'
+  if (has(p, 'changed')) return 'merged'
+  if (has(p, 'no_owner', 'no_review')) return 'warning'
+  return null
+}
+
+// The one or two words on a PR's action, and the request that press puts in the prompt.
+// A teammate's PR only offers a review, and only when it waits on one.
+export function act(p: Item, lang: string): { label: string; prompt: string } | null {
+  const s = sectionOf(p)
+  if (s === 'drafts') return { label: t(lang, 'a_draft'), prompt: t(lang, 'prompt_ready', p.url) }
+  if (s === 'ready') return { label: t(lang, 'a_ready'), prompt: t(lang, 'prompt_merge', p.url) }
+  if (p.kind === 'mine' && has(p, 'no_owner') && !has(p, 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews'))
+    return { label: t(lang, 'a_no_owner'), prompt: t(lang, 'prompt_owner', p.url) }
+  if (s === 'waiting') return has(p, 'no_review') ? { label: t(lang, 'a_no_review'), prompt: t(lang, 'prompt_nudge', p.url) } : null
+  if (p.kind === 'review') return { label: t(lang, has(p, 'changed') ? 'a_changed' : 'a_review'), prompt: prompt([p], lang) }
+  if (p.kind === 'other') return has(p, 'changed', 'no_owner', 'no_review') ? { label: t(lang, has(p, 'changed') ? 'a_changed' : 'a_review'), prompt: prompt([p], lang) } : null
   const k = top(p)?.split(':')[0]
-  return t(lang, k ? `a_${k}` : 'a_open')
+  return k ? { label: t(lang, `a_${k}`), prompt: prompt([p], lang) } : null
 }
 
-// The four columns of a repo row, in this order everywhere (icons, legend, tests).
-export const COLUMNS = ['comments', 'changed', 'blocked', 'review'] as const
-export type Column = (typeof COLUMNS)[number]
-type Counts = Record<Column, number>
-
-// What a PR adds to its repo's columns. Comments and blocked count my PRs (the AI fixes
-// them); changed and review count the PRs I review (the AI drafts the review).
-export function cells(p: Item): Counts {
-  const mine = p.kind === 'mine'
-  return {
-    comments: mine ? num(p, 'threads') + num(p, 'new_reviews') + (has(p, 'unanswered') ? 1 : 0) : 0,
-    changed: !mine && has(p, 'changed') ? 1 : 0,
-    blocked: mine && has(p, 'conflict', 'ci_failed', 'changes_requested') ? 1 : 0,
-    review: p.kind === 'review' ? 1 : 0,
-  }
-}
-const counts = (p: Item) => Object.values(cells(p)).some(Boolean)
-// The column that names a PR's or a repo's colour: blocked, then review, then the rest.
-const WEIGHT: Column[] = ['blocked', 'review', 'comments', 'changed']
-export const tone = (c: Counts): Column => WEIGHT.find(k => c[k] > 0) ?? 'comments'
+// Review quality drops past about 400 changed lines; past 1,000, most defects go unseen.
+export const sizeTag = (n?: number) => (n === undefined ? null : n >= 1000 ? 'XL' : n >= 400 ? 'L' : null)
 // More PRs than this in one send gets a warning: the AI works through them in order.
 export const MANY = 10
 
@@ -88,23 +110,11 @@ export function reason(error: string, lang: string) {
   return t(lang, 'err_generic')
 }
 
-// The list's filters, in button order. help: teammates' PRs that wait on me (a review
-// asked, or one with no review yet or changed since mine), drafts aside. fix: my PRs that
-// came back with something to correct. mine: every PR I opened.
-export const FILTERS = ['all', 'help', 'fix', 'mine'] as const
-export type Filter = (typeof FILTERS)[number]
-const MATCH: Record<Filter, (p: Item) => boolean> = {
-  all: () => true,
-  help: p => p.kind !== 'mine' && !p.isDraft && (p.kind === 'review' || has(p, 'no_review', 'changed')),
-  fix: p => p.kind === 'mine' && has(p, 'changes_requested', 'threads', 'unanswered', 'new_reviews', 'conflict', 'ci_failed'),
-  mine: p => p.kind === 'mine',
-}
-
-// The pane's own state: the PRs picked for the AI (repo#number), the repo opened to show
-// its PRs, the last selection put in the prompt (`${round.at}|repo#n,repo#n`), and the
-// filter on the list.
-export type Ui = { selected: string[]; open: string; sent: string; filter: Filter }
-export const UI: Ui = { selected: [], open: '', sent: '', filter: 'all' }
+// The pane's own state: the PRs picked for the AI (repo#number), the folded section opened,
+// the last selection put in the prompt (`${round.at}|repo#n,repo#n`), and the repo the list
+// is narrowed to ('' = all).
+export type Ui = { selected: string[]; open: string; sent: string; filter: string }
+export const UI: Ui = { selected: [], open: '', sent: '', filter: '' }
 
 // The request the send button puts in the prompt: my PRs to fix, the others to review.
 export function prompt(prs: Item[], lang: string) {
@@ -143,86 +153,86 @@ export function toViewModel(r: Round | null, o: Opts) {
   const seenUrl = new Set<string>()
   const all = [...pending, ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !seenUrl.has(p.url) && Boolean(seenUrl.add(p.url)))
 
+  // Repos by short name, unless two share it: then owner/name, so they never look alike.
   const names = [...new Set([...connected, ...all.map(p => p.repo)])]
+  const short = (repo: string) => (names.filter(n => shortRepo(n) === shortRepo(repo)).length > 1 ? repo : shortRepo(repo))
+  const scope = names.includes(ui.filter) ? ui.filter : ''
+  const inScope = all.filter(p => !scope || p.repo === scope)
   const picks = new Set(ui.selected)
-  const filter = FILTERS.includes(ui.filter) ? ui.filter : 'all'
-  const shown = MATCH[filter]
-  const repos = names.map(repo => {
-    // every open PR of the repo: the ones that need something first, then the rest
-    const items = all.filter(p => p.repo === repo).sort((a, b) => Number(counts(b)) - Number(counts(a)) || byRank(a, b))
-    // the row, its counts and its checkbox follow the filter
-    const prs = items.filter(shown)
-    const sum = Object.fromEntries(COLUMNS.map(c => [c, prs.reduce((n, p) => n + cells(p)[c], 0)])) as Counts
-    const chosen = prs.filter(p => picks.has(keyOf(p))).length
+
+  const row = (p: Item) => {
+    const a = act(p, lang)
     return {
-      repo,
-      name: shortRepo(repo),
-      counts: sum,
-      // the repo's checkbox: all of its PRs picked, some, or none
-      pick: chosen === 0 || !prs.length ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const),
-      keys: prs.map(keyOf),
-      isOpen: ui.open === repo,
-      prs: prs.map(p => ({
-        key: keyOf(p),
-        url: p.url,
-        number: p.number,
-        title: p.title,
-        verb: verb(p, lang),
-        // a PR that needs nothing gets no action button and no colour
-        act: counts(p) ? act(p, lang) : null,
-        tone: counts(p) ? tone(cells(p)) : null,
-        // who opened it, so "yours" in the tally can be checked line by line
-        owner: p.kind === 'mine' ? t(lang, 'ui_you') : p.author || '?',
-        isMine: p.kind === 'mine',
-        // someone else's ready-for-review PR: approve it, or approve and merge it
-        approve: p.kind !== 'mine' && !p.isDraft ? t(lang, 'prompt_approve', p.url) : null,
-        approveMerge: p.kind !== 'mine' && !p.isDraft ? t(lang, 'prompt_approve_merge', p.url) : null,
-        age: ageShort(p.createdAt, now, lang),
-        isPicked: picks.has(keyOf(p)),
-        // its own request, for the action button on its line
-        prompt: prompt([p], lang),
-      })),
-      items,
+      key: keyOf(p),
+      url: p.url,
+      number: p.number,
+      title: p.title,
+      repo: short(p.repo),
+      wait: ageShort(since(p), now, lang),
+      // who opened it, when it is not mine
+      owner: p.kind === 'mine' ? null : (p.author || '?').replace(/\[bot\]$/, ''),
+      size: sizeTag(p.size),
+      isAI: Boolean(p.isAI),
+      act: a?.label ?? null,
+      prompt: a?.prompt ?? null,
+      tone: a ? tone(p) : null,
+      isPicked: picks.has(keyOf(p)),
+    }
+  }
+  const sections = SECTIONS.map(id => {
+    const prs = inScope.filter(p => sectionOf(p) === id).sort(byRank)
+    const canPick = BATCH.includes(id)
+    const chosen = canPick ? prs.filter(p => picks.has(keyOf(p))).length : 0
+    return {
+      id,
+      title: t(lang, `s_${id}`),
+      count: prs.length,
+      canPick,
+      pick: chosen === 0 ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const),
+      keys: canPick ? prs.map(keyOf) : [],
+      isFolded: FOLDED.includes(id) && ui.open !== id,
+      prs: prs.map(row),
     }
   })
-  // Every connected repo stays on the list, with zeros when it has nothing: blocked first,
-  // then what waits on me, then by how many PRs are open, then by name.
-  const weight = (x: (typeof repos)[number]) => [x.counts.blocked, x.counts.review, x.counts.comments, x.counts.changed, x.prs.length]
-  const busy = [...repos].sort((a, b) => {
-    const [wa, wb] = [weight(a), weight(b)]
-    return wb.map((n, i) => n - wa[i]!).find(Boolean) ?? a.name.localeCompare(b.name)
-  })
-  // The tally under the title, over open PRs only: mine, and the others split by whether
-  // I already reviewed them. The three add up to every open PR on the list.
-  const others = all.filter(p => p.kind !== 'mine')
-  const reviewed = others.filter(p => p.reviewed).length
-  const tally = { open: all.length, mine: all.length - others.length, reviewed, unreviewed: others.length - reviewed }
-  // Send carries every pick, also one the filter hides; the summary says how many.
-  const items = busy.flatMap(x => x.items).filter(p => picks.has(keyOf(p)))
+  const n = (id: Section) => sections.find(s => s.id === id)!.count
+  // The line under the title: what needs me, then what is ready and what waits, zeros left out.
+  const summary = [
+    n('move') ? t(lang, 'sum_move', n('move')) : t(lang, 'sum_calm'),
+    ...(n('ready') ? [t(lang, 'sum_ready', n('ready'))] : []),
+    ...(n('waiting') ? [t(lang, 'sum_waiting', n('waiting'))] : []),
+  ].join(' · ')
+
+  // Narrowing chips, only when there is more than one repo to narrow to: every connected repo
+  // with its open PRs, zeros included.
+  const repos =
+    names.length > 1
+      ? [
+          { id: '', label: `${t(lang, 'f_all')} · ${all.length}`, isActive: !scope },
+          ...names.map(repo => ({ id: repo, label: `${short(repo)} · ${all.filter(p => p.repo === repo).length}`, isActive: scope === repo })),
+        ]
+      : []
+
+  // Send carries every pick, also one outside the narrowed repo; the summary says how many.
+  const items = all.filter(p => BATCH.includes(sectionOf(p)) && picks.has(keyOf(p)))
   const fix = items.filter(p => p.kind === 'mine').length
-  const hidden = items.filter(p => !shown(p)).length
+  const hidden = items.filter(p => scope && p.repo !== scope).length
   const sendKey = `${r.at}|${items.map(keyOf).join(',')}`
-  // What the send button checks before it fills the prompt, worst first.
-  const block = !items.length ? t(lang, 'ui_send_none') : o.running ? t(lang, 'ui_send_wait') : null
+  const block = o.running ? t(lang, 'ui_send_wait') : null
   const warn = r.error || isLate ? t(lang, 'ui_send_stale', okAt ? hhmm(okAt) : '') : items.length > MANY ? t(lang, 'ui_send_many', items.length) : null
-  const allKeys = busy.flatMap(x => x.keys)
 
   return {
     ...head,
     state: 'ok' as const,
-    counts: tally,
-    filters: FILTERS.map(id => ({ id, label: `${t(lang, `f_${id}`)} · ${all.filter(MATCH[id]).length}`, isActive: id === filter })),
-    repos: busy.map(({ items, ...x }) => x),
-    allKeys,
-    allSelected: allKeys.length > 0 && allKeys.every(k => picks.has(k)),
+    summary,
+    counts: Object.fromEntries(SECTIONS.map(id => [id, n(id)])) as Record<Section, number>,
+    repos,
+    sections,
     send: {
       count: items.length,
       prompt: prompt(items, lang),
       key: sendKey,
       inPrompt: items.length > 0 && ui.sent === sendKey,
-      summary: !items.length
-        ? ''
-        : t(lang, 'ui_send_summary', fix, items.length - fix) + (hidden ? ` ${t(lang, 'ui_send_hidden', hidden)}` : ''),
+      summary: !items.length ? '' : t(lang, 'ui_send_summary', fix, items.length - fix) + (hidden ? ` ${t(lang, 'ui_send_hidden', hidden)}` : ''),
       block,
       warn,
     },

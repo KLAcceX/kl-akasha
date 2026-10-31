@@ -13,9 +13,9 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 | The user wants | Read |
 |---|---|
 | what needs them now, across their PRs and their review queue | `references/mine.md`, "Job 1" |
-| to fix their own PR: review comments, a failing CI, a conflict (pane: Resolve, Reply, Address, Fix CI, "to fix with Argos") | `references/mine.md`, "Job 2", and `references/address.md` |
-| what reviewers keep asking them, or whether their PR is ready for review | `references/lessons.md` |
-| to review, approve or merge a teammate's PR (pane: Review, Approve, Approve and merge, "to review with Argos") | `references/review.md` |
+| to fix their own PR: review comments, a failing CI, a conflict (pane: Resolve, Fix CI, Reply, Find a reviewer, Nudge, "to fix with Argos") | `references/mine.md`, "Job 2", and `references/address.md` |
+| what reviewers keep asking them, or whether their PR is ready for review (pane: Ready? on a draft) | `references/lessons.md` |
+| to review, approve or merge a teammate's PR (pane: Review, Review again, Merge, "to review with Argos") | `references/review.md` |
 | to connect, list or remove a repository, change the language, run a round, or have PRs watched on a schedule | `references/vigil.md` |
 
 ## For every job
@@ -24,7 +24,7 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 - **Scope:** watch only connected or named repositories. `node scripts/repos.mjs list --json` lists them; never search all of GitHub.
 - **Accounts:** use the account that owns the repo: `GH_TOKEN=$(gh auth token -u <login>)` for that command only, or `--account <login>` where a script takes one. Never `gh auth switch`.
 - **Scripts:** run them from this skill's directory.
-- **Nothing leaves the chat without a yes:** that covers pushes, replies, reviews, approvals and merges. A prompt sent from the pane's Approve buttons counts as that yes, but only after the review in `references/review.md` finds no blocker.
+- **Nothing leaves the chat without a yes:** that covers pushes, replies, reviews, approvals and merges. A request the person sends from the pane is their ask, not that yes: the yes still comes after the draft.
 
 ## Self-check
 

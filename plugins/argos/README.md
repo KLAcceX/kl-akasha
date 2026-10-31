@@ -34,31 +34,38 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 ## The eyes inside Claude
 
-The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the next action, toasts what is new, and `/argos` opens a pane that reads at a glance.
+The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the next action, toasts what is new, and `/argos` opens a pane built for a narrow sidebar: an inbox sorted by your next move.
 
-**The pane, top to bottom:**
+- **Head:** "Argos", what needs you ("3 need you · 1 ready · 2 waiting"), when Argos last looked, and a ↻ button to check now.
+- **Repo chips:** All, then every connected repo with its open PRs, zeros included. A chip narrows the inbox to that repo.
+- **Sections**, each shown only when it holds something, longest wait first:
 
-- **Head:** the KL · Akasha mark and "Argos", with a tally of open PRs under them (yours, reviewed, still to review). On the right: when Argos last looked, and a Check now button.
-- **Filters:** **All** open PRs, the ones that **Need my help** (teammates' PRs waiting on your review), yours **To fix** (changes requested, open threads, a conflict, a failed CI) and **Mine**, each with its count.
-- **Repos:** every connected repo, zeros included, with counts that follow the filter. Each has a checkbox that picks all its PRs, its counts as coloured icons with numbers, and "N PRs" to open them. The colours: red **blocked**, amber **review asked**, blue **comments**, purple **changed since your review**.
-- **PRs:** each open PR on its own line, with its checkbox, title, owner, age and number, and a short action in its signal's colour. Someone else's PR also gets **Approve** and **Approve and merge**.
-- **Add a repository:** the list ends with this button, which puts `/argos repos add ` in the prompt.
+  | Section | Holds |
+  |---|---|
+  | **Your move** | reviews asked of you, and your PRs that came back: changes requested, open threads, a failed CI, a conflict, no reviewer asked |
+  | **Ready to merge** | your approved PRs with nothing blocking |
+  | **Waiting on others** | your PRs on someone else's desk, with how long they have waited |
+  | **Drafts** | your PRs not out yet |
+  | **Team** | teammates' PRs nobody asked you about; folded until you open it |
 
-**Every action only puts a request in the prompt.** It is never sent twice, and nothing reaches GitHub until you send it.
+- **Each PR takes two lines**, so nothing gets squeezed in a narrow pane. The first line is the title. The second has its repo, number, how long it has waited (a review: since you were asked) and whose it is, plus two marks when they apply:
+  - **L** or **XL** for a PR past 400 or 1,000 changed lines, where review quality drops;
+  - **AI** for a PR opened by a coding agent.
+- **One action per PR**, on the right, in the colour of what it asks: **Resolve**, **Fix CI**, **Reply**, **Review**, **Review again**, **Find a reviewer**, **Nudge**, **Merge**, or **Ready?** (checks a draft against your lessons).
+- **Batch sends:** in Your move and Team, a box picks a PR or a whole section. A send bar then appears and sends every pick: yours to fix, the others to review. Picks survive narrowing to a repo, and the bar says how many are elsewhere.
 
-- The send bar sends every picked PR: yours to fix, the others to review. Picks survive a filter switch, and the bar says how many the filter hides.
-- Stale data or a big batch is flagged before you press.
-- With several sessions open, only one runs each round.
+**Every action only puts a request in the prompt.** It is never sent twice, and nothing reaches GitHub until you send it and say yes to what the AI drafts. Stale data or a big batch is flagged before you press. With several sessions open, only one runs each round.
 
 | Command | Does |
 |---|---|
 | `/argos` | opens the pane |
 | `/argos demo` | fills the pane with a sample round; a plain `/argos` goes back to your data |
-| `/argos repos` | lists the connected repos |
-| `/argos repos add <folder or owner/name>` | connects one (a folder's git remote is read, SSH host aliases included); a bare `add` connects the session's folder |
+| `/argos repos` | lists the connected repos and the account each is read as |
+| `/argos repos add <folder or owner/name>` | connects one (a folder's git remote is read, SSH host aliases included); a bare `add` connects the session's folder. Add `--account <gh login>` for a repo only another account can see |
 | `/argos repos remove <owner/name>` | disconnects one |
+| `/argos <anything else>` | goes to the skill, such as `/argos review <PR link>` |
 
-The vigil watches **only connected repos**: with none, it searches nothing. Once a repo is connected, Argos also lists all teammates' open PRs in it, asked for review or not.
+The vigil watches **only connected repos**: with none, it searches nothing. Each repo is read as the `gh` account it was connected with, so work and personal repos can sit in one inbox.
 
 ## Options
 

@@ -65,10 +65,10 @@ Offer to post. On a clear yes, post what the user saw, as they edited it, labels
 
 ## 9. Approve, or approve and merge
 
-The Argos pane's **Approve** and **Approve and merge** buttons send prompts such as "Approve `<url>` on GitHub (gh pr review --approve). Approve only, no merge." or "...and merge it once checks pass (gh pr review --approve, then gh pr merge)." The user typing "approve" or "approve and merge" means the same.
+The user asks in their own words ("approve it", "approve and merge"); the pane's **Merge** on one of the user's own approved PRs asks to merge it.
 
 1. **Review first.** Run sections 2 to 6 at the task's level. Without a task, a small PR (about 100 changed lines or less) gets a quick low-level look; a bigger one asks once for the task as in section 4. Show the verdict in a few lines: level, project rules used, blockers, and how many other findings.
 2. **Stop on a blocker.** If the review finds a blocker (or a broken project rule that blocks), don't approve: show it and offer the request-changes draft from section 7. Also stop when the PR is a draft, closed, or the user's own.
-3. **Approve.** Otherwise the sent prompt is the yes: `gh pr review <n> -R <repo> --approve` with the repo owner's account (sources.md, "Accounts"). Approve without a body; non-blocking findings are posted only if the user says yes to them (section 8).
+3. **Approve.** Otherwise the user's ask to approve is the yes: `gh pr review <n> -R <repo> --approve` with the repo owner's account (sources.md, "Accounts"). Approve without a body; non-blocking findings are posted only if the user says yes to them (section 8).
 4. **Merge** (only when asked). Merge when the checks pass and the PR is approved: `gh pr checks <n> -R <repo> --watch` waits for running checks; any failure stops it, and you report which. Check `gh pr view <n> -R <repo> --json reviewDecision,mergeStateStatus` (approved, not blocked). Pick the method the repo allows: `gh repo view <repo> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`. Use the one the project's rules name, or the only one allowed; if several are allowed and no rule picks, ask once. Then `gh pr merge <n> -R <repo> --merge|--squash|--rebase`. Never `--admin`, never delete the branch unless asked.
 5. Report what was done, with the PR link.

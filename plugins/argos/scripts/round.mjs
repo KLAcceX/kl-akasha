@@ -47,9 +47,25 @@ export function describe(p, lang = "en") {
   return words.join(", ");
 }
 
-// repo: qualifiers for the connected repos, unless the caller already scoped the search.
-export const repoQualifiers = (list, qualifiers) =>
-  qualifiers.some((q) => q.startsWith("repo:")) ? [] : list.map((r) => `repo:${r.repo}`);
+// One search per gh account: each connected repo is read as the account it was connected
+// with (repos.json), else the vigil's; repo: qualifiers the caller passed go as the vigil's.
+export function groups(list, qualifiers, account) {
+  if (qualifiers.some((q) => q.startsWith("repo:"))) return [[account, qualifiers]];
+  const by = new Map();
+  for (const r of list) {
+    const a = r.account || account || "";
+    by.set(a, [...(by.get(a) ?? []), `repo:${r.repo}`]);
+  }
+  return [...by].map(([a, repos]) => [a || undefined, [...qualifiers, ...repos]]);
+}
+
+// The searches of every account as one queue.
+export const merge = (queues) => ({
+  me: queues[0]?.me,
+  mine: queues.flatMap((q) => q.mine),
+  toReview: queues.flatMap((q) => q.toReview),
+  others: queues.flatMap((q) => q.others ?? []),
+});
 
 export function notification(items, lang = "en") {
   const parts = items.map((p) => `${p.repo.split("/")[1]}#${p.number} ${describe(p, lang)}`);
@@ -76,11 +92,10 @@ function main(args) {
   }
   const account = args.includes("--account") ? args[args.indexOf("--account") + 1] : undefined;
   const repos = readRepos();
-  let qualifiers = args.filter((a, j) => a !== "--json" && !flags.has(j));
-  qualifiers = [...qualifiers, ...repoQualifiers(repos, qualifiers)];
+  const plan = groups(repos, args.filter((a, j) => a !== "--json" && !flags.has(j)), account);
 
   // Nothing connected: search nothing, so no account's PRs are read by accident.
-  if (!qualifiers.some((q) => q.startsWith("repo:"))) {
+  if (!plan.length) {
     const round = { at, okAt: at, repos: [], pending: [], mine: [], others: [], news: [], notify: null, needsRepos: true };
     writeFileSync(ROUND, JSON.stringify(round, null, 2));
     if (json) return console.log(JSON.stringify(round));
@@ -89,9 +104,13 @@ function main(args) {
 
   let queue;
   try {
-    const env = { ...process.env };
-    if (account) env.GH_TOKEN = execFileSync("gh", ["auth", "token", "-u", account], { encoding: "utf8" }).trim();
-    queue = JSON.parse(execFileSync("node", [QUEUE, ...qualifiers, "--json"], { encoding: "utf8", env, maxBuffer: 32 * 1024 * 1024 }));
+    queue = merge(
+      plan.map(([login, qualifiers]) => {
+        const env = { ...process.env };
+        if (login) env.GH_TOKEN = execFileSync("gh", ["auth", "token", "-u", login], { encoding: "utf8" }).trim();
+        return JSON.parse(execFileSync("node", [QUEUE, ...qualifiers, "--json"], { encoding: "utf8", env, maxBuffer: 32 * 1024 * 1024 }));
+      }),
+    );
   } catch (err) {
     const error = String(err.stderr || err.message).trim().split("\n").pop();
     // keep the last good list visible, flagged with the error
@@ -170,9 +189,15 @@ function selfTest() {
   assert.deepEqual(news(snapshot(queue), team).map((p) => p.url), ["o2"]);
   assert.deepEqual(pending(team).map((p) => p.url), ["a", "r"]);
   assert.equal(describe(team.others[1]), "@bia, no review > 1 day");
-  // connected repos scope the search unless the caller already did
-  assert.deepEqual(repoQualifiers([{ repo: "acme/api" }, { repo: "acme/web" }], ["--x"]), ["repo:acme/api", "repo:acme/web"]);
-  assert.deepEqual(repoQualifiers([{ repo: "acme/api" }], ["repo:acme/web"]), []);
+  // connected repos scope the search, one search per account, unless the caller already scoped it
+  assert.deepEqual(groups([{ repo: "acme/api" }, { repo: "acme/web" }], ["--x"], "me"), [["me", ["--x", "repo:acme/api", "repo:acme/web"]]]);
+  assert.deepEqual(groups([{ repo: "acme/api", account: "work" }, { repo: "me/lib" }], [], undefined), [
+    ["work", ["repo:acme/api"]],
+    [undefined, ["repo:me/lib"]],
+  ]);
+  assert.deepEqual(groups([{ repo: "acme/api" }], ["repo:acme/web"], "me"), [["me", ["repo:acme/web"]]]);
+  assert.deepEqual(groups([], [], "me"), []);
+  assert.deepEqual(merge([{ me: "a", mine: [1], toReview: [] }, { me: "b", mine: [2], toReview: [3], others: [4] }]), { me: "a", mine: [1, 2], toReview: [3], others: [4] });
   console.log("self-test ok");
 }
 

@@ -87,7 +87,8 @@ function main(args) {
     }
     // adding by name keeps the folder an earlier add recorded
     const old = list.find((r) => same(r.repo, repo));
-    const next = [...list.filter((r) => r !== old), { ...old, repo, ...(path && { path }) }];
+    // the account that sees the repo, so the vigil reads it as that account
+    const next = [...list.filter((r) => r !== old), { ...old, repo, ...(path && { path }), ...(account && { account }) }];
     write(next);
     return console.log(`Argos: ${t(lang, "connected", repo, next.length)}`);
   }
@@ -99,7 +100,7 @@ function main(args) {
   }
   if (args.includes("--json")) return console.log(JSON.stringify(list));
   if (!list.length) return console.log(`Argos: ${t(lang, "no_repos")}`);
-  console.log([`Argos: ${t(lang, "list_title")}`, ...list.map((r) => `- ${r.repo}${r.path ? `  (${r.path})` : ""}`)].join("\n"));
+  console.log([`Argos: ${t(lang, "list_title")}`, ...list.map((r) => `- ${r.repo}${r.account ? ` as ${r.account}` : ""}${r.path ? `  (${r.path})` : ""}`)].join("\n"));
 }
 
 function selfTest() {

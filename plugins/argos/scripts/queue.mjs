@@ -17,9 +17,10 @@ query($q: String!, $after: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt reviewDecision mergeable
+        number title url isDraft createdAt updatedAt reviewDecision mergeable additions deletions
         repository { nameWithOwner }
-        author { login }
+        author { login __typename }
+        reviewRequests { totalCount }
         commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
         reviewThreads(first: 50) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
         comments(last: 1) { nodes { createdAt author { login __typename } } }
@@ -34,6 +35,13 @@ query($q: String!, $after: String) {
 
 const isBot = (a) => !a || a.__typename === "Bot" || /\[bot\]$/.test(a.login);
 const isOther = (a, me) => a && !isBot(a) && a.login !== me;
+// Coding agents that open PRs under their own account (GitHub's Copilot agent is "Copilot").
+const AGENT = /^(copilot|copilot-swe-agent|devin-ai-integration|codex|claude|cursor|openhands|sweep)(\[bot\])?$/i;
+export const isAI = (a) => AGENT.test(a?.login ?? "");
+// Nobody was asked to review and nobody did: the PR has no owner on the other side.
+// Unknown (no reviewRequests in the answer) never counts.
+const noOwner = (pr, author) =>
+  !pr.isDraft && pr.reviewRequests?.totalCount === 0 && !pr.latestReviews.nodes.some((r) => isOther(r.author, author));
 
 // Google eng-practices: answer a review request within one business day.
 // ponytail: 24 wall-clock hours, use business days if weekends cause false alarms.
@@ -65,9 +73,11 @@ export function mySignals(pr, me, now = Date.now()) {
   if (["FAILURE", "ERROR"].includes(last?.statusCheckRollup?.state)) s.push("ci_failed");
   if (pr.mergeable === "CONFLICTING") s.push("conflict");
   if (!s.length && pr.reviewDecision === "APPROVED") s.push("ready");
-  // Pickup is where PRs wait longest: nobody has looked yet, so ping the reviewers.
+  // Pickup is where PRs wait longest: nobody asked means nobody will look; asked and a day
+  // without a review means ping the reviewers.
   const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, me));
-  if (!s.length && !pr.isDraft && !anyReview && isLate(pr.createdAt, now)) s.push("no_review");
+  if (!s.length && noOwner(pr, me)) s.push("no_owner");
+  else if (!s.length && !pr.isDraft && !anyReview && isLate(pr.createdAt, now)) s.push("no_review");
   return s;
 }
 
@@ -95,7 +105,8 @@ export function othersSignals(pr, me, now = Date.now()) {
   if (["FAILURE", "ERROR"].includes(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state)) s.push("ci_failed");
   if (pr.mergeable === "CONFLICTING") s.push("conflict");
   const anyReview = pr.latestReviews.nodes.some((r) => isOther(r.author, author));
-  if (!anyReview && isLate(pr.createdAt, now)) s.push("no_review");
+  if (noOwner(pr, author)) s.push("no_owner");
+  else if (!anyReview && isLate(pr.createdAt, now)) s.push("no_review");
   return s;
 }
 
@@ -146,6 +157,11 @@ function main(args) {
     isDraft: pr.isDraft,
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
+    // how long it has waited on whoever holds it: my review since I was asked, else since it opened
+    since: kind === "review" ? askedAt(pr, me) : pr.createdAt,
+    // lines changed: review quality drops past about 400
+    size: (pr.additions ?? 0) + (pr.deletions ?? 0),
+    isAI: isAI(pr.author),
     author: pr.author?.login ?? "",
     // someone else's PR I already left a review on: the pane counts what is left to look at
     reviewed: kind !== "mine" && pr.latestReviews.nodes.some((r) => r.author?.login === me),
@@ -242,6 +258,17 @@ function selfTest() {
   const failing = { nodes: [{ commit: { committedDate: base.createdAt, statusCheckRollup: { state: "FAILURE" } } }] };
   assert.deepEqual(mySignals(pr({ reviewDecision: "APPROVED", commits: failing }), me, day1), ["ci_failed"]);
   assert.deepEqual(mySignals(pr({ mergeable: "CONFLICTING" }), me, day1), ["conflict"]);
+  // nobody asked to review: no_owner at once; asked, no review for a day: no_review
+  const asks = (n) => ({ reviewRequests: { totalCount: n } });
+  assert.deepEqual(mySignals(pr(asks(0)), me, day1), ["no_owner"]);
+  assert.deepEqual(mySignals(pr(asks(1)), me, day3), ["no_review"]);
+  assert.deepEqual(mySignals(pr({ ...asks(0), isDraft: true }), me, day3), []);
+  assert.deepEqual(mySignals(pr({ ...asks(0), latestReviews: reviewed }), me, day3), []);
+  assert.deepEqual(othersSignals(theirs(asks(0)), me, day1), ["no_owner"]);
+  assert.equal(isAI({ login: "Copilot", __typename: "Bot" }), true);
+  assert.equal(isAI({ login: "devin-ai-integration[bot]" }), true);
+  assert.equal(isAI({ login: "dependabot[bot]" }), false);
+  assert.equal(isAI(user("ana")), false);
   // no commits/checks yet must not throw
   assert.deepEqual(mySignals(pr({ commits: { nodes: [] } }), me, day1), []);
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-01T05:00:00Z")), "5h");

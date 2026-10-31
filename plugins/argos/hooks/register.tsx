@@ -1,18 +1,17 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one Argos round over
 // the connected repos. The band above the prompt shows the most urgent PR; /argos opens
-// the pane: filters over the list, one row per repo with what it holds (open comments,
-// changed since my review, blocked, review requested), a box to pick it, a way to add a
-// repo, and one button that sends the picked PRs to the AI. Words and numbers come from
+// the pane, an inbox: what needs me, what is ready, what waits on others, my drafts and
+// the team's PRs, each PR on two lines with its one action, chips to narrow to a repo, a
+// way to add one, and a send bar for the PRs picked for the AI. Words and numbers come from
 // toViewModel (view.ts).
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
-import { COLUMNS, UI, toViewModel } from './view'
-import type { Column } from './view'
+import { UI, toViewModel } from './view'
 import type { Round } from '../types'
 
-export { byRank, cells, prompt, rank, reason, toViewModel, verb } from './view'
+export { act, byRank, prompt, rank, reason, sectionOf, sizeTag, toViewModel, tone, verb } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
@@ -39,49 +38,6 @@ const ICON =
   `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
 const RED = '#E5384A'
 
-// One theme colour per column, used on its count alone: red for blocked, amber for a
-// review waiting on you, blue for comments, purple for changed.
-const TONE: Record<Column, 'error' | 'warning' | 'suggestion' | 'merged'> = {
-  blocked: 'error',
-  review: 'warning',
-  comments: 'suggestion',
-  changed: 'merged',
-}
-// Translucent fills, so one value reads on the light and the dark theme alike: each count's
-// pill takes its colour faintly; cards, the summary and the send bar sit on a neutral
-// layer; a picked card takes the accent faintly. The terminal draws none of them.
-const TINT: Record<Column, string> = {
-  blocked: 'rgba(229, 72, 77, 0.16)',
-  review: 'rgba(226, 163, 58, 0.18)',
-  comments: 'rgba(80, 140, 230, 0.16)',
-  changed: 'rgba(150, 110, 230, 0.16)',
-}
-// Icons: Tabler Icons outlines (MIT, tabler.io/icons) drawn as Svg, which a Button
-// cannot hold, so each sits beside the text control it belongs to. Colours that read on
-// both themes; the terminal draws none and keeps its words.
-const GREY = '#8C8A83'
-const HUE: Record<Column, string> = { blocked: '#E5484D', review: '#E2A33A', comments: '#508CE6', changed: '#966EE6' }
-const stroke = (paths: string, color = GREY) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" ` +
-  `stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`
-const REFRESH = '<path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/>'
-const GLYPHS: Record<Column, string> = {
-  blocked: '<path d="M8.7 3h6.6l4.7 4.7v6.6l-4.7 4.7h-6.6l-4.7 -4.7v-6.6z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
-  review:
-    '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/>',
-  comments:
-    '<path d="M3 20l1.3 -3.9c-2.3 -3.4 -1.4 -7.9 2.1 -10.4c3.5 -2.5 8.6 -2.3 11.8 .5c3.3 2.8 3.7 7.3 1 10.5c-2.7 3.2 -7.6 4.2 -11.6 2.3l-4.6 1"/>',
-  changed: REFRESH,
-}
-const ICONS = {
-  elbow: stroke('<path d="M9 0v11a3 3 0 0 0 3 3h9"/>'),
-  refresh: stroke(REFRESH),
-  pr: stroke(
-    '<path d="M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M16 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>' +
-      '<path d="M6 8v8"/><path d="M11 6h5a2 2 0 0 1 2 2v8"/><path d="M14 9l-3 -3l3 -3"/>',
-  ),
-  ...(Object.fromEntries(Object.entries(GLYPHS).map(([c, d]) => [c, stroke(d, HUE[c as Column])])) as Record<Column, string>),
-}
 const LAYER = 'rgba(127, 127, 127, 0.10)'
 const PICKED = 'rgba(217, 119, 87, 0.12)'
 
@@ -233,6 +189,8 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
+    // A sidebar is narrow; only a wide pane spells out Check now beside its icon.
+    const wide = (e.viewport?.columns ?? 0) >= 60
     const running = await read($, isRunning)
     const vm = toViewModel(await read($, round), {
       now: await $.clock.now(),
@@ -243,58 +201,29 @@ export const register: Register = (on, options) => {
     })
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
+    const fill = (color: string) => (hasSvg ? color : undefined)
 
-    // The head of the dashboard. Left: the mark and the title, the tally of open PRs under
-    // them. Right: when Argos last looked, then Check now as a real button, so it reads as
-    // pressable. Wraps on a narrow pane, the right group going below.
-    type Tally = { open: number; mine: number; reviewed: number; unreviewed: number }
-    const TALLY = [
-      ['mine', 'tally_mine'],
-      ['reviewed', 'tally_reviewed'],
-      ['unreviewed', 'tally_todo'],
-    ] as const
-    const tallyLine = (tally: Tally) => (
-      <Box key="tally" flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
-        {TALLY.map(([k, word], i) => (
-          <Box key={`tally:${k}`} flexDirection="row" alignItems="center" gap="xs">
-            {i > 0 && (
-              <Text size="caption" dimColor>
-                ·
-              </Text>
-            )}
-            <Text size="caption" weight="semibold" tabular dimColor={tally[k] === 0}>
-              {String(tally[k])}
-            </Text>
-            <Text size="caption" dimColor>
-              {t(lang, word)}
-            </Text>
-          </Box>
-        ))}
-      </Box>
-    )
-    const top = (tally?: Tally) => (
-      <Box key="top" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="md" rowGap="sm">
-        <Box flexDirection="row" alignItems="center" gap="sm" flexGrow={1}>
-          {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={32} height={32} />}
-          <Box flexDirection="column">
-            <Text size="heading" weight="semibold">
-              Argos
-            </Text>
-            {tally && tallyLine(tally)}
-          </Box>
-        </Box>
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          <Text size="caption" dimColor>
-            {vm.seen}
+    // The head: the mark, "Argos", what needs me and when Argos last looked; Check now on
+    // the right, an icon on a narrow pane.
+    const top = (summary?: string) => (
+      <Box key="top" flexDirection="row" alignItems="center" gap="sm">
+        {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={28} height={28} />}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text size="heading" weight="semibold">
+            Argos
           </Text>
-          <Button key="check" variant="secondary" dimColor={running} onPress={checkNow}>
-            {running ? t(lang, 'ui_checking') : `↻  ${t(lang, 'ui_check')}`}
-          </Button>
+          {summary && <Text size="caption">{summary}</Text>}
+          {vm.seen && (
+            <Text size="caption" dimColor>
+              {vm.seen}
+            </Text>
+          )}
         </Box>
+        <Button key="check" variant="secondary" dimColor={running} label={t(lang, running ? 'ui_checking' : 'ui_check')} onPress={checkNow}>
+          {running ? t(lang, 'ui_checking') : wide ? `↻  ${t(lang, 'ui_check')}` : '↻'}
+        </Button>
       </Box>
     )
-    const svgIcon = (name: keyof typeof ICONS, alt: string, size = 14) =>
-      hasSvg && <ui.Svg source={ICONS[name]} alt={alt} width={size} height={size} />
     const status = vm.status && (
       <Box borderStyle="round" borderColor={RED} paddingX="sm" flexDirection="column" gap="xs">
         <Text>{vm.status}</Text>
@@ -307,11 +236,11 @@ export const register: Register = (on, options) => {
     )
     // a part a state does not have is left out, so no gap is spent on it
     const frame = (first: any, ...body: any[]) => (
-      <Box flexDirection="column" gap="lg" paddingX="lg" paddingY="md">
+      <Box flexDirection="column" gap="lg" paddingX="md" paddingY="md">
         {[first, status, ...body].filter(Boolean)}
       </Box>
     )
-    // Every state but the list leads with the bare top row; the list puts it in its summary.
+    // Every state but the list leads with the bare head; the list adds its summary.
     const page = (...body: any[]) => frame(top(), ...body)
 
     if (vm.state === 'loading') return page(<Text key="b">{t(lang, 'ui_loading')}</Text>)
@@ -335,7 +264,6 @@ export const register: Register = (on, options) => {
     // narrows vm for TypeScript; every other state returned above
     if (vm.state !== 'ok') return page()
 
-    const fill = (color: string) => (hasSvg ? color : undefined)
     const toggle = (keys: string[], pick: boolean) =>
       void update($, selected, list => (pick ? [...new Set([...list, ...keys])] : list.filter(k => !keys.includes(k))))
     // A checkbox is a one-glyph button: the kit's own way to a control that is only a mark,
@@ -347,124 +275,131 @@ export const register: Register = (on, options) => {
         <Text color={state === 'none' ? undefined : 'claude'}>{GLYPH[state]}</Text>
       </Button>
     )
-
-    type Repo = (typeof vm.repos)[number]
-    // A count in a fixed slot, so the columns line up from row to row; a zero leaves the
-    // slot empty. The terminal has no icons, so it writes the word and takes its width.
-    const count = (id: string, c: Column, n: number) => (
-      <Box key={`${id}:${c}`} flexDirection="row" alignItems="center" gap="xs" width={hasSvg ? 4 : undefined}>
-        {n > 0 && svgIcon(c, t(lang, `chip_${c}`, n), 13)}
-        {n > 0 && (
-          <Text color={TONE[c]} weight="semibold" tabular>
-            {hasSvg ? String(n) : t(lang, `chip_${c}`, n)}
-          </Text>
-        )}
-      </Box>
-    )
     // Puts one request in the prompt without sending it: appended on a new line when there
     // is a draft, never twice.
     const fillPrompt = async (request: string) => {
       const { text } = await $.prompt.read()
       if (!text.includes(request)) await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
     }
-    // One repo. Its line: the checkbox (the control that picks it), the name, the
-    // counts in their slots, and the expand control: "2 PRs" with a chevron in the accent,
-    // one button. Opened, each PR hangs under the repo on a tree elbow: its checkbox, its
-    // title in the quieter caption size (the repo leads), its age and number, and at the
-    // far right a short action in the signal's colour that puts that one PR in the prompt;
-    // someone else's PR also offers Approve and Approve and merge, requests the person
-    // sends from the prompt, so nothing reaches GitHub without them.
-    // A repo is tinted only when all its PRs are picked; a partial pick shows in its box.
-    const row = (x: Repo) => (
+
+    type Section = (typeof vm.sections)[number]
+    type Pr = Section['prs'][number]
+    // One PR on two lines, so it fits a narrow sidebar: the title, then where it lives, how
+    // long it has waited, whose it is, a size or AI mark when one applies, and on the right
+    // the one action that puts this PR in the prompt, in the colour of what it asks.
+    const prRow = (p: Pr, canPick: boolean) => (
       <Box
-        key={x.repo}
-        flexDirection="column"
-        justifyContent="center"
-        backgroundColor={fill(x.pick === 'all' ? PICKED : LAYER)}
-        borderStyle={hasSvg ? 'round' : undefined}
-        borderColor={fill(x.pick === 'all' ? PICKED : LAYER)}
-        paddingX="md"
-        paddingY="sm"
+        key={p.key}
+        flexDirection="row"
+        alignItems="flex-start"
+        gap="sm"
+        paddingX="sm"
+        paddingY="xs"
+        backgroundColor={p.isPicked ? fill(PICKED) : undefined}
+        borderStyle={hasSvg && p.isPicked ? 'round' : undefined}
+        borderColor={p.isPicked ? fill(PICKED) : undefined}
       >
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          {x.prs.length > 0 ? check(`box:${x.repo}`, x.pick, () => toggle(x.keys, x.pick !== 'all')) : <Text dimColor>{hasSvg ? '☐' : '[ ]'}</Text>}
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Text key={`name:${x.repo}`} weight="semibold" dimColor={x.prs.length === 0} wrap="truncate">
-              {x.name}
-            </Text>
-          </Box>
-          <Box flexDirection="row" alignItems="center" gap="xs">
-            {COLUMNS.map(c => (!hasSvg && x.counts[c] === 0 ? null : count(x.repo, c, x.counts[c])))}
-          </Box>
-          <Box flexDirection="row" justifyContent="flex-end" marginLeft="md" width={hasSvg ? 9 : undefined}>
-            {x.prs.length ? (
-              <Button key={`open:${x.repo}`} plain={true} hover={{ color: 'claude' }} onPress={() => void update($, open, o => (o === x.repo ? '' : x.repo))}>
-                <Text dimColor={!x.isOpen}>{t(lang, 'ui_prs', x.prs.length)}</Text>
-                <Text color="claude" weight="semibold">{x.isOpen ? '  ▴' : '  ▾'}</Text>
+        {canPick && check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked))}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text wrap="truncate">{p.title}</Text>
+          <Box flexDirection="row" alignItems="center" gap="sm">
+            <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text size="caption" dimColor>
+                {p.repo}
+              </Text>
+              <Link href={p.url} label={`#${p.number}`} />
+              <Text size="caption" dimColor tabular>
+                {`· ${p.wait}${p.owner ? ` · ${p.owner}` : ''}`}
+              </Text>
+              {p.size && (
+                <Text size="caption" color="warning" weight="semibold">
+                  {p.size}
+                </Text>
+              )}
+              {p.isAI && (
+                <Text size="caption" color="claude" weight="semibold">
+                  {t(lang, 'ui_ai')}
+                </Text>
+              )}
+            </Box>
+            {p.act && p.prompt && (
+              <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt!)}>
+                <Text size="caption" color={p.tone ?? undefined} weight="semibold">
+                  {`${p.act} ›`}
+                </Text>
               </Button>
-            ) : (
-              <Text dimColor>{t(lang, 'ui_prs', 0)}</Text>
             )}
           </Box>
         </Box>
-        {x.isOpen ? (
-          <Box flexDirection="column" gap="xs" paddingTop="sm">
-            {x.prs.map(p => (
-              <Box key={p.key} flexDirection="row" alignItems="center" gap="sm">
-                {hasSvg ? <ui.Svg source={ICONS.elbow} alt={t(lang, 'ui_alt_in', x.name)} width={16} height={16} /> : <Text dimColor>└</Text>}
-                {check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked))}
-                <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                  <Button key={`pick:${p.key}`} plain={true} dimColor={true} hover={{ color: 'claude' }} onPress={() => toggle([p.key], !p.isPicked)}>
-                    <Text size="caption" wrap="truncate">
-                      {p.title}
-                    </Text>
-                  </Button>
-                </Box>
-                <Text size="caption" color={p.isMine ? 'claude' : undefined} dimColor={!p.isMine}>
-                  {t(lang, 'ui_by', p.owner)}
+      </Box>
+    )
+    // One section: its title and count (a box that picks them all where a batch makes sense,
+    // a fold on the team's), then its PRs. An empty section is left out, except "Your move",
+    // which says nothing needs me.
+    const section = (s: Section) => {
+      if (s.id === 'move' && !s.count)
+        return (
+          <Text key="calm" dimColor>
+            {t(lang, 'ui_calm')}
+          </Text>
+        )
+      if (!s.count) return null
+      const title = `${s.title} · ${s.count}`
+      return (
+        <Box key={`sec:${s.id}`} flexDirection="column" gap="xs">
+          <Box flexDirection="row" alignItems="center" gap="sm" paddingX="sm">
+            {s.canPick && !s.isFolded && check(`box:${s.id}`, s.pick, () => toggle(s.keys, s.pick !== 'all'))}
+            {s.id === 'team' ? (
+              <Button key="fold:team" plain={true} hover={{ color: 'claude' }} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
+                <Text size="caption" weight="semibold" dimColor>
+                  {`${title}  ${s.isFolded ? '▾' : '▴'}`}
                 </Text>
-                <Text size="caption" dimColor tabular>
-                  {p.age}
-                </Text>
-                <Link href={p.url} label={`#${p.number}`} />
-                {p.act && p.tone && (
-                  <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt)}>
-                    <Text size="caption" color={TONE[p.tone]} weight="semibold">
-                      {`${p.act} ›`}
-                    </Text>
-                  </Button>
-                )}
-                {p.approve && (
-                  <Button key={`approve:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.approve!)}>
-                    <Text size="caption" color="success" weight="semibold">
-                      {`${t(lang, 'ui_approve')} ›`}
-                    </Text>
-                  </Button>
-                )}
-                {p.approveMerge && (
-                  <Button key={`merge:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.approveMerge!)}>
-                    <Text size="caption" color="success" weight="semibold">
-                      {`${t(lang, 'ui_approve_merge')} ›`}
-                    </Text>
-                  </Button>
-                )}
-              </Box>
-            ))}
+              </Button>
+            ) : (
+              <Text size="caption" weight="semibold" dimColor>
+                {title}
+              </Text>
+            )}
           </Box>
-        ) : null}
+          {!s.isFolded && s.prs.map(p => prRow(p, s.canPick))}
+        </Box>
+      )
+    }
+
+    // Narrowing to one repo, when there is more than one: the active chip a real button,
+    // the others plain and dim. Picks survive; the send bar counts the ones elsewhere.
+    const repoChips = vm.repos.length > 0 && (
+      <Box key="repos" flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
+        {vm.repos.map(f =>
+          f.isActive ? (
+            <Button key={`repo:${f.id || 'all'}`} variant="secondary" onPress={() => {}}>
+              {f.label}
+            </Button>
+          ) : (
+            <Button key={`repo:${f.id || 'all'}`} plain={true} dimColor={true} onPress={() => void update($, filter, () => f.id)}>
+              {f.label}
+            </Button>
+          ),
+        )}
+      </Box>
+    )
+    const addRow = (
+      <Box key="add-repo-row" flexDirection="row" paddingX="sm">
+        <Button key="add-repo" plain={true} hover={{ color: 'claude' }} onPress={() => void addRepo($)}>
+          <Text color="claude">{t(lang, 'ui_add_repo')}</Text>
+        </Button>
       </Box>
     )
 
-    // The send bar: what will go (or why nothing can), and the one button of the pane.
-    // The button stays pressable; with nothing picked it is secondary and the line beside
-    // it says what to do. The prompt is filled, never sent.
+    // The send bar shows only once something is picked: what will go, and the one button
+    // that puts it in the prompt (never sends it).
     const { send } = vm
     const sendNow = async () => {
       if (send.block) return
       await fillPrompt(send.prompt)
       await update($, sent, () => send.key)
     }
-    const footer = (
+    const footer = send.count > 0 && (
       <Box
         key="send-bar"
         flexDirection="row"
@@ -479,69 +414,22 @@ export const register: Register = (on, options) => {
         paddingY="sm"
       >
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text size="caption" dimColor={Boolean(send.block)}>
-            {send.block ?? send.summary}
-          </Text>
+          <Text size="caption">{send.block ?? send.summary}</Text>
           {send.warn && !send.block && (
             <Text size="caption" color="warning">
               {send.warn}
             </Text>
           )}
         </Box>
-        {vm.allKeys.length > 1 && (
-          <Button key="pick-all" plain={true} dimColor={true} onPress={() => void update($, selected, () => (vm.allSelected ? [] : vm.allKeys))}>
-            {vm.allSelected ? t(lang, 'ui_pick_none') : t(lang, 'ui_pick_all')}
-          </Button>
-        )}
-        {running ? (
-          <Button key="send" plain={true} dimColor={true} onPress={() => {}}>
-            {t(lang, 'ui_checking')}
-          </Button>
-        ) : (
-          <Button key="send" variant={send.block ? 'secondary' : 'primary'} onPress={() => void sendNow()}>
-            {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
-          </Button>
-        )}
-      </Box>
-    )
-
-    // The filters under the head, each with its count: the active one a real button, the
-    // others plain and dim. Picks survive a switch; the send bar counts the hidden ones.
-    const filters = (
-      <Box key="filters" flexDirection="row" alignItems="center" flexWrap="wrap" gap="sm">
-        {vm.filters.map(f =>
-          f.isActive ? (
-            <Button key={`filter:${f.id}`} variant="secondary" onPress={() => {}}>
-              {f.label}
-            </Button>
-          ) : (
-            <Button key={`filter:${f.id}`} plain={true} dimColor={true} onPress={() => void update($, filter, () => f.id)}>
-              {f.label}
-            </Button>
-          ),
-        )}
-      </Box>
-    )
-    // The list ends with a way to watch one more repo: the same request as the empty state.
-    const addRow = (
-      <Box key="add-repo-row" flexDirection="row" alignItems="center" flexWrap="wrap" gap="sm" paddingX="md">
-        <Button key="add-repo" plain={true} hover={{ color: 'claude' }} onPress={() => void addRepo($)}>
-          <Text color="claude">{t(lang, 'ui_add_repo')}</Text>
+        <Button key="clear" plain={true} dimColor={true} onPress={() => void update($, selected, () => [])}>
+          {t(lang, 'ui_clear')}
         </Button>
-        <Text size="caption" dimColor>
-          {t(lang, 'ui_add_repo_hint')}
-        </Text>
+        <Button key="send" variant={send.block ? 'secondary' : 'primary'} dimColor={Boolean(send.block)} onPress={() => void sendNow()}>
+          {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
+        </Button>
       </Box>
     )
 
-    return frame(
-      top(vm.counts),
-      filters,
-      <Box key="list" flexDirection="column" gap="sm">
-        {vm.repos.map(row)}
-        {addRow}
-      </Box>,
-      footer,
-    )
+    return frame(top(vm.summary), repoChips, ...vm.sections.map(section), addRow, footer)
   })
 }
