@@ -189,8 +189,9 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text, Link, Code } = ui
     // the terminal is the one surface without Svg (its table still carries the name)
     const hasSvg = e.surface !== 'terminal'
-    // A sidebar is narrow; only a wide pane spells out Check now beside its icon.
-    const wide = (e.viewport?.columns ?? 0) >= 60
+    // A sidebar is narrow; only a wide pane spells out Check now beside its icon. The pane's
+    // own width, not the window's.
+    const wide = ((e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 0) >= 60
     const running = await read($, isRunning)
     const vm = toViewModel(await read($, round), {
       now: await $.clock.now(),
@@ -303,14 +304,13 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text wrap="truncate">{p.title}</Text>
           <Box flexDirection="row" alignItems="center" gap="sm">
-            <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
-              <Text size="caption" dimColor>
-                {p.repo}
-              </Text>
+            <Box flexDirection="row" alignItems="center" columnGap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
               <Link href={p.url} label={`#${p.number}`} />
-              <Text size="caption" dimColor tabular>
-                {`· ${p.wait}${p.owner ? ` · ${p.owner}` : ''}`}
-              </Text>
+              <Box flexShrink={1} minWidth={0}>
+                <Text size="caption" dimColor tabular wrap="truncate">
+                  {['', p.wait, p.owner, p.repo].filter(x => x !== null).join(' · ')}
+                </Text>
+              </Box>
               {p.size && (
                 <Text size="caption" color="warning" weight="semibold">
                   {p.size}
@@ -323,11 +323,19 @@ export const register: Register = (on, options) => {
               )}
             </Box>
             {p.act && p.prompt && (
-              <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt!)}>
-                <Text size="caption" color={p.tone ?? undefined} weight="semibold">
-                  {`${p.act} ›`}
-                </Text>
-              </Button>
+              // a button draws its own text colour, so the signal's colour rides on a dot beside it
+              <Box flexDirection="row" alignItems="center" gap="xs">
+                {p.tone && (
+                  <Text size="caption" color={p.tone}>
+                    ●
+                  </Text>
+                )}
+                <Button key={`act:${p.key}`} plain={true} hover={{ color: 'claude' }} onPress={() => void fillPrompt(p.prompt!)}>
+                  <Text size="caption" weight="semibold">
+                    {`${p.act} ›`}
+                  </Text>
+                </Button>
+              </Box>
             )}
           </Box>
         </Box>

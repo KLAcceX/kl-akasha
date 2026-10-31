@@ -90,6 +90,10 @@ test('the inbox: sections in order, the longest wait first, a summary of what ne
   expect([review?.wait, review?.owner, mine?.wait, mine?.owner, mine?.size]).toEqual(['1d', 'bia', '7w', null, 'XL'])
   expect(vm.sections.find(s => s.id === 'team')?.prs[0]).toMatchObject({ owner: 'Copilot', isAI: true, act: 'Review' })
   expect(vm.band).toEqual({ count: 3, verb: 'Merge it', ref: 'portal#220' })
+  // a PR names its repo only when the list mixes repos
+  expect(review?.repo).toBe('web')
+  expect(ok(vmOf(round, { filter: 'acme/web' })).sections[0]?.prs[0]?.repo).toBeNull()
+  expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] })).sections[0]?.prs[0]?.repo).toBeNull()
   expect(ok(vmOf({ ...round, pending: [], mine: [quiet], others: [] })).summary).toBe('nothing needs you · 1 waiting')
 })
 
@@ -200,7 +204,11 @@ test('a narrow pane: the summary under the title, an icon to check, sections wit
 test('a wide pane spells out Check now', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
-  const ui = await $.ui.mount({ ...PANE, viewport: { columns: 90, rows: 40 } })
+  // the pane's own width decides, not the window's
+  const narrow = await $.ui.mount({ ...PANE, viewport: { columns: 200, rows: 40 } })
+  expect((await narrow.find({ key: 'check' }))?.text).toBe('↻')
+  await narrow.unmount()
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 90 } })
   expect((await ui.find({ key: 'check' }))?.text).toBe('↻  Check now')
   await ui.unmount()
 })

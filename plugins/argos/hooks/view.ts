@@ -159,6 +159,8 @@ export function toViewModel(r: Round | null, o: Opts) {
   const scope = names.includes(ui.filter) ? ui.filter : ''
   const inScope = all.filter(p => !scope || p.repo === scope)
   const picks = new Set(ui.selected)
+  // a PR names its repo only when the list mixes repos
+  const showRepo = names.length > 1 && !scope
 
   const row = (p: Item) => {
     const a = act(p, lang)
@@ -167,7 +169,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       url: p.url,
       number: p.number,
       title: p.title,
-      repo: short(p.repo),
+      repo: showRepo ? short(p.repo) : null,
       wait: ageShort(since(p), now, lang),
       // who opened it, when it is not mine
       owner: p.kind === 'mine' ? null : (p.author || '?').replace(/\[bot\]$/, ''),
