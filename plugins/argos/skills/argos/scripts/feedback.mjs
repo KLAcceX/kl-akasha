@@ -10,10 +10,8 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 
-const QUERY = `
-query($owner: String!, $name: String!, $n: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $n) {
+// The PR fields build() reads; lessons.mjs asks for the same through search.
+export const PR_FIELDS = `
       number title url state isDraft headRefName baseRefName mergeable reviewDecision
       author { login }
       commits(last: 1) { nodes { commit { oid committedDate statusCheckRollup { state contexts(first: 50) { nodes {
@@ -24,7 +22,12 @@ query($owner: String!, $name: String!, $n: Int!) {
       latestReviews(first: 30) { nodes { id state body submittedAt url author { login __typename } } }
       reviewThreads(first: 100) { nodes { id isResolved isOutdated path line originalLine startLine originalStartLine
         comments(first: 50) { nodes { body createdAt url author { login __typename } } } } }
-      comments(last: 50) { nodes { id body createdAt url author { login __typename } } }
+      comments(last: 50) { nodes { id body createdAt url author { login __typename } } }`;
+
+const QUERY = `
+query($owner: String!, $name: String!, $n: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $n) {${PR_FIELDS}
     }
   }
 }`;
