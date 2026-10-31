@@ -154,7 +154,9 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await load($)
-    await $.command.register({ name: 'argos', description: t(lang, 'ui_command') })
+    // The plugin's skill already owns /argos (argos:argos); the hook below answers it. Registering
+    // only matters where no skill holds the name, so a refusal is expected and harmless.
+    await $.command.register({ name: 'argos', description: t(lang, 'ui_command') }).catch(() => {})
     $.clock.every(minutes * 6e4, () => void tick($, options, false))
     $.clock.after(5_000, () => void tick($, options, false))
     return started
@@ -163,9 +165,12 @@ export const register: Register = (on, options) => {
   // /argos opens the pane; /argos repos [add <folder | owner/name> | remove <repo>] goes
   // through repos.mjs, the same command the AI uses from the argos skill. A bare
   // `add` connects the session's folder, named here so it never falls to the mod's own; a
-  // name is checked as the vigil's account.
-  on('command.run', { command: 'argos' }, async ($, e) => {
+  // name is checked as the vigil's account. Anything else after /argos (a PR link, a question)
+  // goes on to the skill.
+  on('command.run', async ($, e, next) => {
+    if (e.command !== 'argos' && e.command !== 'argos:argos') return next(e)
     const args = e.args.trim().split(/\s+/).filter(Boolean)
+    if (args.length && !['repos', 'demo'].includes(args[0])) return next(e)
     if (args[0] === 'repos') {
       if (args.length === 2 && args[1] === 'add') args.push(await $.session.cwd())
       const { stdout, stderr } = await $.process.run([
