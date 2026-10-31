@@ -1,0 +1,51 @@
+# Lethe: what crosses, forgets
+
+Souls drank from the Lethe before being reborn, and crossed without the memory of the life before. Content does the same here: it goes from A to B and arrives without what B must not know, still usable.
+
+## Install
+
+```bash
+claude plugin marketplace add KLAcceX/kl-akasha
+claude plugin install lethe@kl-akasha
+```
+
+Inside Claude Code, `/plugin marketplace add KLAcceX/kl-akasha` and `/plugin install lethe@kl-akasha` do the same.
+
+**Needs:**
+- **Cleaning content:** Python 3.9 or newer.
+- **Publishing a repo:** also [git-filter-repo](https://github.com/newren/git-filter-repo) and the [GitHub CLI](https://cli.github.com).
+
+## What it does
+
+One skill, `lethe`. Ask in plain language, in English or Portuguese: "clean this before I send it", "tira os nomes desse transcrito", "posso mandar isso?", "publica".
+
+| Job | What it does |
+|---|---|
+| **Clean content** | Takes a text, file, folder, transcript or log from A to B. Secrets, tokens, e-mails, phones, CPF/CNPJ, local paths, machine-only commands and private IPs become stable tags (`[e-mail 1]`). The AI reads for what no pattern sees (people, clients, codenames) and writes it into a private rules file, so `[person 1]` stays the same person everywhere and the content still reads. B is then read back for anything left. The source is never touched. |
+| **Publish a repo** | Carries a private repo's whole history to its public mirror with `git filter-repo`: forgotten words, authors' e-mails and private paths are rewritten in every commit. Then it scans every file and message, checks that the push is a fast-forward and that the mirror's protections are on, and pushes only on your yes. |
+
+**The model finds; the script replaces and checks.** Patterns catch what has a shape. A name, a client or a detail that gives someone away only shows up by reading, so that part is the AI's, and it shows you what it found.
+
+## The rules
+
+The rules hold what must be forgotten, so they never travel with B:
+
+| Job | Rules live in | Holds |
+|---|---|---|
+| Clean content | `~/.claude/kl-akasha/lethe/<job>.json` | `replace` (real name → tag), `deny` (must never reach B), `allow` (may stay) |
+| Publish a repo | the private repo's `.claude/lethe/` | `config.json`, `replace.txt`, `mailmap.txt`, `strip.txt`, `deny.txt`, `allow.txt`. `strip.txt` must drop `.claude/lethe/` itself, or nothing is published. |
+
+## By hand
+
+```bash
+python skills/lethe/scripts/redact.py scan <A>
+python skills/lethe/scripts/redact.py apply <A> <B> --rules <rules.json>
+python skills/lethe/scripts/publish.py check     # from the private checkout; changes nothing
+python skills/lethe/scripts/publish.py push      # checks again, then pushes
+```
+
+## Check it
+
+```bash
+python skills/lethe/scripts/redact.py --self-test
+```
