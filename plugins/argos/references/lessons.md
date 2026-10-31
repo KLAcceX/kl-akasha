@@ -14,7 +14,7 @@ Lessons are personal: one file per repo in `~/.claude/kl-akasha/argos/lessons/<o
 
    It reads the user's latest merged PRs in the repo and lists every human ask: what it was before being addressed (blocking, question, suggestion, nit), who asked and where. It also counts them by class, by reviewer and by folder. Bots and praise are left out. With a lessons file already there, pass `--since` with its "Read up to" date, so only new PRs are read.
 
-2. **Group.** Read the asks and find what repeats: the same ask on two or more PRs, or from the same reviewer twice. Group by meaning, not by words: "missing a test for X" and "isso precisa de teste" are one lesson.
+2. **Group.** Read the asks and find what repeats: the same ask on two or more PRs, or from the same reviewer twice. Group by meaning, not by words: "missing a test for X" and "this needs a test" are one lesson, in whatever language they were written.
 
    Write each lesson so it can be checked against a diff. "Every new branch in `src/cart/` gets a unit test" works; "write better tests" cannot be checked.
 
@@ -39,7 +39,7 @@ Lessons are personal: one file per repo in `~/.claude/kl-akasha/argos/lessons/<o
 
 ## Check before review
 
-When the user is about to open a PR or ask for review ("meu PR tá pronto?", "posso pedir review?"), or asks to check one:
+When the user is about to open a PR or ask for review ("is my PR ready?", "can I ask for review?"), or asks to check one:
 
 1. Read the repo's lessons file. Without one, offer to learn first (it takes seconds).
 2. Get the diff:

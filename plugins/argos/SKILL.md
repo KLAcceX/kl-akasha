@@ -1,6 +1,6 @@
 ---
 name: argos
-description: Watch pull requests so none goes stale. Reports which of the user's PRs need them now (comments, change requests, failing CI, conflicts) and which PRs wait for their review; fixes the user's own PR after review (code changes and draft replies); reviews a teammate's PR with depth matched to how critical its task is, against the task's acceptance criteria and Gherkin scenarios and the project's own review rules, and approves or merges it only after that review; learns what reviewers keep asking the user in each repo and checks the next PR against those lessons before review; runs the vigil on a schedule and connects or disconnects the repositories it watches. Drafts first: nothing is pushed, posted, approved or merged without the user's yes. Use whenever the user mentions PRs, reviews, review comments, CI on a PR, approving or merging, watching repos, or picks anything in the Argos pane, even with just a PR link. Portuguese requests count too, such as "algum PR meu precisa de mim?", "tem review pra eu fazer?", "corrigir meu PR", "revisa o PR da Bia", "esse PR tá ok pra merge?", "aprova e faz o merge", "o que sempre me pedem no review?", "meu PR tá pronto pra review?", "conecta essa pasta no Argos", "me avisa quando alguém comentar".
+description: Watch pull requests so none goes stale. Reports which of the user's PRs need them now (comments, change requests, failing CI, conflicts) and which PRs wait for their review; fixes the user's own PR after review (code changes and draft replies); reviews a teammate's PR with depth matched to how critical its task is, against the task's acceptance criteria and Gherkin scenarios and the project's own review rules, and approves or merges it only after that review; learns what reviewers keep asking the user in each repo and checks the next PR against those lessons before review; runs the vigil on a schedule and connects or disconnects the repositories it watches. Drafts first: nothing is pushed, posted, approved or merged without the user's yes. Use whenever the user mentions PRs, reviews, review comments, CI on a PR, approving or merging, watching repos, or picks anything in the Argos pane, even with just a PR link. Requests in any language count.
 compatibility: The bundled scripts and the Argos mod need the GitHub CLI and Node.js. Without the CLI, use a GitHub connector and compute the same signals.
 ---
 
@@ -20,7 +20,7 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 
 ## For every job
 
-- **Sources:** read `../../references/sources.md` once per conversation, to learn what this machine has for PRs and tasks.
+- **Sources:** read `references/sources.md` once per conversation, to learn what this machine has for PRs and tasks.
 - **Scope:** watch only connected or named repositories. `node scripts/repos.mjs list --json` lists them; never search all of GitHub.
 - **Accounts:** use the account that owns the repo: `GH_TOKEN=$(gh auth token -u <login>)` for that command only, or `--account <login>` where a script takes one. Never `gh auth switch`.
 - **Scripts:** run them from this skill's directory.

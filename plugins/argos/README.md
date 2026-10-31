@@ -22,15 +22,15 @@ Inside Claude Code, `/plugin marketplace add KLAcceX/kl-akasha` and `/plugin ins
 
 ## What it does
 
-One skill, `argos`, does every PR job. Ask in plain language, in English or Portuguese.
+One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 | Job | Ask like | What it does |
 |---|---|---|
-| **What needs me** | "any PR of mine need me?", "tem review pra eu fazer?" | Watches my open PRs (comments, reviews, change requests, CI, conflicts), the PRs waiting for my review, and teammates' PRs in the connected repos. Oldest first, because the oldest weighs most on stale time. |
-| **Fix my PR** | "address the review on my PR", "arruma o CI do meu PR" | Gathers what reviewers said, triages it, changes the code in the local clone and drafts a reply per thread. |
-| **Review** | "review this PR", "esse PR tá ok pra merge?" | Reviews a teammate's PR with as many eyes as the task deserves. It reads the task (Jira key from the branch), sets the level from its priority (raised by risky paths or labels, never lowered), follows the project's own review rules, checks the Gherkin scenarios and splits reviews over 400 lines. It drafts findings by severity plus suggested tasks, and approves or merges only after that review. |
-| **Lessons** | "what do reviewers keep asking me?", "meu PR tá pronto pra review?" | Reads my merged PRs in a repo and finds what reviewers keep asking (tests, naming, a rule of theirs), then keeps it as a personal checklist. Before I ask for review, it checks the PR against that list, so the same ask does not cost another round. |
-| **Vigil** | "watch my PRs", "conecta essa pasta no Argos" | Runs a round over the connected repos and reports only what changed. Connects and disconnects repos, and can run on a schedule while the app is open. |
+| **What needs me** | "any PR of mine need me?", "anything for me to review?" | Watches my open PRs (comments, reviews, change requests, CI, conflicts), the PRs waiting for my review, and teammates' PRs in the connected repos. Oldest first, because the oldest weighs most on stale time. |
+| **Fix my PR** | "address the review on my PR", "fix the CI on my PR" | Gathers what reviewers said, triages it, changes the code in the local clone and drafts a reply per thread. |
+| **Review** | "review this PR", "is this PR safe to merge?" | Reviews a teammate's PR with as many eyes as the task deserves. It reads the task (Jira key from the branch), sets the level from its priority (raised by risky paths or labels, never lowered), follows the project's own review rules, checks the Gherkin scenarios and splits reviews over 400 lines. It drafts findings by severity plus suggested tasks, and approves or merges only after that review. |
+| **Lessons** | "what do reviewers keep asking me?", "is my PR ready for review?" | Reads my merged PRs in a repo and finds what reviewers keep asking (tests, naming, a rule of theirs), then keeps it as a personal checklist. Before I ask for review, it checks the PR against that list, so the same ask does not cost another round. |
+| **Vigil** | "watch my PRs", "connect this folder to Argos" | Runs a round over the connected repos and reports only what changed. Connects and disconnects repos, and can run on a schedule while the app is open. |
 
 ## The eyes inside Claude
 
@@ -85,8 +85,8 @@ Everything personal stays outside your repos, in `~/.claude/kl-akasha/`:
 ## Check it
 
 ```bash
-node skills/argos/scripts/queue.mjs --self-test
-node skills/argos/scripts/lessons.mjs --self-test
+node scripts/queue.mjs --self-test
+node scripts/lessons.mjs --self-test
 claude plugin test .
 ```
 

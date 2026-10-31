@@ -83,23 +83,20 @@ kl-akasha/
 ├── .claude-plugin/
 │   └── marketplace.json        # catalog: every plugin in this repo
 ├── plugins/
-│   ├── argos/                  # one domain = one plugin = one entity
+│   ├── argos/                  # one domain = one plugin = one entity = one skill
 │   │   ├── README.md           # for people: install, jobs, commands, options
+│   │   ├── SKILL.md            # for the AI: picks the job
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json     # name, version, options
+│   │   ├── scripts/            # queue, feedback, lessons, facts, rules, round, repos
+│   │   ├── references/         # one file per job, sources, rubric, review levels, evidence
 │   │   ├── hooks/              # the in-Claude mod (band, pane, timer)
-│   │   ├── types/              # the mod's state contract
-│   │   └── skills/
-│   │       └── argos/
-│   │           ├── SKILL.md    # for the AI: picks the job
-│   │           ├── scripts/    # queue, feedback, lessons, facts, rules, round, repos
-│   │           └── references/ # one file per job, rubric, review levels, evidence
+│   │   └── types/              # the mod's state contract
 │   └── lethe/
 │       ├── README.md
-│       └── skills/
-│           └── lethe/
-│               ├── SKILL.md
-│               └── scripts/    # redact.py (content), publish.py (repo mirror)
+│       ├── SKILL.md
+│       ├── .claude-plugin/
+│       └── scripts/            # redact.py (content), publish.py (repo mirror)
 └── README.md
 ```
 

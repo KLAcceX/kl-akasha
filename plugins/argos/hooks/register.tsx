@@ -7,7 +7,7 @@
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
-import { t } from '../skills/argos/scripts/i18n.mjs'
+import { t } from '../scripts/i18n.mjs'
 import { COLUMNS, UI, toViewModel } from './view'
 import type { Column } from './view'
 import type { Round } from '../types'
@@ -131,7 +131,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
   await $.state.set(RUNNING, true)
   try {
-    const argv = ['node', `${$.plugin.root}/skills/argos/scripts/round.mjs`, ...qualifiers, '--lang', lang, '--json']
+    const argv = ['node', `${$.plugin.root}/scripts/round.mjs`, ...qualifiers, '--lang', lang, '--json']
     if (account) argv.push('--account', account)
     await $.process.run(argv, { timeoutMs: 120_000 })
     const fresh = await load($)
@@ -170,7 +170,7 @@ export const register: Register = (on, options) => {
       if (args.length === 2 && args[1] === 'add') args.push(await $.session.cwd())
       const { stdout, stderr } = await $.process.run([
         'node',
-        `${$.plugin.root}/skills/argos/scripts/repos.mjs`,
+        `${$.plugin.root}/scripts/repos.mjs`,
         ...(args.length > 1 ? args.slice(1) : ['list']),
         '--lang',
         lang,

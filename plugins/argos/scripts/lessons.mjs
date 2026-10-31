@@ -84,7 +84,7 @@ function selfTest() {
     comments: { nodes: comments.map(([by, body, at], i) => ({ id: `C${number}${i}`, ...c(by, body, at) })) },
   });
   const g = gather([
-    pr(1, [["src/cart/total.ts", "ana", "Isso precisa de teste.", "2026-10-01T00:00:00Z"], ["src/cart/total.ts", "copilot", "nit: spacing", "2026-10-01T01:00:00Z", true]]),
+    pr(1, [["src/cart/total.ts", "ana", "This must have a test.", "2026-10-01T00:00:00Z"], ["src/cart/total.ts", "copilot", "nit: spacing", "2026-10-01T01:00:00Z", true]]),
     pr(2, [["src/cart/coupon.ts", "ana", "Missing a test for the expired case.", "2026-10-02T00:00:00Z"], ["README.md", "bia", "nit: typo", "2026-10-02T01:00:00Z"]], [["bia", "LGTM", "2026-10-02T02:00:00Z"]]),
     pr(3, []),
   ], "acme/shop");
@@ -99,7 +99,7 @@ function selfTest() {
   assert.equal(area("a/b/c/d.ts"), "a/b/");
   const md = render(g);
   assert.match(md, /3 merged PRs read \(since 2026-10-01\), 2 with feedback, 3 asks/);
-  assert.match(md, /\| #1 \| @ana \| blocking \| src\/cart\/total\.ts:3 \| Isso precisa de teste\. \|/);
+  assert.match(md, /\| #1 \| @ana \| blocking \| src\/cart\/total\.ts:3 \| This must have a test\. \|/);
   assert.match(render(gather([pr(3, [])], "acme/shop")), /No reviewer asks to learn from/);
   console.log("self-test ok");
 }

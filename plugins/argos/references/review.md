@@ -6,7 +6,7 @@ Review a PR the way a careful senior teammate on **that project** would: by the 
 
 ## 1. Sources
 
-Read `../../references/sources.md` and check what this machine has for PRs and for tasks. That decides how every step below gets its data.
+Read `references/sources.md` and check what this machine has for PRs and for tasks. That decides how every step below gets its data.
 
 ## 2. PR facts
 
@@ -65,7 +65,7 @@ Offer to post. On a clear yes, post what the user saw, as they edited it, labels
 
 ## 9. Approve, or approve and merge
 
-The Argos pane's **Approve** and **Approve and merge** buttons send prompts such as "Approve `<url>` on GitHub (gh pr review --approve). Approve only, no merge." or "...and merge it once checks pass (gh pr review --approve, then gh pr merge)." The user typing "aprova" or "approve and merge" means the same.
+The Argos pane's **Approve** and **Approve and merge** buttons send prompts such as "Approve `<url>` on GitHub (gh pr review --approve). Approve only, no merge." or "...and merge it once checks pass (gh pr review --approve, then gh pr merge)." The user typing "approve" or "approve and merge" means the same.
 
 1. **Review first.** Run sections 2 to 6 at the task's level. Without a task, a small PR (about 100 changed lines or less) gets a quick low-level look; a bigger one asks once for the task as in section 4. Show the verdict in a few lines: level, project rules used, blockers, and how many other findings.
 2. **Stop on a blocker.** If the review finds a blocker (or a broken project rule that blocks), don't approve: show it and offer the request-changes draft from section 7. Also stop when the PR is a draft, closed, or the user's own.

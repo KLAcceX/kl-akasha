@@ -33,7 +33,7 @@ Work out the repository from what the user gave, then run one `add` per reposito
 | a GitHub link to the repo, a PR, an issue or a file | the link as is |
 | a task key or a short name ("connect the api repo") | the `owner/name` it maps to in the conversation (a PR link or repo mentioned earlier); if nothing says, ask which repository, never guess an owner |
 
-A name that is also an existing folder is read as the folder. A name is checked with `gh repo view` as `--account <login>`, or the active `gh` account without it (see `../../references/sources.md`); when it says not found, the repo may be private to another account, so retry with `--account` set to that account before telling the user. A folder whose origin is not on GitHub is refused; offer to connect it by `owner/name` instead. Report what each line says.
+A name that is also an existing folder is read as the folder. A name is checked with `gh repo view` as `--account <login>`, or the active `gh` account without it (see `references/sources.md`); when it says not found, the repo may be private to another account, so retry with `--account` set to that account before telling the user. A folder whose origin is not on GitHub is refused; offer to connect it by `owner/name` instead. Report what each line says.
 
 For the user doing it themselves: the pane's **Add a repository** button and `/argos repos add` take a folder or an `owner/name` (or a GitHub link), the same as the script. The list lives in `~/.claude/kl-akasha/argos/repos.json`.
 
@@ -47,7 +47,7 @@ The mod follows the plugin option `language` (`en` or `pt-BR`), set in `/config`
 node scripts/round.mjs --account <gh login> --lang <en|pt-BR>
 ```
 
-Use the account that owns the connected repos (see `../../references/sources.md`). The first line tells what happened:
+Use the account that owns the connected repos (see `references/sources.md`). The first line tells what happened:
 
 | First line says | Do |
 |---|---|

@@ -1,6 +1,6 @@
 ---
 name: lethe
-description: Carry content from A to B without what must be forgotten. Cleans text, files, folders, transcripts, logs and whole git histories of secrets, tokens, e-mails, phones, IDs, local paths, machine-only commands, people's names, client and company names, keeping the content usable through stable tags ("[person 1]" stays the same person). Also publishes a private repo to its public mirror, sanitized, scanned and pushed only on a yes. Use whenever the user wants to clean, sanitize, redact, anonymize or scrub something before sharing, pasting, sending, posting or publishing it, asks to remove names, secrets or personal data, or asks if something is safe to share or go public, even if they only say "limpa isso", "tira os nomes", "anonimiza esse transcrito", "posso mandar isso?", "publica", "manda pro público" or "pode subir?".
+description: Carry content from A to B without what must be forgotten. Cleans text, files, folders, transcripts, logs and whole git histories of secrets, tokens, e-mails, phones, IDs, local paths, machine-only commands, people's names, client and company names, keeping the content usable through stable tags ("[person 1]" stays the same person). Also publishes a private repo to its public mirror, sanitized, scanned and pushed only on a yes. Use whenever the user wants to clean, sanitize, redact, anonymize or scrub something before sharing, pasting, sending, posting or publishing it, asks to remove names, secrets or personal data, or asks if something is safe to share or go public, in any language.
 ---
 
 # Lethe
@@ -55,7 +55,7 @@ Write the rules to a JSON file in `~/.claude/kl-akasha/lethe/`, named after the 
 ```
 
 - **One tag per entity, across all its forms.** That way the content still reads.
-- Write tags in the content's language (`[Pessoa 1]` in a Portuguese transcript). Keep the role when the user needs it (`[Pessoa 1, PO]`).
+- Write tags in the content's language (a transcript in Portuguese gets Portuguese tags). Keep the role when the user needs it (`[Pessoa 1, PO]`).
 - Literal keys match whole words, ignoring case, with longer keys first, so "Maria" never breaks "Mariana".
 - `deny` lists what must never reach B. `allow` lists what may stay.
 

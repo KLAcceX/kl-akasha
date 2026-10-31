@@ -4,7 +4,7 @@ Two jobs on the user's own PRs: **what needs me** (a queue, oldest first, becaus
 
 ## Sources and scope
 
-Read `../../references/sources.md` and check what is available. Watch only repositories the user connected or named: `node scripts/repos.mjs list --json` gives `{repo, path}` per connected repo (`path` is the local clone, when there is one). With none, ask which repos to watch (see `references/vigil.md`) instead of searching all of GitHub.
+Read `references/sources.md` and check what is available. Watch only repositories the user connected or named: `node scripts/repos.mjs list --json` gives `{repo, path}` per connected repo (`path` is the local clone, when there is one). With none, ask which repos to watch (see `references/vigil.md`) instead of searching all of GitHub.
 
 Use the account that owns the repo: `GH_TOKEN=$(gh auth token -u <login>)` for that command only, or `--account <login>` where a script takes it. Never `gh auth switch`.
 

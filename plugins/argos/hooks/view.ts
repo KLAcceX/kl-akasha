@@ -1,7 +1,7 @@
 // Round → ViewModel: every word and number the pane and the band show comes from here,
 // so the counts and the prompt sent to the AI always agree. No mod runtime, so Node can
 // import this file.
-import { t } from '../skills/argos/scripts/i18n.mjs'
+import { t } from '../scripts/i18n.mjs'
 import type { Item, Round } from '../types'
 
 const base = (code: string) => code.split(':')[0]

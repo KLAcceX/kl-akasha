@@ -17,7 +17,7 @@ Inside Claude Code, `/plugin marketplace add KLAcceX/kl-akasha` and `/plugin ins
 
 ## What it does
 
-One skill, `lethe`. Ask in plain language, in English or Portuguese: "clean this before I send it", "tira os nomes desse transcrito", "posso mandar isso?", "publica".
+One skill, `lethe`. Ask in plain language, in any language: "clean this before I send it", "remove the names from this transcript", "is this safe to share?", "publish".
 
 | Job | What it does |
 |---|---|
@@ -38,14 +38,14 @@ The rules hold what must be forgotten, so they never travel with B:
 ## By hand
 
 ```bash
-python skills/lethe/scripts/redact.py scan <A>
-python skills/lethe/scripts/redact.py apply <A> <B> --rules <rules.json>
-python skills/lethe/scripts/publish.py check     # from the private checkout; changes nothing
-python skills/lethe/scripts/publish.py push      # checks again, then pushes
+python scripts/redact.py scan <A>
+python scripts/redact.py apply <A> <B> --rules <rules.json>
+python scripts/publish.py check     # from the private checkout; changes nothing
+python scripts/publish.py push      # checks again, then pushes
 ```
 
 ## Check it
 
 ```bash
-python skills/lethe/scripts/redact.py --self-test
+python scripts/redact.py --self-test
 ```
