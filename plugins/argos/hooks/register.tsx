@@ -217,9 +217,11 @@ export const register: Register = (on, options) => {
     const checkNow = () => void tick($, options, true)
     const fill = (color: string) => (hasSvg ? color : undefined)
 
-    // The head: the mark, "Argos", what needs me and when Argos last looked; Check now on
-    // the right as an icon, named for screen readers; while it runs the icon dims and the line
-    // under the title says so, so the head never changes width.
+    // The head: the mark, "Argos", what needs me and when Argos last looked; Check now on the
+    // right. While it runs the button dims and the line under the title says so, so the head
+    // never changes width.
+    // A desktop draws every Button as a native button whose text is its label, or its one
+    // string child: so no Button here carries a label apart from its text.
     const top = (summary?: string) => (
       <Box key="top" flexDirection="row" alignItems="center" gap="sm">
         {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={28} height={28} />}
@@ -234,8 +236,8 @@ export const register: Register = (on, options) => {
             </Text>
           )}
         </Box>
-        <Button key="check" variant="secondary" dimColor={running} label={t(lang, running ? 'ui_checking' : 'ui_check')} onPress={checkNow}>
-          ↻
+        <Button key="check" variant="secondary" dimColor={running} onPress={checkNow}>
+          {t(lang, 'ui_check')}
         </Button>
       </Box>
     )
@@ -284,14 +286,13 @@ export const register: Register = (on, options) => {
     // dropped by the next press instead of riding along forever.
     const toggle = (keys: string[], pick: boolean) =>
       void update($, selected, () => (pick ? [...new Set([...send.keep, ...keys])] : send.keep.filter(k => !keys.includes(k))))
-    // A checkbox is a one-glyph button: the kit's own way to a control that is only a mark,
-    // so the box itself takes the press (focus and pointer invert it). Its label says which PR
-    // or section it picks. The terminal writes brackets. A row with nothing to pick keeps the
-    // same column with an invisible box, so every title starts at one left edge.
+    // A checkbox is a one-glyph plain button, so the box itself takes the press. The terminal
+    // writes brackets. A row with nothing to pick keeps the same column with an empty box-wide
+    // gap, so every title starts at one left edge.
     const GLYPH = hasSvg ? { all: '☑', some: '⊟', none: '☐' } : { all: '[x]', some: '[-]', none: '[ ]' }
-    const check = (key: string, state: 'all' | 'some' | 'none', label: string, onPress: () => void) => (
-      <Button key={key} plain={true} label={label} onPress={onPress}>
-        <Text>{GLYPH[state]}</Text>
+    const check = (key: string, state: 'all' | 'some' | 'none', onPress: () => void) => (
+      <Button key={key} plain={true} onPress={onPress}>
+        {GLYPH[state]}
       </Button>
     )
     // an em space the width of a box, which a screen reader does not announce
@@ -331,7 +332,7 @@ export const register: Register = (on, options) => {
         borderStyle={hasSvg && p.isPicked ? 'round' : undefined}
         borderColor={p.isPicked ? fill(PICKED) : undefined}
       >
-        {canPick && p.act ? check(`box:${p.key}`, p.isPicked ? 'all' : 'none', p.pickLabel, () => toggle([p.key], !p.isPicked)) : gap}
+        {canPick && p.act ? check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked)) : gap}
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text wrap="truncate">{p.title}</Text>
           {/* The number and the wait never shrink; whose it is and where truncate; when the
@@ -375,10 +376,8 @@ export const register: Register = (on, options) => {
                         ●
                       </Text>
                     )}
-                    <Button key={`act:${p.key}`} plain={true} label={p.actLabel ?? undefined} onPress={() => void fillPrompt(p.prompt!, [p.url])}>
-                      <Text size="caption" weight="semibold">
-                        {`${p.act} ›`}
-                      </Text>
+                    <Button key={`act:${p.key}`} plain={true} onPress={() => void fillPrompt(p.prompt!, [p.url])}>
+                      {`${p.act} ›`}
                     </Button>
                   </Box>
                 )}
@@ -405,12 +404,10 @@ export const register: Register = (on, options) => {
       return (
         <Box key={`sec:${s.id}`} flexDirection="column" gap="xs">
           <Box flexDirection="row" alignItems="center" gap="sm" paddingX="sm">
-            {s.canPick && !s.isFolded ? check(`box:${s.id}`, s.pick, s.pickLabel, () => toggle(s.keys, s.pick !== 'all')) : gap}
+            {s.canPick && !s.isFolded ? check(`box:${s.id}`, s.pick, () => toggle(s.keys, s.pick !== 'all')) : gap}
             {s.canFold || s.isFolded ? (
-              <Button key={`fold:${s.id}`} plain={true} dimColor={true} label={s.foldLabel} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
-                <Text size="caption" weight="semibold">
-                  {`${title}  ${s.isFolded ? '▾' : '▴'}`}
-                </Text>
+              <Button key={`fold:${s.id}`} plain={true} dimColor={true} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
+                {`${title}  ${s.isFolded ? '▾' : '▴'}`}
               </Button>
             ) : (
               <Text size={lead ? 'body' : 'caption'} weight="semibold" dimColor={!lead}>
@@ -444,18 +441,16 @@ export const register: Register = (on, options) => {
               key={`repo:${r.id || 'all'}`}
               variant={r.isActive ? 'secondary' : undefined}
               plain={r.isActive ? undefined : true}
-              label={t(lang, 'lbl_repo', r.name, r.count, r.isActive)}
               onPress={() => narrowTo(r.id)}
             >
-              <Text size="caption">{r.name}</Text>
-              <Text size="caption" dimColor>{` ${r.count}`}</Text>
+              {`${r.name} ${r.count}`}
             </Button>
           ))}
         </Box>
       )
     const addRow = (
       <Box key="add-repo-row" flexDirection="row" paddingX="sm">
-        <Button key="add-repo" plain={true} dimColor={true} label={t(lang, 'lbl_add_repo')} onPress={() => void addRepo($)}>
+        <Button key="add-repo" plain={true} dimColor={true} onPress={() => void addRepo($)}>
           {t(lang, 'ui_add_repo')}
         </Button>
       </Box>

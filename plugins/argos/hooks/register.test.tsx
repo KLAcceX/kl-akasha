@@ -162,9 +162,6 @@ test('the send bar carries the picks of the batch sections: mine to fix, the oth
   // a folded section never hides a pick
   const team = ok(vmOf(round, { selected: ['acme/web#8'] })).sections.find(s => s.id === 'team')
   expect([team?.isFolded, team?.canFold, team?.picked]).toEqual([false, false, 1])
-  // every control names the PR it acts on
-  expect(vm.sections[0]?.prs[0]?.pickLabel).toBe('Unpick #7 T')
-  expect(vm.sections[0]?.prs[1]?.actLabel).toBe('Fix conflict: #219 S3 migration. Puts a request in the prompt.')
 })
 
 test('the send checks wait for a running check and warn on stale data or a big batch', () => {
@@ -208,12 +205,12 @@ test('the band stays out of the way when nothing needs action', async ($, on) =>
   await ui.unmount()
 })
 
-test('a narrow pane: the summary under the title, an icon to check, sections with two-line PRs', async ($, on) => {
+test('a narrow pane: the summary under the title, Check now, sections with two-line PRs', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you · 1 ready · 1 waiting')
-  expect((await ui.find({ key: 'check' }))?.text).toBe('↻')
+  expect((await ui.find({ key: 'check' }))?.text).toBe('Check now')
   expect((await ui.find({ type: 'Text', text: /^Your move/ }))?.text).toBe('Your move · 2')
   expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict ›')
   expect((await ui.find({ key: 'act:acme/portal#220' }))?.text).toBe('Merge ›')
@@ -226,11 +223,27 @@ test('a narrow pane: the summary under the title, an icon to check, sections wit
   await ui.unmount()
 })
 
-test('Check now is an icon at any width', async ($, on) => {
-  on('state.get', stored({ round }))
+// A desktop draws a Button as a native button whose text is its label or its string child, so
+// a label apart from the text, or an element child, would show something else than the tests see.
+test('every button shows on a desktop the text it holds', async ($, on) => {
+  on('state.get', stored({ round, selected: ['acme/web#7'], open: 'team' }))
   on('clock.now', clock)
-  const ui = await $.ui.mount({ ...PANE, viewport: { columns: 200, rows: 40 }, props: { ...PANE.props, bodyColumns: 120 } })
-  expect((await ui.find({ key: 'check' }))?.text).toBe('↻')
+  const ui = await $.ui.mount(PANE)
+  const buttons: { props?: { key?: string; label?: string }; children?: unknown[] }[] = []
+  const walk = (n: any) => {
+    if (!n || typeof n !== 'object') return
+    if (n.type === 'Button') buttons.push(n)
+    for (const c of n.children ?? []) walk(c)
+  }
+  walk(await ui.drawn())
+  expect(buttons.length).toBeGreaterThan(5)
+  for (const b of buttons) {
+    const kids = b.children ?? []
+    expect([b.props?.key, kids.every(c => typeof c === 'string')]).toEqual([b.props?.key, true])
+    // the engine moves the string child into the label, which the desktop shows: a label kept
+    // beside a child means the two differ, and the desktop would show the label
+    expect([b.props?.key, b.props?.label && kids.length ? 'label beside text' : 'one text']).toEqual([b.props?.key, 'one text'])
+  }
   await ui.unmount()
 })
 
@@ -286,7 +299,7 @@ test('the first check says what is happening', async ($, on) => {
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /First check/ }))?.text).toBe('First check running. It takes a few seconds per repository.')
-  expect((await ui.find({ key: 'check' }))?.text).toBe('↻')
+  expect((await ui.find({ key: 'check' }))?.text).toBe('Check now')
   expect((await ui.find({ type: 'Text', text: 'Checking…' }))?.text).toBe('Checking…')
   await ui.unmount()
 })

@@ -189,9 +189,6 @@ export function toViewModel(r: Round | null, o: Opts) {
       // already asked for in the prompt: the action says so instead of asking twice
       inPrompt: asked(p.url),
       isPicked: picked,
-      // what a screen reader hears: which PR each control acts on
-      pickLabel: t(lang, picked ? 'lbl_unpick' : 'lbl_pick', p.number, p.title),
-      actLabel: a ? t(lang, 'lbl_act', a.label, p.number, p.title) : null,
     }
   }
   const sections = SECTIONS.map(id => {
@@ -212,8 +209,6 @@ export function toViewModel(r: Round | null, o: Opts) {
       keys: canPick ? prs.map(keyOf) : [],
       isFolded,
       canFold: FOLDED.includes(id) && chosen === 0,
-      pickLabel: t(lang, pick === 'all' ? 'lbl_unpick_section' : 'lbl_pick_section', title, prs.length),
-      foldLabel: t(lang, 'lbl_fold', title, prs.length, isFolded),
       prs: prs.map(row),
     }
   })

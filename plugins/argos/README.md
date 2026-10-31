@@ -36,7 +36,7 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the next action, toasts what is new, and `/argos` opens a pane built for a narrow sidebar: an inbox sorted by your next move.
 
-- **Head:** "Argos", what needs you ("3 need you · 1 ready · 2 waiting"), when Argos last checked, and a ↻ button to check now.
+- **Head:** "Argos", what needs you ("3 need you · 1 ready · 2 waiting"), when Argos last checked, and **Check now**.
 - **Send bar**, right under the head and always in the same place, so the list never jumps: with nothing picked it says how to use it; with picks it says what will go ("1 to fix, 2 to review"), names any pick that left the list since, and **Add N to prompt** puts them all in the prompt. It is the pane's one accent.
 - **Repo chips:** All, then every connected repo with its open PRs, zeros included. A chip narrows the inbox to that repo; past six repos a picker takes their place.
 - **Sections**, each shown only when it holds something, longest wait first:
@@ -53,7 +53,6 @@ The plugin ships a mod that runs the vigil on its own timer, at no token cost. I
 - **One action per PR**, on the right, naming its reason, with a dot in its colour: **Fix conflict**, **Fix CI**, **Address changes**, **Reply to 2**, **Review**, **Review again**, **Find a reviewer**, **Nudge**, **Merge**, or **Pre-check** (checks a draft against your lessons). A PR with nothing to do says where it stands ("Waiting for review").
 - **In prompt ✓:** once a PR's request is in the prompt, its action says so instead of asking twice. It reads the prompt itself, so deleting the request brings the action back.
 - **Batch picks** in Your move and Team: a box picks a PR or a whole section, and picks survive narrowing to a repo.
-- **Screen readers:** every box, action, chip and fold names the PR, repo or section it acts on.
 
 **Every action only puts a request in the prompt.** Two quick presses add it once, a PR already in the prompt is not added again, and nothing reaches GitHub until you send it and say yes to what the AI drafts. Stale data or a big batch is flagged before you press. With several sessions open, only one runs each round.
 
