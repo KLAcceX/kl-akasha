@@ -202,7 +202,8 @@ export const register: Register = (on, options) => {
     const fill = (color: string) => (hasSvg ? color : undefined)
 
     // The head: the mark, "Argos", what needs me and when Argos last looked; Check now on
-    // the right as an icon, named for screen readers.
+    // the right as an icon, named for screen readers; while it runs the icon dims and the line
+    // under the title says so, so the head never changes width.
     const top = (summary?: string) => (
       <Box key="top" flexDirection="row" alignItems="center" gap="sm">
         {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={28} height={28} />}
@@ -211,14 +212,14 @@ export const register: Register = (on, options) => {
             Argos
           </Text>
           {summary && <Text size="caption">{summary}</Text>}
-          {vm.seen && (
+          {(running || vm.seen) && (
             <Text size="caption" dimColor>
-              {vm.seen}
+              {running ? t(lang, 'ui_checking') : vm.seen}
             </Text>
           )}
         </Box>
         <Button key="check" variant="secondary" dimColor={running} label={t(lang, running ? 'ui_checking' : 'ui_check')} onPress={checkNow}>
-          {running ? t(lang, 'ui_checking') : '↻'}
+          ↻
         </Button>
       </Box>
     )

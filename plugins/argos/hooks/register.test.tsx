@@ -262,7 +262,8 @@ test('the first check says what is happening', async ($, on) => {
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /First check/ }))?.text).toBe('First check running. It takes a few seconds per repository.')
-  expect((await ui.find({ key: 'check' }))?.text).toBe('Checking…')
+  expect((await ui.find({ key: 'check' }))?.text).toBe('↻')
+  expect((await ui.find({ type: 'Text', text: 'Checking…' }))?.text).toBe('Checking…')
   await ui.unmount()
 })
 
