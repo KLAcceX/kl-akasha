@@ -51,8 +51,6 @@ declare module 'claude-code' {
       isDemo: boolean
       // PRs picked to send to the AI (owner/name#number)
       selected: string[]
-      // the folded section the person opened ('team'); '' = none
-      open: string
       // the repo the list is narrowed to (owner/name); '' = every connected repo
       filter: string
       // '' the inbox of what needs me, 'team' the team's PRs by verdict
@@ -61,7 +59,7 @@ declare module 'claude-code' {
       more: string[]
       // the batch action picked in the team view
       act: string
-      // repos opened or folded by hand in the By repo view, with the PRs that needed me then
+      // sections opened or folded by hand, by view and section, with the PRs that needed me then
       folds: Record<string, { open: boolean; needs: string[] }>
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null

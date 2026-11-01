@@ -49,8 +49,6 @@ export function ageShort(iso: string, now: number, lang: string): string {
 // else's desk; drafts: mine not out yet; team: teammates' PRs nobody asked me about.
 export const SECTIONS = ['move', 'ready', 'waiting', 'drafts', 'team'] as const
 export type Section = (typeof SECTIONS)[number]
-// Folded until opened: the rest of the team's work is context, not a to-do.
-export const FOLDED: Section[] = ['team']
 
 export function sectionOf(p: Item): Section {
   if (p.kind === 'review') return p.isDraft ? 'team' : 'move'
@@ -160,11 +158,11 @@ export function reason(error: string, lang: string) {
 // and the repo the list is narrowed to ('' = all).
 // view: '' the inbox of what needs me, 'team' the team's PRs grouped by verdict; more: the
 // verdict groups shown in full; act: the batch action picked in the team view.
-// folds: a repo the person opened or folded by hand in the By repo view, with the PRs that needed
-// them then; a new one that needs them reopens a folded repo.
+// folds: sections the person opened or folded by hand, by view and section ("needs:team",
+// "repos:acme/web"), with the PRs that needed them then; a new one that needs them reopens it.
 export type Fold = { open: boolean; needs: string[] }
-export type Ui = { selected: string[]; open: string; filter: string; view: string; more: string[]; act: string; folds: Record<string, Fold> }
-export const UI: Ui = { selected: [], open: '', filter: '', view: '', more: [], act: '', folds: {} }
+export type Ui = { selected: string[]; filter: string; view: string; more: string[]; act: string; folds: Record<string, Fold> }
+export const UI: Ui = { selected: [], filter: '', view: '', more: [], act: '', folds: {} }
 
 // The team view: the team's PRs by verdict, a few rows each until "Show N more".
 export const GROUPS = ['issues', 'partial', 'run', 'none', 'stale', 'pass'] as const
@@ -249,12 +247,60 @@ export function toViewModel(r: Round | null, o: Opts) {
       box: isPicked ? PICKED : tn ? tint(tn) : NEUTRAL,
     }
   }
+  // The collapse system, one for every view. A section's header keeps what must not hide when it
+  // is folded: the count merged with what needs me ("3 need you", "7 · 2 need you", "7"), what is
+  // picked, and the glyph of its worst signal (blocked › feedback › asked of me › validator issues
+  // › ready › waiting). Which sections start open is each view's; a fold by hand stands until
+  // something new that needs me arrives in that section.
+  const worst = (p: Item) => {
+    const tn = sectionOf(p) === 'team' ? null : tone(p)
+    if (tn === 'error') return 0
+    if (tn === 'warning') return 1
+    if (tn === 'suggestion') return 2
+    if (vOf(p).state === 'issues') return 3
+    if (tn === 'success') return 4
+    return 5
+  }
+  const WORST = [
+    { svg: I.pr(C.error), tip: 'tip_g_error' },
+    { svg: I.pr(C.warning), tip: 'tip_g_warning' },
+    { svg: I.pr(C.suggestion), tip: 'tip_g_suggestion' },
+    { svg: STARS.done, tip: 'tip_g_issues' },
+    { svg: I.pr(C.success), tip: 'tip_g_success' },
+    { svg: I.pr(C.subtle), tip: 'tip_g_waiting' },
+  ]
+  const needsMe = (p: Item) => sectionOf(p) === 'move'
+  const fold = (view: string, id: string, label: string, prs: Item[], openByDefault: boolean) => {
+    const foldKey = `${view}:${id}`
+    const needKeys = prs.filter(needsMe).map(keyOf)
+    const keys = prs.map(keyOf)
+    const picked = keys.filter(k => picks.has(k)).length
+    const hand = ui.folds[foldKey]
+    const isOpen = hand && !(hand.open === false && needKeys.some(k => !hand.needs.includes(k))) ? hand.open : openByDefault
+    const rank = Math.min(5, ...prs.map(worst))
+    const need = needKeys.length
+    return {
+      foldKey,
+      label,
+      count: prs.length,
+      tally: need && need === prs.length ? t(lang, 'in_need', need) : need ? `${prs.length} · ${t(lang, 'in_need', need)}` : String(prs.length),
+      isUrgent: need > 0,
+      picked: picked ? t(lang, 'in_picked', picked) : '',
+      allPicked: keys.length > 0 && picked === keys.length,
+      keys,
+      needKeys,
+      rank,
+      isOpen,
+      glyph: WORST[rank]!.svg,
+      glyphTip: t(lang, WORST[rank]!.tip),
+    }
+  }
+
+  // Needs me: Your move and Ready to merge start open; Waiting, Drafts and Team start folded.
+  const OPEN_NEEDS: Section[] = ['move', 'ready']
   const sections = SECTIONS.map(id => {
     const prs = inScope.filter(p => sectionOf(p) === id).sort(byRank)
-    const picked = prs.filter(p => picks.has(keyOf(p))).length
-    // a folded section never hides a pick: it stays open while it holds one
-    const isFolded = FOLDED.includes(id) && ui.open !== id && picked === 0
-    return { id: id as string, title: t(lang, `s_${id}`), note: '', count: prs.length, isFolded, canFold: FOLDED.includes(id) && picked === 0, prs: prs.map(p => row(p, id)) }
+    return { id: id as string, ...fold('needs', id, t(lang, `s_${id}`), prs, OPEN_NEEDS.includes(id)), prs: prs.map(p => row(p, id)) }
   })
   const n = (id: Section) => sections.find(s => s.id === id)!.count
   const need = n('move') ? t(lang, 'in_need', n('move')) : ''
@@ -277,61 +323,23 @@ export function toViewModel(r: Round | null, o: Opts) {
     names.length > 1
       ? [{ id: '', name: `${t(lang, 'in_all_repos')} · ${viewed.length}` }, ...names.map(repo => ({ id: repo, name: `${short(repo)} · ${countIn(repo)}` }))]
       : []
-  // By repo: one section per repo with open PRs. Its header is enough to decide whether to open
-  // it: the worst signal's glyph (blocked › feedback › asked of me › validator issues › ready ›
-  // waiting), the name, the count, how many need me and how many are picked. A repo opens only
-  // when something in it needs me; a fold by hand sticks until a new PR needs me there. Inside,
-  // what needs me first, four rows, then "Show N more"; refs drop the repo the header names.
-  const worst = (p: Item) => {
-    const tn = sectionOf(p) === 'team' ? null : tone(p)
-    if (tn === 'error') return 0
-    if (tn === 'warning') return 1
-    if (tn === 'suggestion') return 2
-    if (vOf(p).state === 'issues') return 3
-    if (tn === 'success') return 4
-    return 5
-  }
-  const WORST = [
-    { svg: I.pr(C.error), tip: 'tip_g_error' },
-    { svg: I.pr(C.warning), tip: 'tip_g_warning' },
-    { svg: I.pr(C.suggestion), tip: 'tip_g_suggestion' },
-    { svg: STARS.done, tip: 'tip_g_issues' },
-    { svg: I.pr(C.success), tip: 'tip_g_success' },
-    { svg: I.pr(C.subtle), tip: 'tip_g_waiting' },
-  ]
-  const needsMe = (p: Item) => sectionOf(p) === 'move'
+  // By repo: one section per repo with open PRs, open when something in it needs me; inside, what
+  // needs me first, four rows, then "Show N more"; refs drop the repo the header names. Order: what
+  // needs me, then the worst signal, then the busiest.
   const repoSections = (ui.view === 'repos' ? names : [])
     .map(repo => {
       const prs = all.filter(p => p.repo === repo).sort((a, b) => Number(needsMe(b)) - Number(needsMe(a)) || byRank(a, b))
-      const needKeys = prs.filter(needsMe).map(keyOf)
-      const rank = Math.min(5, ...prs.map(worst))
-      const fold = ui.folds[repo]
-      // a hand fold stands until a PR that was not there then needs me
-      const isOpen = fold && !(fold.open === false && needKeys.some(k => !fold.needs.includes(k))) ? fold.open : needKeys.length > 0
-      const keys = prs.map(keyOf)
-      const picked = keys.filter(k => picks.has(k)).length
-      const shownAll = ui.more.includes(`repo:${repo}`)
-      const shown = isOpen ? (shownAll ? prs : prs.slice(0, 4)) : []
+      const f = fold('repos', repo, short(repo), prs, prs.some(needsMe))
+      const shown = f.isOpen ? (ui.more.includes(`repo:${repo}`) ? prs : prs.slice(0, 4)) : []
       return {
         repo,
-        name: short(repo),
-        glyph: WORST[rank]!.svg,
-        glyphTip: t(lang, WORST[rank]!.tip),
-        count: prs.length,
-        needs: needKeys.length,
-        need: needKeys.length ? `· ${t(lang, 'in_need', needKeys.length)}` : '',
-        needKeys,
-        rank,
-        picked: picked ? `· ${t(lang, 'in_picked', picked)}` : '',
-        allPicked: keys.length > 0 && picked === keys.length,
-        keys,
-        isOpen,
+        ...f,
         prs: shown.map(p => row(p, sectionOf(p), true)),
-        more: isOpen && prs.length > shown.length ? t(lang, 'in_more', prs.length - shown.length) : '',
+        more: f.isOpen && prs.length > shown.length ? t(lang, 'in_more', prs.length - shown.length) : '',
       }
     })
     .filter(s => s.count > 0)
-    .sort((a, b) => b.needs - a.needs || a.rank - b.rank || b.count - a.count || a.name.localeCompare(b.name))
+    .sort((a, b) => b.needKeys.length - a.needKeys.length || a.rank - b.rank || b.count - a.count || a.label.localeCompare(b.label))
 
   // The batch: every pick, each row's winning action as one line of the prompt; a pick that
   // left the list (merged, closed) is dropped by the next press.
@@ -355,39 +363,41 @@ export function toViewModel(r: Round | null, o: Opts) {
     act: chosen,
   }
 
-  // The team view: verdict groups, the running one first after issues; Passed is folded.
+  // Auto-validate and the batch in flight: "Validating 9 of 22" while any of it runs.
+  const vb = o.verdicts?.batch?.urls ?? []
+  const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
+  const progress = vrun ? { done: vb.length - vrun, total: vb.length, label: t(lang, 'in_validating', vb.length - vrun, vb.length), pct: `${Math.round(((vb.length - vrun) / vb.length) * 100)}%` } : null
+
+  // The team view: verdict groups. Issues found starts open, and Validating while a run is active.
   const groups = GROUPS.map(id => {
     const prs = team.filter(p => vOf(p).state === id).sort(byRank)
-    const isOpen = ui.more.includes(id)
-    const isFolded = id === 'pass' && !isOpen
-    const shown = isFolded ? [] : isOpen ? prs : prs.slice(0, SHOWN[id])
+    const f = fold('team', id, t(lang, `g_${id}`), prs, id === 'issues' || (id === 'run' && Boolean(progress)))
+    const shown = f.isOpen ? (ui.more.includes(id) ? prs : prs.slice(0, SHOWN[id])) : []
     const hidden = prs.slice(shown.length)
-    const allPicked = prs.length > 0 && prs.every(p => picks.has(keyOf(p)))
     return {
       id,
-      title: t(lang, `g_${id}`),
-      count: prs.length,
-      keys: prs.map(keyOf),
-      // picking a whole group is the point of the view; a running one is busy, a passed one done
-      pickAll: id === 'run' || id === 'pass' ? null : t(lang, allPicked ? 'in_unpick_all' : 'in_pick_all'),
-      allPicked,
-      isFolded,
-      more: !isFolded && hidden.length ? t(lang, hidden.every(p => picks.has(keyOf(p))) ? 'in_more_picked' : 'in_more', hidden.length) : '',
+      ...f,
+      // picking a whole group is the point of the view; a running one is busy
+      pickAll: id === 'run' ? null : t(lang, f.allPicked ? 'in_unpick_all' : 'in_pick_all'),
+      more: f.isOpen && hidden.length ? t(lang, hidden.every(p => picks.has(keyOf(p))) ? 'in_more_picked' : 'in_more', hidden.length) : '',
       rows: shown.map(p => {
         const isPicked = picks.has(keyOf(p))
         return { key: keyOf(p), url: p.url, glyph: I.pr(C.subtle), glyphTip: t(lang, 'tip_g_team'), ref: showRepo ? refOf(p) : `#${p.number}`, title: p.title, verdict: verdictTag(vOf(p), lang), isPicked, box: isPicked ? PICKED : { bg: undefined, border: undefined } }
       }),
     }
   })
-
-  // Auto-validate and the batch in flight: "Validating 9 of 22" while any of it runs.
-  const vb = o.verdicts?.batch?.urls ?? []
-  const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
-  const progress = vrun ? { done: vb.length - vrun, total: vb.length, label: t(lang, 'in_validating', vb.length - vrun, vb.length), pct: `${Math.round(((vb.length - vrun) / vb.length) * 100)}%` } : null
+  // Fold all / Open all, for the sections the current view shows: "Fold all" while any is open.
+  const view = isTeam ? 'team' : ui.view === 'repos' && names.length > 1 ? 'repos' : ''
+  const shownSections = (view === 'team' ? groups : view === 'repos' ? repoSections : sections).filter(x => x.count > 0)
+  const anyOpen = shownSections.some(x => x.isOpen)
+  const foldAll = shownSections.length
+    ? { label: t(lang, anyOpen ? 'in_fold_all' : 'in_open_all'), open: !anyOpen, targets: shownSections.map(x => ({ foldKey: x.foldKey, needKeys: x.needKeys })) }
+    : null
 
   return {
     ...head,
     state: 'ok' as const,
+    foldAll,
     need,
     teamCount: team.length,
     clear,
@@ -400,7 +410,7 @@ export function toViewModel(r: Round | null, o: Opts) {
             ...(team.length ? [{ id: 'team', name: t(lang, 'in_view_team', team.length) }] : []),
           ]
         : [],
-    view: isTeam ? 'team' : ui.view === 'repos' && names.length > 1 ? 'repos' : '',
+    view,
     repoSections,
     groups,
     auto: { tip: t(lang, 'tip_auto'), value: o.verdicts?.auto ?? 'off', options: ['off', 'mine', 'all'].map(id => ({ id, name: t(lang, `au_${id}`) })) },

@@ -37,6 +37,7 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 The plugin ships a mod that runs the vigil on its own timer, at no token cost, and toasts what is new. `/argos` opens a pane built for a narrow sidebar: an inbox sorted by your next move. Keep it open: it refreshes with every round. Hover any icon to see what it means.
 
 - **Head:** "Pull requests" and **Check now**; under it what needs you ("3 need you") and when Argos last checked; then a view picker (**Needs me**, **By repo**, **Team**) and a repo picker that says how many open PRs each repo holds ("web · 4").
+- **Fold anything:** every section in every view folds with `▸`/`▾` before its name, and its header keeps what must not hide (the count with what needs you, what is picked, the worst signal's icon). **Fold all** / **Open all** sits by Check now. Needs me opens Your move and Ready, Team opens Issues found (and Validating while it runs), By repo opens what needs you; a fold you make is remembered across sessions until something new needs you there.
 - **By repo:** one section per repo, the ones with something for you first. Each header is enough to decide whether to open it: the worst signal's icon, the name, the count, what needs you and what is picked ("checkout 3 · 2 need you"). A repo opens only when something needs you; fold one by hand and it stays folded until something new needs you there. Four rows, then "Show N more"; **Pick all** works folded too.
 - **Sections**, each shown only when it holds something, longest wait first:
 

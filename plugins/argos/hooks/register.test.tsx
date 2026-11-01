@@ -110,8 +110,8 @@ test('the inbox: sections in order, what needs me, tinted rows where I act', () 
   expect([review?.ref, review?.act, blocked?.ref, blocked?.isOld]).toEqual(['web#7', 'Review', 'portal#219', true])
   expect(blocked?.box).toEqual({ bg: 'rgba(240,122,114,0.07)', border: 'rgba(240,122,114,0.35)' })
   expect(vm.sections[2]!.prs[0]?.box.bg).toBeUndefined()
-  expect(vm.sections.find(s => s.id === 'team')?.isFolded).toBe(true)
-  expect(ok(vmOf(round, { open: 'team' })).sections.find(s => s.id === 'team')?.isFolded).toBe(false)
+  expect(vm.sections.find(s => s.id === 'team')?.isOpen).toBe(false)
+  expect(ok(vmOf(round, { folds: { 'needs:team': { open: true, needs: [] } } })).sections.find(s => s.id === 'team')?.isOpen).toBe(true)
   // under one repo the ref drops its prefix
   expect(ok(vmOf(round, { filter: 'acme/web' })).sections[0]?.prs[0]?.ref).toBe('#7')
   const calm = { ...round, pending: [], mine: [quiet, draft], others: [] }
@@ -153,7 +153,8 @@ test('the batch: each pick sends its winning action as one line; gone picks drop
   expect(ok(vmOf(twelve, {}, 'en', 'fix https://github.com/acme/portal/pull/12 now')).sections[0]?.prs[0]?.inPrompt).toBe(false)
   expect(ok(vmOf(twelve, {}, 'en', 'fix https://github.com/acme/portal/pull/1/files')).sections[0]?.prs[0]?.inPrompt).toBe(true)
   // a folded section never hides a pick
-  expect(ok(vmOf(round, { selected: ['acme/web#8'] })).sections.find(s => s.id === 'team')?.isFolded).toBe(false)
+  // a folded section still shows what is picked in it
+  expect(ok(vmOf(round, { selected: ['acme/web#8'] })).sections.find(s => s.id === 'team')?.picked).toBe('1 picked')
 })
 
 test('failures and late rounds say so', () => {
@@ -192,7 +193,7 @@ test('the pane: Pull requests, what needs me, two-line rows with a pick and one 
   expect(svg('Blocked: conflict or failing CI')?.isInteractive).toBe(true)
   // the team is folded behind Show; no batch bar without picks
   expect(await ui.find({ key: 'act:acme/web#8' })).toBeUndefined()
-  expect((await ui.find({ key: 'fold:team' }))?.text).toBe('Show')
+  expect((await ui.find({ key: 'fold:needs:team' }))?.text).toBe('▸ Team')
   expect(await ui.find({ key: 'send' })).toBeUndefined()
   await ui.unmount()
 })
@@ -222,11 +223,11 @@ test('every button shows on a desktop the text it holds', async ($, on) => {
 })
 
 test('picked PRs bring the batch bar; the team unfolds', { options: { language: 'pt-BR' } }, async ($, on) => {
-  on('state.get', stored({ round, selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'], open: 'team' }))
+  on('state.get', stored({ round, selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'], folds: { 'needs:team': { open: true, needs: [] } } }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ key: 'send' }))?.text).toBe('Pôr no prompt')
-  expect((await ui.find({ type: 'Text', text: /marcados$/ }))?.text).toBe('3 marcados')
+  expect((await ui.find({ type: 'Text', text: /^3 marcados$/ }))?.text).toBe('3 marcados')
   expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Resumir')
   expect((await ui.find({ key: 'pick:acme/web#8' }))?.text).toBe('✓')
   await ui.unmount()
@@ -301,11 +302,11 @@ test('an action fills the prompt once; picks and the batch go in as lines', asyn
   await Promise.all([ui.press({ key: 'act:acme/web#7' }), ui.press({ key: 'act:acme/web#7' })])
   // already in the prompt: a third press adds nothing
   await ui.press({ key: 'act:acme/web#7' })
-  await ui.press({ key: 'fold:team' })
+  await ui.press({ key: 'fold:needs:team' })
   expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Summarize')
   await ui.press({ key: 'pick:acme/portal#219' })
   await ui.press({ key: 'pick:acme/web#8' })
-  expect((await ui.find({ type: 'Text', text: /picked$/ }))?.text).toBe('2 picked')
+  expect((await ui.find({ type: 'Text', text: /^2 picked$/ }))?.text).toBe('2 picked')
   await ui.press({ key: 'send' })
   expect(fills).toEqual(['Review PR u7 by @bia', '\nResolve the merge conflict in PR u219\nSummarize PR u8'])
   // the batch went in: the picks clear
@@ -414,7 +415,7 @@ test('the team view groups by verdict; Pick all, Show more, and one batch action
   expect(vm.view).toBe('team')
   expect(vm.groups.filter(g => g.count).map(g => [g.id, g.rows.map(r => r.ref), g.pickAll])).toEqual([
     ['run', ['web#8'], null],
-    ['stale', ['api#9'], 'Pick all'],
+    ['stale', [], 'Pick all'],
   ])
   const picked = at({ view: 'team', selected: ['acme/api#9'] })
   expect(picked.groups.find(g => g.id === 'stale')?.pickAll).toBe('Unpick all')
@@ -429,10 +430,10 @@ test('the team view groups by verdict; Pick all, Show more, and one batch action
 })
 
 test('the team view draws compact rows, Pick all and the batch picker', async ($, on) => {
-  on('state.get', stored({ round: vround, verdicts: judged, view: 'team', selected: ['acme/api#9'] }))
+  on('state.get', stored({ round: vround, verdicts: judged, view: 'team', selected: ['acme/api#9'], folds: { 'team:stale': { open: true, needs: [] } } }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ key: 'all:stale' }))?.text).toBe('Unpick all')
+  expect((await ui.find({ key: 'all:team:stale' }))?.text).toBe('Unpick all')
   expect((await ui.find({ key: 'pick:acme/api#9' }))?.text).toBe('✓')
   expect((await ui.find({ type: 'Text', text: 'Validating 1 of 2' }))?.text).toBe('Validating 1 of 2')
   expect((await ui.find({ key: 'send' }))?.text).toBe('Add to prompt')
@@ -485,23 +486,23 @@ test('by repo: the header decides; open only where something needs me, four rows
   const vm = ok(vmOf(r2, { view: 'repos' }))
   expect(vm.view).toBe('repos')
   // what needs me first, then the worst glyph, then the busiest
-  expect(vm.repoSections.map(s => [s.name, s.count, s.need, s.isOpen])).toEqual([
-    ['portal', 9, '· 1 needs you', true],
-    ['web', 2, '· 1 needs you', true],
-    ['api', 1, '', false],
+  expect(vm.repoSections.map(s => [s.label, s.count, s.tally, s.isOpen])).toEqual([
+    ['portal', 9, '9 · 1 needs you', true],
+    ['web', 2, '2 · 1 needs you', true],
+    ['api', 1, '1', false],
   ])
   const portal = vm.repoSections[0]!
   // the blocked PR leads, four rows shown, the rest behind Show N more; refs drop the repo
   expect([portal.prs.map(p => p.ref)[0], portal.prs.length, portal.more, portal.glyphTip]).toEqual(['#219', 4, 'Show 5 more', 'Blocked: conflict or failing CI'])
   // a hand fold sticks until a new PR needs me there
-  const folded = ok(vmOf(r2, { view: 'repos', folds: { 'acme/portal': { open: false, needs: ['acme/portal#219'] } } }))
+  const folded = ok(vmOf(r2, { view: 'repos', folds: { 'repos:acme/portal': { open: false, needs: ['acme/portal#219'] } } }))
   expect([folded.repoSections[0]?.isOpen, folded.repoSections[0]?.prs.length]).toEqual([false, 0])
-  const fresh = ok(vmOf(r2, { view: 'repos', folds: { 'acme/portal': { open: false, needs: [] } } }))
+  const fresh = ok(vmOf(r2, { view: 'repos', folds: { 'repos:acme/portal': { open: false, needs: [] } } }))
   expect(fresh.repoSections[0]?.isOpen).toBe(true)
   // Pick all works folded; the header keeps the hidden picks visible
   const picked = ok(vmOf(r2, { view: 'repos', selected: ['acme/api#9'] }))
-  expect(picked.repoSections.find(s => s.name === 'api')?.picked).toBe('· 1 picked')
-  expect(picked.repoSections.find(s => s.name === 'api')?.allPicked).toBe(true)
+  expect(picked.repoSections.find(s => s.label === 'api')?.picked).toBe('1 picked')
+  expect(picked.repoSections.find(s => s.label === 'api')?.allPicked).toBe(true)
   // one repo: nothing to group, so no such view
   expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] }, { view: 'repos' })).view).toBe('')
 })
@@ -512,14 +513,13 @@ test('the by-repo view draws a header per repo, folds it, and hides the repo pic
   )
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: 'portal' }))?.text).toBe('portal')
-  expect((await ui.find({ type: 'Text', text: '· 1 needs you' }))?.text).toBe('· 1 needs you')
+  expect((await ui.find({ key: 'fold:repos:acme/portal' }))?.text).toBe('▾ portal')
+  expect((await ui.find({ type: 'Text', text: '4 · 1 needs you' }))?.text).toBe('4 · 1 needs you')
   expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
   expect(await ui.find({ key: 'repo' })).toBeUndefined()
-  expect((await ui.find({ key: 'fold:repo:acme/portal' }))?.text).toBe('Hide')
-  await ui.press({ key: 'fold:repo:acme/portal' })
+  await ui.press({ key: 'fold:repos:acme/portal' })
   expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
-  expect((await ui.find({ key: 'fold:repo:acme/portal' }))?.text).toBe('Show')
+  expect((await ui.find({ key: 'fold:repos:acme/portal' }))?.text).toBe('▸ portal')
   await ui.unmount()
 })
 
@@ -530,6 +530,22 @@ test('/argos demo opens in By repo, with its repo sections drawn', async ($, on)
   await $.command.run({ command: 'argos', args: 'demo' })
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ key: 'view' }))?.props?.value).toBe('repos')
-  expect((await ui.find({ key: 'fold:repo:acme/checkout' }))?.text).toBe('Hide')
+  expect((await ui.find({ key: 'fold:repos:acme/checkout' }))?.text).toBe('▾ checkout')
+  await ui.unmount()
+})
+
+test('Fold all folds every section of the view, then reads Open all', async ($, on) => {
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('store.set', () => ({ value: undefined }))
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'fold-all' }))?.text).toBe('Fold all')
+  expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
+  await ui.press({ key: 'fold-all' })
+  expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
+  expect((await ui.find({ key: 'fold:needs:move' }))?.text).toBe('▸ Your move')
+  expect((await ui.find({ key: 'fold-all' }))?.text).toBe('Open all')
   await ui.unmount()
 })
