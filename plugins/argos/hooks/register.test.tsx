@@ -179,7 +179,11 @@ test('the band shows the most urgent PR with its verb', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /for you/ }))?.text).toContain("2 for you · Review bia's PR: web#7")
+  // the 16px logo leads the name, then what needs me and the first item
+  expect((await ui.find({ type: 'Svg' }))?.props?.width).toBe(16)
+  expect((await ui.find({ type: 'Text', text: 'Argos' }))?.text).toBe('Argos')
+  expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you')
+  expect((await ui.find({ type: 'Text', text: /^·/ }))?.text).toBe("· Review bia's PR: web#7")
   await ui.unmount()
 })
 
@@ -200,6 +204,8 @@ test('the pane: Pull requests, what needs me, two-line rows with a pick and one 
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: 'Pull requests' }))?.text).toBe('Pull requests')
+  // the 16px logo leads the title
+  expect([(await ui.find({ type: 'Svg' }))?.props?.alt, (await ui.find({ type: 'Svg' }))?.props?.width]).toEqual(['Argos', 16])
   expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you')
   expect((await ui.find({ key: 'check' }))?.text).toBe('Check now')
   expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')

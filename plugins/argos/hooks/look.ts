@@ -23,6 +23,24 @@ export const C = {
 } as const
 export type Tone = 'error' | 'warning' | 'suggestion' | 'success'
 
+// The Argos mark. MARK is the app icon (256, used at 28px and up); LOGO is drawn for 16px,
+// where the main one's star turns to mush and its frame smears.
+export const MARK =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">' +
+  '<rect width="256" height="256" rx="50" fill="#1E1430"/>' +
+  '<rect x="22" y="22" width="212" height="212" rx="31" fill="none" stroke="#51408A" stroke-width="18"/>' +
+  '<path d="M123 72 67 128 123 184Z" fill="#A98BE0"/>' +
+  '<path d="M123 72 85 128 123 184A56 56 0 0 0 123 72Z" fill="#7E5CC0"/>' +
+  '<path d="M135 100 141 122 163 128 141 134 135 156 129 134 107 128 129 122Z" fill="#F3EEFB"/></svg>'
+export const LOGO =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">' +
+  '<rect x=".5" y=".5" width="15" height="15" rx="3.5" fill="#1E1430" stroke="#51408A"/>' +
+  '<path d="M7.6 3 2.6 8 7.6 13Z" fill="#A98BE0"/>' +
+  '<path d="M7.6 3 4.2 8 7.6 13A5 5 0 0 0 7.6 3Z" fill="#7E5CC0"/>' +
+  '<path d="M8.6 5 9.5 7.1 11.6 8 9.5 8.9 8.6 11 7.7 8.9 5.6 8 7.7 7.1Z" fill="#F3EEFB"/></svg>'
+// the band's quiet violet: border 22%, fill 5% of the mark's purple
+export const BAND = { border: 'rgba(126,92,192,0.22)', bg: 'rgba(126,92,192,0.05)' }
+
 const RGB = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
 export const rgba = (h: string, a: number) => `rgba(${RGB(h).join(',')},${a})`
 // a tone's row: fill at 7%, border at 35%

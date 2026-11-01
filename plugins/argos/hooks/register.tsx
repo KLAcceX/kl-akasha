@@ -9,7 +9,7 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { C, I, STARS, TINT, rgba } from './look'
+import { BAND, C, I, LOGO, STARS, TINT, rgba } from './look'
 import { UI, mentions, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
@@ -35,17 +35,6 @@ const more = atom({ plugin: 'argos', key: 'more' } as const, UI.more)
 const batchAct = atom({ plugin: 'argos', key: 'act' } as const, UI.act)
 // what verdicts.mjs last wrote: the AI's validations, read by the rows
 const verdicts = atom({ plugin: 'argos', key: 'verdicts' } as const, null)
-
-// The KL · Akasha mark (brand/kl/final): the face centred in a full L-coloured frame,
-// on its own dark ground so it reads in both themes.
-const GLYPH =
-  '<path fill="#7E5CC0" d="M104 96L160 40A56 56 0 0 1 160 152Z"/><path fill="#A98BE0" d="M160 40L104 96L160 152L122 96Z"/>' +
-  '<path fill="#F3EEFB" d="M172 68L178 90L200 96L178 102L172 124L166 102L144 96L166 90Z"/>'
-const ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="56" fill="#1E1430"/>' +
-  '<rect x="22" y="22" width="212" height="212" rx="40" fill="none" stroke="#51408A" stroke-width="18"/>' +
-  `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
-
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -229,18 +218,28 @@ export const register: Register = (on, options) => {
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
+    // The band says "Argos" at a glance and gets out of the way: the 16px logo leading the
+    // name, the count in body 600, the item in subtle, one secondary See and a plain ×, in a
+    // quiet violet frame tied to the logo (never red or amber, so it never reads as an error).
+    const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : t(lang, 'in_failed')
+    const item = !running && band ? `· ${band.verb}: ${band.ref}` : ''
     return (
-      <Box>
-        {e.surface !== 'terminal' && <ui.Svg source={ICON} alt="KL · Akasha" width={16} height={16} />}
-        <Text> Argos </Text>
-        {running && <Text dimColor>{t(lang, 'ui_checking')} </Text>}
-        {!running && (vm.failed || vm.isLate) && <Text>{t(lang, 'ui_failed')} · </Text>}
-        {!running && band && (
-          <Text>
-            {t(lang, 'ui_needs', band.count)} · {band.verb}: {band.ref}{' '}
+      <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingLeft="sm" paddingRight="xs" borderStyle="round" borderColor={BAND.border} backgroundColor={BAND.bg}>
+        {e.surface !== 'terminal' && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
+        <Text weight="semibold" color={C.text}>
+          Argos
+        </Text>
+        <Box flexShrink={0} marginLeft="xs">
+          <Text weight="semibold" color={vm.failed && !band ? C.error : C.text}>
+            {lead}
           </Text>
-        )}
-        <Button key="open" onPress={() => void openPane($, options)}>
+        </Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text color={C.subtle} wrap="truncate">
+            {item}
+          </Text>
+        </Box>
+        <Button key="open" variant="secondary" onPress={() => void openPane($, options)}>
           {t(lang, 'ui_see')}
         </Button>
         <Button key="hide" role="dismiss" onPress={() => void update($, isHidden, () => true)}>
@@ -280,7 +279,7 @@ export const register: Register = (on, options) => {
     const checkNow = () => void tick($, options, true)
     // a picker where the surface has one
     const Select = (ui as { Select?: any }).Select
-    const icon = (svg: string, text: string, w = 16) => (hasSvg ? <ui.Svg source={svg} alt={text} width={w} height={16} /> : <Text>{text}</Text>)
+    const icon = (svg: string, text: string, w = 16, tall = 16) => (hasSvg ? <ui.Svg source={svg} alt={text} width={w} height={tall} /> : <Text>{text}</Text>)
     // Puts one request in the prompt without sending it: appended on a new line when there
     // is a draft, never twice. Two quick presses meet one lock, and a request whose PRs are
     // all in the prompt already adds nothing.
@@ -301,15 +300,16 @@ export const register: Register = (on, options) => {
     // looked (a failed check in red); then one Select to narrow to a repo.
     const needLine = vm.failed ? t(lang, 'in_failed') : vm.state === 'ok' ? vm.need : ''
     const checked = vm.state === 'noRepos' ? '' : vm.state === 'ok' && vm.teamCount ? [t(lang, 'in_team_n', vm.teamCount), vm.checked].filter(Boolean).join(' · ') : vm.checked
-    const pick = (key: string, value: string, options: { id: string; name: string }[], onSelect: (v: string) => void) =>
+    const pick = (key: string, value: string, options: { id: string; name: string }[], onSelect: (v: string) => void, grow = 1) =>
       Select && (
-        <Box key={`${key}-box`} flexGrow={1} flexShrink={1} minWidth={0}>
+        <Box key={`${key}-box`} flexGrow={grow} flexShrink={1} minWidth={0}>
           <Select key={key} value={value || 'all'} options={options.map(o => ({ value: o.id || 'all', label: o.name }))} onSelect={(v: string) => onSelect(v === 'all' ? '' : v)} />
         </Box>
       )
     const head = (withCheck: boolean) => (
       <Box key="head" flexDirection="column" gap="xs">
         <Box flexDirection="row" alignItems="center" gap="sm">
+          {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
             <Text size="heading" weight="semibold" color={C.text}>
               {t(lang, 'in_title')}
@@ -337,18 +337,20 @@ export const register: Register = (on, options) => {
         )}
         {vm.state === 'ok' && (vm.views.length > 0 || vm.repos.length > 0) && (
           <Box flexDirection="row" gap="xs">
-            {vm.views.length > 0 && pick('view', vm.view, vm.views, v => void update($, view, () => v))}
-            {vm.repos.length > 0 && pick('repo', vm.filter, vm.repos, v => void update($, filter, () => v))}
+            {vm.views.length > 0 && pick('view', vm.view, vm.views, v => void update($, view, () => v), 3)}
+            {vm.repos.length > 0 && pick('repo', vm.filter, vm.repos, v => void update($, filter, () => v), 2)}
           </Box>
         )}
         {vm.state === 'ok' && (
           <Box flexDirection="row" alignItems="center" gap="xs">
-            {icon(vm.progress ? STARS.run : STARS.done, '✦')}
-            <Box flexShrink={0}>
-              <Text size="caption" weight="semibold" color={vm.progress ? C.merged : C.text}>
-                {vm.progress ? vm.progress.label : t(lang, 'in_auto')}
-              </Text>
-            </Box>
+            {icon(vm.progress ? STARS.run : STARS.done, '✦', 14, 14)}
+            {vm.progress && (
+              <Box flexShrink={0}>
+                <Text size="caption" weight="semibold" color={C.merged}>
+                  {vm.progress.label}
+                </Text>
+              </Box>
+            )}
             {vm.progress ? (
               // static progress: done of the batch, in purple
               <Box flexGrow={1} height={4} backgroundColor="#2E2E2C">
@@ -530,7 +532,7 @@ export const register: Register = (on, options) => {
           </Text>
         </Box>
         <Box flexDirection="row" alignItems="center" flexShrink={0}>
-          {r.verdict.svg ? icon(r.verdict.svg, r.verdict.text) : null}
+          {r.verdict.svg ? icon(r.verdict.svg, r.verdict.text, 14, 14) : null}
           {r.verdict.count && (
             <Text size="caption" weight="semibold" color={r.verdict.color}>
               {r.verdict.count}
