@@ -53,7 +53,12 @@ const roundFile = async ($: any) => `${await stateDir($)}/last-round.json`
 // state writes, so after a write it reads (the round, a running check, Hide, the demo,
 // verdicts) every ui.render is asked to draw again; without it the band showed old state
 // until the person typed.
-const redraw = ($: any) => $.ui.invalidate('ui.render')
+// Asked twice: now, and once more a moment later, since the engine folds redraws asked close
+// together and the band was seen to keep old state.
+const redraw = ($: any) => {
+  $.ui.invalidate('ui.render')
+  $.clock.after(300, () => $.ui.invalidate('ui.render'))
+}
 
 // The verdicts the AI wrote with verdicts.mjs; none yet is an empty file.
 async function loadVerdicts($: any): Promise<Verdicts | null> {
@@ -219,6 +224,8 @@ export const register: Register = (on, options) => {
       await update($, selected, () => [])
     }
     await $.state.set(DEMO, false)
+    // asking for Argos brings back a band hidden earlier
+    await $.state.set(HIDDEN, false)
     redraw($)
     await openPane($, options)
     void tick($, options, true)

@@ -563,7 +563,7 @@ test('Hide is a quiet word: it hides the band and says how to get it back', asyn
   expect([hide?.text, hide?.props?.plain, hide?.props?.variant]).toEqual(['Hide', true, undefined])
   expect((await ui.find({ key: 'open' }))?.props?.variant).toBe('secondary')
   await ui.press({ key: 'hide' })
-  expect(toasts).toEqual(['Hidden until something new · /argos opens the pane'])
+  expect(toasts).toEqual(['Hidden until something new · /argos brings it back'])
   expect(await ui.find({ key: 'hide' })).toBeUndefined()
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
   await ui.unmount()
