@@ -49,6 +49,12 @@ async function stateDir($: any) {
 }
 const roundFile = async ($: any) => `${await stateDir($)}/last-round.json`
 
+// The band is a site of its own that redraws on its own events (the prompt changing), not on
+// state writes, so after a write it reads (the round, a running check, Hide, the demo,
+// verdicts) every ui.render is asked to draw again; without it the band showed old state
+// until the person typed.
+const redraw = ($: any) => $.ui.invalidate('ui.render')
+
 // The verdicts the AI wrote with verdicts.mjs; none yet is an empty file.
 async function loadVerdicts($: any): Promise<Verdicts | null> {
   if ((await $.state.get(DEMO)).value) return (await $.state.get(VERDICTS)).value ?? null
@@ -56,6 +62,7 @@ async function loadVerdicts($: any): Promise<Verdicts | null> {
     const v: Verdicts = JSON.parse(await $.fs.read(`${await stateDir($)}/verdicts.json`))
     if (!v?.prs) throw new Error('not a verdicts file')
     await $.state.set(VERDICTS, v)
+    redraw($)
     return v
   } catch {
     return (await $.state.get(VERDICTS)).value ?? null
@@ -93,6 +100,7 @@ async function load($: any): Promise<Round | null> {
     const last: Round = JSON.parse(await $.fs.read(await roundFile($)))
     if (shown && Date.parse(shown.at) > Date.parse(last.at)) return shown
     await $.state.set(ROUND, last)
+    redraw($)
     return last
   } catch {
     return shown
@@ -121,6 +129,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
   const now = await $.clock.now()
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
   await $.state.set(RUNNING, true)
+  redraw($)
   try {
     const argv = ['node', `${$.plugin.root}/scripts/round.mjs`, ...qualifiers, '--lang', lang, '--json']
     if (account) argv.push('--account', account)
@@ -129,10 +138,12 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     if (fresh?.notify) {
       $.ui.toast(fresh.notify)
       await $.state.set(HIDDEN, false)
+      redraw($)
     }
     await autoValidate($, fresh, lang).catch(() => {})
   } catch (err) {
     await $.state.set(HIDDEN, false)
+    redraw($)
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
     // this attempt's. Only a run that died before writing (killed at the time limit) gets the
     // wrapper's message. Either way okAt stays the last round that worked.
@@ -143,6 +154,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     }
   } finally {
     await $.state.set(RUNNING, false)
+    redraw($)
   }
 }
 
@@ -196,6 +208,7 @@ export const register: Register = (on, options) => {
       await $.state.set(DEMO, true)
       await $.state.set(ROUND, { ...DEMO_ROUND, at, okAt: at })
       await $.state.set(VERDICTS, DEMO_VERDICTS)
+      redraw($)
       await $.ui.open({ id: PANE, title: 'Argos' })
       return { text: t(lang, 'ui_demo') }
     }
@@ -206,6 +219,7 @@ export const register: Register = (on, options) => {
       await update($, selected, () => [])
     }
     await $.state.set(DEMO, false)
+    redraw($)
     await openPane($, options)
     void tick($, options, true)
     return { text: t(lang, 'ui_opened') }
@@ -228,6 +242,7 @@ export const register: Register = (on, options) => {
     const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : failed ? t(lang, 'in_failed') : vm.checked
     const hide = async () => {
       await update($, isHidden, () => true)
+      redraw($)
       $.ui.toast(t(lang, 'in_hidden'))
     }
     return (
