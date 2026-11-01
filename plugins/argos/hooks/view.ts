@@ -6,6 +6,9 @@ import { t } from '../scripts/i18n.mjs'
 import type { Item, Round, Verdict, Verdicts } from '../types'
 import { AVATAR, C, MOSAIC, STARS, type Tag } from './look'
 
+// characters of mosaic paths one render may carry, about half the pane's tree budget
+export const MOSAIC_BUDGET = 120_000
+
 const base = (code: string) => code.split(':')[0] ?? code
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
 const shortRepo = (repo: string) => repo.split('/')[1] ?? repo
@@ -99,9 +102,21 @@ export function toViewModel(r: Round | null, o: Opts) {
   const authorsOut = new Set(o.ignored ?? [])
   // an author is out by name, or with their whole kind (kind:bot, kind:agent)
   const isOut = (name: string, kind: string) => authorsOut.has(name) || authorsOut.has(`kind:${kind}`)
-  // the author's real picture as a mosaic when the round drew one; else their letter
+  // the author's real picture as a mosaic when the round drew one; else their letter. A photo
+  // takes ~5KB of the pane's text budget (262144 chars) at each line and at its switch, so authors
+  // get theirs in list order while MOSAIC_BUDGET lasts, and the rest keep their letter throughout.
+  const uses = new Map<string, number>()
+  for (const p of all) uses.set(p.author ?? '', (uses.get(p.author ?? '') ?? 0) + 1)
+  const withPhoto = new Set<string>()
+  let spent = 0
+  for (const [login, n] of uses) {
+    const cost = (r.avatars?.[login]?.length ?? 0) * (n + 1)
+    if (!cost || spent + cost > MOSAIC_BUDGET) continue
+    spent += cost
+    withPhoto.add(login)
+  }
   const pic = (p: Item, kind: 'human' | 'bot' | 'agent', name: string) =>
-    r.avatars?.[p.author ?? ''] ? MOSAIC(r.avatars[p.author ?? '']!) : kind === 'agent' ? AVATAR.agent : AVATAR[kind](name)
+    withPhoto.has(p.author ?? '') ? MOSAIC(r.avatars![p.author ?? '']!) : kind === 'agent' ? AVATAR.agent : AVATAR[kind](name)
   const byHand = new Set(ui.out)
   const back = new Set(ui.back)
   // An author is an agent if any of their PRs writes code (see queue.mjs), else as their PRs say.

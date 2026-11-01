@@ -70,6 +70,14 @@ test('one list: every open PR in a fixed order, all going to validation but what
   expect(vm.validate).toEqual({ label: 'Validate 5', urls: ['u9', 'u220', 'u221', 'u7', 'u8'], count: 5 })
 })
 
+test('photos fit the pane budget: an author has theirs on every line or on none', () => {
+  // me: 4 lines + a switch = 5 uses; caio: 2 uses; at 20000 chars each, me (100000) fits, caio would pass 120000
+  const big = 'M0 0h1v1H0z'.repeat(1818) + 'M0'
+  const vm = ok(vmOf({ ...round, avatars: { me: big, caio: big, bia: 'M0 0h1v1H0z' } }))
+  const photo = (who: string) => [...new Set(vm.rows.filter(x => x.author === who).map(x => x.avatar.includes('M0 0h1v1H0z')))]
+  expect([photo('me'), photo('caio'), photo('bia')]).toEqual([[true], [false], [true]])
+})
+
 test('leaving out never moves a line: an author, a line by hand, one the pane left out brought back', () => {
   const keys = (vm: ReturnType<typeof ok>) => vm.rows.map(x => x.key)
   const all = ok(vmOf(round))

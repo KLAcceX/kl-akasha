@@ -1,12 +1,13 @@
 // Argos avatars: each author's GitHub picture redrawn as a 16×16 vector mosaic, since the pane's
-// Svg drops embedded images. PNG is decoded here with zlib; a JPEG (some people's photos) gets
-// no mosaic and the pane draws its letter instead. Mosaics are cached by picture URL.
+// Svg drops embedded images. PNG is decoded here with zlib, JPEG (most people's photos) with the
+// vendored jpeg-js decoder; anything else gets the pane's letter. Mosaics are cached by picture URL.
 //
 // Usage: node avatars.mjs --self-test
 import { deflateSync, inflateSync } from "node:zlib";
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
+import decodeJpegData from "./vendor/jpeg-decoder.cjs";
 
 const N = 16;
 
@@ -57,6 +58,17 @@ export function decodePng(buf) {
     return [palette?.[k * 3] ?? 0, palette?.[k * 3 + 1] ?? 0, palette?.[k * 3 + 2] ?? 0, trns?.[k] ?? 255];
   };
   return { w, h, rgba };
+}
+
+// A JPEG's pixels as RGBA, or null; capped small, since an avatar is asked for at 16px.
+export function decodeJpeg(buf) {
+  if (buf.length < 3 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  try {
+    const { width: w, height: h, data } = decodeJpegData(buf, { maxResolutionInMP: 4, maxMemoryUsageInMB: 64 });
+    return { w, h, rgba: (x, y) => [...data.subarray((y * w + x) * 4, (y * w + x) * 4 + 4)] };
+  } catch {
+    return null;
+  }
 }
 
 // The picture as N×N cells (box-averaged), one path per colour (4 bits a channel, #rgb), runs
@@ -111,7 +123,8 @@ export async function avatars(authors, cacheFile) {
       if (!(key in cache)) {
         try {
           const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-          const img = res.ok ? decodePng(Buffer.from(await res.arrayBuffer())) : null;
+          const buf = res.ok ? Buffer.from(await res.arrayBuffer()) : null;
+          const img = buf && (decodePng(buf) ?? decodeJpeg(buf));
           cache[key] = img ? mosaic(img, isMachine ? "square" : "circle") : "";
         } catch {
           return; // offline: try again next round
@@ -123,6 +136,10 @@ export async function avatars(authors, cacheFile) {
   writeFileSync(cacheFile, JSON.stringify(cache));
   return out;
 }
+
+// a 1×1 grey (128) baseline JPEG, written by Pillow
+const GREY_JPEG =
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/wAALCAABAAEBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/ACv/2Q==";
 
 function selfTest() {
   // a 2×2 RGBA PNG: red, green / blue, transparent
@@ -143,7 +160,11 @@ function selfTest() {
   assert.match(svg, /fill="#f00"/);
   assert.match(svg, /fill="#00f"/);
   assert.doesNotMatch(svg, /M15 15/); // the rounded corner and the transparent cell stay empty
-  assert.equal(decodePng(Buffer.from([0xff, 0xd8, 0xff])), null); // a JPEG: no mosaic
+  assert.equal(decodePng(Buffer.from([0xff, 0xd8, 0xff])), null); // a JPEG is not a PNG
+  assert.equal(decodeJpeg(Buffer.from([0xff, 0xd8, 0xff])), null); // a broken JPEG: no mosaic
+  const jpg = decodeJpeg(Buffer.from(GREY_JPEG, "base64"));
+  assert.deepEqual([jpg.w, jpg.h], [1, 1]);
+  assert.ok(Math.abs(jpg.rgba(0, 0)[0] - 128) < 4 && jpg.rgba(0, 0)[3] === 255);
   console.log("self-test ok");
 }
 
