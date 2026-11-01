@@ -1,4 +1,4 @@
-// Round → ViewModel: every word and number the pane and the band show comes from here,
+// Round → ViewModel: every word and number the pane shows comes from here,
 // so the counts and the prompt sent to the AI always agree. No mod runtime, so Node can
 // import this file.
 import { t } from '../scripts/i18n.mjs'
@@ -35,19 +35,6 @@ export function rank(p: Item): number {
 }
 const since = (p: Item) => p.since ?? p.createdAt
 export const byRank = (a: Item, b: Item) => rank(a) - rank(b) || since(a).localeCompare(since(b))
-
-// The signal that names the verb, in a fixed order.
-const ORDER = ['conflict', 'ci_failed', 'changes_requested', 'unanswered', 'threads', 'new_reviews', 'ready', 'changed', 'no_owner', 'no_review', 'late']
-const top = (p: Item) => ORDER.map(k => p.signals.find(s => base(s) === k)).find(Boolean)
-
-export function verb(p: Item, lang: string): string {
-  if (p.kind === 'review') return t(lang, 'v_review', p.author || '?')
-  const code = top(p)
-  if (!code) return t(lang, 'v_idle')
-  const [k, n] = code.split(':')
-  if (k === 'no_review' && p.kind === 'mine') return t(lang, 'v_ask_review')
-  return t(lang, `v_${k}`, Number(n))
-}
 
 // 5h, 12d, 3w: hours under a day, days under two weeks, then weeks.
 export function ageShort(iso: string, now: number, lang: string): string {
@@ -86,11 +73,11 @@ export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: 
 // The verdict as the first tag: the star and ✓, the issue count, … or "old".
 export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   const purple = { color: C.merged }
-  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: '✓', ...purple, text: '✦✓' }
-  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: String(v.issues), ...purple, text: `✦${v.issues}` }
-  if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, count: '…', color: C.subtle, text: '◌…' }
-  if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_old'), color: C.subtle, text: `☆${t(lang, 'vd_old')}` }
-  return { k: 'sig', svg: STARS.none, w: 16, text: '✧' }
+  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: '✓', ...purple, text: '✦✓', tip: t(lang, 'tip_v_pass') }
+  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: String(v.issues), ...purple, text: `✦${v.issues}`, tip: t(lang, 'tip_v_issues', v.issues) }
+  if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, count: '…', color: C.subtle, text: '◌…', tip: t(lang, 'tip_v_run') }
+  if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_old'), color: C.subtle, text: `☆${t(lang, 'vd_old')}`, tip: t(lang, 'tip_v_stale') }
+  return { k: 'sig', svg: STARS.none, w: 16, text: '✧', tip: t(lang, 'tip_v_none') }
 }
 
 // The one action a PR offers, highest rank first: blockers before feedback (CI reruns after a
@@ -131,28 +118,31 @@ export function tone(p: Item): Tone | null {
 
 // A row's tags, before they are fitted: why it is here (signals), then the agent glyph, its
 // labels and its size. State, draft and kind are not tags: the glyph and section say them.
-export function tags(p: Item, w = 300): Tag[] {
+export function tags(p: Item, lang: string, w = 300): Tag[] {
+  const tip = (k: string, ...a: unknown[]) => t(lang, `tip_${k}`, ...a)
   const out: Tag[] = []
   for (const s of p.signals) {
     const [k, n] = s.split(':')
-    if (k === 'conflict') out.push(sig(I.conflict, '◆'))
-    if (k === 'ci_failed') out.push(sig(I.ciFail, '✕'))
-    if (k === 'changes_requested') out.push(sig(I.changes, '±'))
-    if (k === 'threads') out.push(sig(I.threads, `¶${n}`, Number(n), C.warning))
-    if ((k === 'unanswered' || k === 'new_reviews') && !has(p, 'threads')) out.push(sig(I.threads, '¶', Number(n) || undefined, C.warning))
-    if (k === 'no_owner') out.push(sig(I.noOwner, '?'))
+    if (k === 'conflict') out.push(sig(I.conflict, '◆', tip('conflict')))
+    if (k === 'ci_failed') out.push(sig(I.ciFail, '✕', tip('ci_fail')))
+    if (k === 'changes_requested') out.push(sig(I.changes, '±', tip('changes')))
+    if (k === 'threads') out.push(sig(I.threads, `¶${n}`, tip('threads', Number(n)), Number(n), C.warning))
+    if ((k === 'unanswered' || k === 'new_reviews') && !has(p, 'threads')) out.push(sig(I.threads, '¶', tip('threads', 0), Number(n) || undefined, C.warning))
+    if (k === 'no_owner') out.push(sig(I.noOwner, '?', tip('no_owner')))
   }
-  if (p.kind === 'review') out.unshift(has(p, 'changed') ? sig(I.eye(C.subtle), '◎') : sig(I.eye(C.suggestion), '◉'))
-  if (has(p, 'ready')) out.unshift(...(p.ci === 'pass' ? [sig(I.ciPass, '✓')] : []), sig(I.approved, '✓'))
-  if (p.kind === 'mine' && !p.isDraft && p.ci === 'pending') out.push(sig(I.ciPending, '◌'))
-  if (p.isAI) out.push({ k: 'ai', svg: I.ai, w: 16, text: '¤' })
-  for (const l of [...(p.labels ?? [])].sort(byPriority)) out.push({ k: 'label', ...pill(l.name, l.color), text: `(${l.name})` })
-  if (p.size !== undefined) out.push({ k: 'size', svg: I.size(bars(p.size)), w: 16, text: '▂▄▆█'.slice(0, bars(p.size)) })
-  return fit(out, w)
+  if (p.kind === 'review') out.unshift(has(p, 'changed') ? sig(I.eye(C.subtle), '◎', tip('rereview')) : sig(I.eye(C.suggestion), '◉', tip('review')))
+  if (has(p, 'ready')) out.unshift(...(p.ci === 'pass' ? [sig(I.ciPass, '✓', tip('ci_pass'))] : []), sig(I.approved, '✓', tip('approved')))
+  if (p.kind === 'mine' && !p.isDraft && p.ci === 'pending') out.push(sig(I.ciPending, '◌', tip('ci_pending')))
+  if (p.isAI) out.push({ k: 'ai', svg: I.ai, w: 16, text: '¤', tip: tip('ai') })
+  for (const l of [...(p.labels ?? [])].sort(byPriority)) out.push({ k: 'label', ...pill(l.name, l.color), text: `(${l.name})`, tip: tip('label', l.name) })
+  if (p.size !== undefined) out.push({ k: 'size', svg: I.size(bars(p.size)), w: 16, text: '▂▄▆█'.slice(0, bars(p.size)), tip: tip('size', ['S', 'M', 'L', 'XL'][bars(p.size) - 1], p.size) })
+  return fit(out, w, n => tip('more', n))
 }
 
-// The row's state glyph: the PR icon in the winning colour, dashed for a draft.
+// The row's state glyph: the PR icon in the winning colour, dashed for a draft; its tip says
+// what the colour means.
 const glyph = (p: Item) => (p.isDraft ? I.draft : I.pr(C[tone(p) ?? 'subtle']))
+const glyphTip = (p: Item, lang: string) => t(lang, `tip_g_${p.isDraft ? 'draft' : p.kind === 'other' ? 'team' : (tone(p) ?? 'waiting')}`)
 
 export function reason(error: string, lang: string) {
   if (/gh auth|not logged/i.test(error)) return t(lang, 'err_gh_auth')
@@ -232,13 +222,14 @@ export function toViewModel(r: Round | null, o: Opts) {
       url: p.url,
       number: p.number,
       glyph: glyph(p),
+      glyphTip: glyphTip(p, lang),
       ref: showRepo ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
       title: p.title,
       wait: ageShort(since(p), now, lang),
       // two days and more: white and bold; age is weight, so colours stay free
       isOld: now - Date.parse(since(p)) >= 2 * 864e5,
       // a verdict leads the tags and takes a narrower fit; its top finding gets a line of its own
-      tags: v.state === 'none' ? tags(p) : [verdictTag(v, lang), ...tags(p, 260)],
+      tags: v.state === 'none' ? tags(p, lang) : [verdictTag(v, lang), ...tags(p, lang, 260)],
       finding: v.state === 'issues' && v.finding ? `${v.finding}${v.issues > 1 ? ` · +${v.issues - 1}` : ''}` : '',
       act: a.label,
       prompt: a.prompt,
@@ -311,7 +302,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       more: !isFolded && hidden.length ? t(lang, hidden.every(p => picks.has(keyOf(p))) ? 'in_more_picked' : 'in_more', hidden.length) : '',
       rows: shown.map(p => {
         const isPicked = picks.has(keyOf(p))
-        return { key: keyOf(p), url: p.url, glyph: I.pr(C.subtle), ref: showRepo ? refOf(p) : `#${p.number}`, title: p.title, verdict: verdictTag(vOf(p), lang), isPicked, box: isPicked ? PICKED : { bg: undefined, border: undefined } }
+        return { key: keyOf(p), url: p.url, glyph: I.pr(C.subtle), glyphTip: t(lang, 'tip_g_team'), ref: showRepo ? refOf(p) : `#${p.number}`, title: p.title, verdict: verdictTag(vOf(p), lang), isPicked, box: isPicked ? PICKED : { bg: undefined, border: undefined } }
       }),
     }
   })
@@ -331,7 +322,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     views: team.length ? [{ id: '', name: t(lang, 'in_view_needs', n('move')) }, { id: 'team', name: t(lang, 'in_view_team', team.length) }] : [],
     view: isTeam ? 'team' : '',
     groups,
-    auto: { value: o.verdicts?.auto ?? 'off', options: ['off', 'mine', 'all'].map(id => ({ id, name: t(lang, `au_${id}`) })) },
+    auto: { tip: t(lang, 'tip_auto'), value: o.verdicts?.auto ?? 'off', options: ['off', 'mine', 'all'].map(id => ({ id, name: t(lang, `au_${id}`) })) },
     progress,
     counts: Object.fromEntries(SECTIONS.map(id => [id, n(id)])) as Record<Section, number>,
     repos,
@@ -348,11 +339,6 @@ export function toViewModel(r: Round | null, o: Opts) {
         }
       : null,
     keep: ui.selected.filter(k => all.some(p => keyOf(p) === k)),
-    // the band names what needs me first, the same count as Your move
-    band: (() => {
-      const move = all.filter(p => sectionOf(p) === 'move').sort(byRank)
-      return move[0] ? { count: move.length, verb: verb(move[0], lang), ref: `${shortRepo(move[0].repo)}#${move[0].number}`, failed: Boolean(r.error) } : null
-    })(),
   }
 }
 export type ViewModel = ReturnType<typeof toViewModel>

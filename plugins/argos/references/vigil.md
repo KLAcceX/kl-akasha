@@ -1,6 +1,6 @@
 # Vigil and repositories
 
-Watch the connected repositories round after round and surface only what is new. The Argos mod already does this inside Claude on a timer, at no token cost, with a band above the prompt and `/argos` for the pane; reach for a scheduled task only when the user wants rounds while no Claude session is open.
+Watch the connected repositories round after round and surface only what is new. The Argos mod already does this inside Claude on a timer, at no token cost, with `/argos` for the pane it keeps fresh; reach for a scheduled task only when the user wants rounds while no Claude session is open.
 
 The vigil watches **only connected repositories**. With none, a round searches nothing, so an account's other repositories are never read by accident.
 

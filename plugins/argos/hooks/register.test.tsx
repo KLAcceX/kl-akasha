@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { bars, fit, pill } from './look'
-import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb, verdictOf } from './register'
+import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf } from './register'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -41,19 +41,11 @@ const PANE = {
   viewport: { columns: 40, rows: 40 },
   props: { title: 'Argos', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
-const BAND = { plugin: 'argos', component: 'AbovePrompt', props: { hasSurvey: false } } as never
 const clock = () => ({ value: NOW })
 
 test('rank puts merge first, then a late review, then unblocking mine; the longest wait breaks ties', () => {
   expect([conflict, lateReview, ready].sort(byRank).map(p => (p as { number: number }).number)).toEqual([220, 7, 219])
   expect(rank(theirs)).toBe(7)
-})
-
-test('verbs follow the fixed signal order, in each language', () => {
-  expect(verb(item({ signals: ['threads:2', 'conflict'] }), 'en')).toBe('Resolve the conflict')
-  expect(verb(item({ signals: ['threads:2'] }), 'pt-BR')).toBe('Fechar 2 conversas abertas')
-  expect(verb(lateReview, 'en')).toBe("Review bia's PR")
-  expect(verb(changed, 'pt-BR')).toBe('Revisar de novo')
 })
 
 test('each PR lands in the section of its next move, with one action and the colour that wins', () => {
@@ -80,9 +72,9 @@ test('each PR lands in the section of its next move, with one action and the col
 })
 
 test('tags: signals, the agent glyph, labels by risk, the size meter; five at most', () => {
-  const marks = (p: never) => tags(p).map(t => t.text)
+  const marks = (p: never) => tags(p, 'en').map(t => t.text)
   expect(marks(conflict)).toEqual(['◆', '¶2', '▂▄▆█'])
-  expect(tags(conflict)[1]?.count).toBe('2')
+  expect(tags(conflict, 'en')[1]?.count).toBe('2')
   expect(marks(theirs)).toEqual(['?', '¤'])
   expect(marks(item({ signals: ['ready'], ci: 'pass' }))).toEqual(['✓', '✓'])
   expect(marks(item({ ci: 'pending', size: 10 }))).toEqual(['◌', '▂'])
@@ -175,37 +167,6 @@ test('failures and late rounds say so', () => {
   expect([late.isLate, late.checked]).toEqual([true, 'checked 4h ago'])
 })
 
-test('the band shows the most urgent PR with its verb', async ($, on) => {
-  on('state.get', stored({ round }))
-  on('clock.now', clock)
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  // the 16px logo leads the name, then what needs me and the first item
-  expect((await ui.find({ type: 'Svg' }))?.props?.width).toBe(16)
-  expect((await ui.find({ type: 'Text', text: 'Argos' }))?.text).toBe('Argos')
-  expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you')
-  // the ref leads, the verb trails and is cut at its end
-  expect((await ui.find({ type: 'Text', text: /^·/ }))?.text).toBe("· web#7 · Review bia's PR")
-  await ui.unmount()
-})
-
-test('with nothing for me the band is a quiet line of what else there is', async ($, on) => {
-  expect(await bandText($, on, { round: { ...round, pending: [], mine: [quiet, ready, draft], others: [] } })).toEqual([
-    'Argos',
-    'Nothing needs you',
-    '· 1 ready to merge · 1 waiting on others · 1 draft',
-  ])
-})
-
-test('before the first round the band draws nothing, but stays ours', async ($, on) => {
-  on('state.get', stored({}))
-  on('clock.now', clock)
-  // passing it on would leave the band to the engine, which stops asking until the prompt changes
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text' })).toBeUndefined()
-  expect((await ui.find({ type: 'Box' }))?.type).toBe('Box')
-  await ui.unmount()
-})
-
 test('the pane: Pull requests, what needs me, two-line rows with a pick and one button', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
@@ -218,6 +179,17 @@ test('the pane: Pull requests, what needs me, two-line rows with a pick and one 
   expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
   expect((await ui.find({ key: 'act:acme/portal#220' }))?.text).toBe('Merge')
   expect((await ui.find({ key: 'pick:acme/portal#219' }))?.text).toBe('+')
+  // every icon says what it means on hover: its tip as the SVG's title, drawn interactive
+  const svgs: { props?: { alt?: string; source?: string; isInteractive?: boolean } }[] = []
+  const walk = (n: any) => {
+    if (!n || typeof n !== 'object') return
+    if (n.type === 'Svg') svgs.push(n)
+    for (const c of n.children ?? []) walk(c)
+  }
+  walk(await ui.drawn())
+  const svg = (alt: string) => svgs.find(n => n.props?.alt === alt)?.props
+  expect([svg('Merge conflict')?.isInteractive, String(svg('Merge conflict')?.source).includes('<title>Merge conflict</title>')]).toEqual([true, true])
+  expect(svg('Blocked: conflict or failing CI')?.isInteractive).toBe(true)
   // the team is folded behind Show; no batch bar without picks
   expect(await ui.find({ key: 'act:acme/web#8' })).toBeUndefined()
   expect((await ui.find({ key: 'fold:team' }))?.text).toBe('Show')
@@ -372,23 +344,16 @@ test('a failed round shows the reason round.mjs wrote, not the wrapper', async (
     throw new Error('exit code 1')
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  // hidden before the check: a failure brings the band back
-  let hidden = true
   // the round runs after /argos returns: wait until it is over
   let settle = () => {}
   const over = new Promise<void>(r => (settle = r))
-  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
-    e.key === 'isHidden' ? { value: { value: hidden, version: 1 } } : next(e),
-  )
   on('state.set', async ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
-    if (e.key === 'isHidden') hidden = Boolean(e.value)
     const done = await next(e)
     if (e.key === 'isRunning' && e.value === false) settle()
     return done
   })
   await $.command.run({ command: 'argos', args: '' })
   await over
-  expect(hidden).toBe(false)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /gh auth login/ }))?.text).toContain('gh auth login')
   expect((await ui.find({ key: 'failed-btn' }))?.text).toBe('Fix auth')
@@ -506,58 +471,3 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
   expect(spawns[0]?.prompt).toContain('- u219')
 })
 
-// The band in every state: never a false one, a failure always in words.
-const bandText = async ($: any, on: any, values: Record<string, unknown>) => {
-  on('state.get', stored(values))
-  on('clock.now', clock)
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const texts: string[] = []
-  const walk = (n: any) => {
-    if (!n || typeof n !== 'object') return
-    if (n.type === 'Text') texts.push((n.children ?? []).join(''))
-    for (const c of n.children ?? []) walk(c)
-  }
-  walk(await ui.drawn())
-  await ui.unmount()
-  return texts
-}
-
-test('the band while a check runs says so, with no item', async ($, on) => {
-  expect(await bandText($, on, { round, isRunning: true })).toEqual(['Argos', 'Checking…'])
-})
-
-test('a failed check with old data keeps what needs me and says it failed', async ($, on) => {
-  const texts = await bandText($, on, { round: { ...round, at: new Date(NOW).toISOString(), error: 'Error: timed out' } })
-  expect(texts).toEqual(['Argos', '2 need you', "· web#7 · Review bia's PR", '· Check failed'])
-})
-
-test('a failed check with nothing to show says it failed, in words', async ($, on) => {
-  const texts = await bandText($, on, { round: { ...round, pending: [], mine: [quiet], others: [], at: new Date(NOW).toISOString(), error: 'Error: timed out' } })
-  expect(texts).toEqual(['Argos', 'Check failed'])
-})
-
-test('a late check is not a failed one: it says when Argos last looked', async ($, on) => {
-  const late = { ...round, pending: [], mine: [quiet], others: [], okAt: ago(0.2), at: ago(0.2) }
-  expect(await bandText($, on, { round: late })).toEqual(['Argos', 'checked 4h ago'])
-})
-
-test('Hide is a quiet word: it hides the band and says how to get it back', async ($, on) => {
-  const toasts: string[] = []
-  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
-    e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
-  )
-  on('clock.now', clock)
-  on('ui.toast', (_: unknown, e: { text?: string; message?: string }) => {
-    toasts.push(String(e.text ?? e.message ?? ''))
-    return { value: undefined }
-  })
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const hide = await ui.find({ key: 'hide' })
-  expect([hide?.text, hide?.props?.plain, hide?.props?.variant]).toEqual(['Hide', true, undefined])
-  expect((await ui.find({ key: 'open' }))?.props?.variant).toBe('secondary')
-  await ui.press({ key: 'hide' })
-  expect(toasts).toEqual(['Hidden until something new · /argos brings it back'])
-  expect(await ui.find({ key: 'hide' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text' })).toBeUndefined()
-  await ui.unmount()
-})

@@ -29,7 +29,7 @@
       "type": "number",
       "title": "Interval (min)",
       "description": "How often the vigil runs, in minutes. Minimum 5.",
-      "default": 60
+      "default": 15
     }
   }
 }

@@ -34,7 +34,7 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 ## The eyes inside Claude
 
-The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the next action, toasts what is new, and `/argos` opens a pane built for a narrow sidebar: an inbox sorted by your next move.
+The plugin ships a mod that runs the vigil on its own timer, at no token cost, and toasts what is new. `/argos` opens a pane built for a narrow sidebar: an inbox sorted by your next move. Keep it open: it refreshes with every round. Hover any icon to see what it means.
 
 - **Head:** "Pull requests" and **Check now**; under it what needs you ("3 need you") and when Argos last checked; then one picker to narrow the inbox to a repo.
 - **Sections**, each shown only when it holds something, longest wait first:
@@ -85,8 +85,8 @@ Set them with `/config` under the argos plugin, or `claude plugin configure argo
 |---|---|---|
 | `account` | the active `gh` account | the `gh` login the vigil uses |
 | `qualifiers` | none | extra GitHub search qualifiers, such as `is:draft` |
-| `language` | `en` | `en` or `pt-BR`, for the band, the pane and the notices |
-| `intervalMinutes` | 60 | how often the vigil runs, at least 5 |
+| `language` | `en` | `en` or `pt-BR`, for the pane and the notices |
+| `intervalMinutes` | 15 | how often the vigil runs and the pane refreshes, at least 5 |
 
 ## Where things live
 

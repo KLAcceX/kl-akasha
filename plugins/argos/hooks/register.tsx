@@ -1,6 +1,6 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one Argos round over
-// the connected repos. The band above the prompt shows the most urgent PR; /argos opens
-// the pane, an inbox: what needs me, what is ready, what waits on others, my drafts and
+// the connected repos and the pane follows it; /argos opens the pane, an inbox the person
+// keeps open: what needs me, what is ready, what waits on others, my drafts and
 // the team's PRs, each PR a tinted box of two lines with icons, labels and one action, a
 // picker to narrow to a repo, and a batch bar for the PRs picked for the AI. Words and
 // numbers come from toViewModel (view.ts); colours and icons from look.ts.
@@ -9,21 +9,19 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { BAND, C, I, LOGO, STARS, TINT, rgba } from './look'
+import { C, I, LOGO, STARS, TINT, rgba, titled } from './look'
 import { UI, mentions, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
-export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb, verdictOf } from './view'
+export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
-const HIDDEN = { plugin: 'argos', key: 'isHidden' } as const
 const RUNNING = { plugin: 'argos', key: 'isRunning' } as const
 // /argos demo shows a sample round; rounds and loads wait until a plain /argos
 const DEMO = { plugin: 'argos', key: 'isDemo' } as const
 const VERDICTS = { plugin: 'argos', key: 'verdicts' } as const
 const round = atom(ROUND, null)
-const isHidden = atom(HIDDEN, false)
 const isRunning = atom(RUNNING, false)
 const selected = atom({ plugin: 'argos', key: 'selected' } as const, UI.selected)
 const open = atom({ plugin: 'argos', key: 'open' } as const, UI.open)
@@ -37,7 +35,7 @@ const batchAct = atom({ plugin: 'argos', key: 'act' } as const, UI.act)
 const verdicts = atom({ plugin: 'argos', key: 'verdicts' } as const, null)
 
 const config = (options: PluginOptions) => ({
-  minutes: Math.max(5, Number(options.intervalMinutes) || 60),
+  minutes: Math.max(5, Number(options.intervalMinutes) || 15),
   account: String(options.account ?? '').trim(),
   qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
   lang: String(options.language ?? 'en'),
@@ -49,17 +47,6 @@ async function stateDir($: any) {
 }
 const roundFile = async ($: any) => `${await stateDir($)}/last-round.json`
 
-// The band is a site of its own that redraws on its own events (the prompt changing), not on
-// state writes, so after a write it reads (the round, a running check, Hide, the demo,
-// verdicts) every ui.render is asked to draw again; without it the band showed old state
-// until the person typed.
-// Asked twice: now, and once more a moment later, since the engine folds redraws asked close
-// together and the band was seen to keep old state.
-const redraw = ($: any) => {
-  $.ui.invalidate('ui.render')
-  $.clock.after(300, () => $.ui.invalidate('ui.render'))
-}
-
 // The verdicts the AI wrote with verdicts.mjs; none yet is an empty file.
 async function loadVerdicts($: any): Promise<Verdicts | null> {
   if ((await $.state.get(DEMO)).value) return (await $.state.get(VERDICTS)).value ?? null
@@ -67,7 +54,6 @@ async function loadVerdicts($: any): Promise<Verdicts | null> {
     const v: Verdicts = JSON.parse(await $.fs.read(`${await stateDir($)}/verdicts.json`))
     if (!v?.prs) throw new Error('not a verdicts file')
     await $.state.set(VERDICTS, v)
-    redraw($)
     return v
   } catch {
     return (await $.state.get(VERDICTS)).value ?? null
@@ -105,7 +91,6 @@ async function load($: any): Promise<Round | null> {
     const last: Round = JSON.parse(await $.fs.read(await roundFile($)))
     if (shown && Date.parse(shown.at) > Date.parse(last.at)) return shown
     await $.state.set(ROUND, last)
-    redraw($)
     return last
   } catch {
     return shown
@@ -134,7 +119,6 @@ async function tick($: any, options: PluginOptions, force: boolean) {
   const now = await $.clock.now()
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
   await $.state.set(RUNNING, true)
-  redraw($)
   try {
     const argv = ['node', `${$.plugin.root}/scripts/round.mjs`, ...qualifiers, '--lang', lang, '--json']
     if (account) argv.push('--account', account)
@@ -142,13 +126,9 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     const fresh = await load($)
     if (fresh?.notify) {
       $.ui.toast(fresh.notify)
-      await $.state.set(HIDDEN, false)
-      redraw($)
     }
     await autoValidate($, fresh, lang).catch(() => {})
   } catch (err) {
-    await $.state.set(HIDDEN, false)
-    redraw($)
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
     // this attempt's. Only a run that died before writing (killed at the time limit) gets the
     // wrapper's message. Either way okAt stays the last round that worked.
@@ -159,7 +139,6 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     }
   } finally {
     await $.state.set(RUNNING, false)
-    redraw($)
   }
 }
 
@@ -213,7 +192,6 @@ export const register: Register = (on, options) => {
       await $.state.set(DEMO, true)
       await $.state.set(ROUND, { ...DEMO_ROUND, at, okAt: at })
       await $.state.set(VERDICTS, DEMO_VERDICTS)
-      redraw($)
       await $.ui.open({ id: PANE, title: 'Argos' })
       return { text: t(lang, 'ui_demo') }
     }
@@ -224,87 +202,9 @@ export const register: Register = (on, options) => {
       await update($, selected, () => [])
     }
     await $.state.set(DEMO, false)
-    // asking for Argos brings back a band hidden earlier
-    await $.state.set(HIDDEN, false)
-    redraw($)
     await openPane($, options)
     void tick($, options, true)
     return { text: t(lang, 'ui_opened') }
-  })
-
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const [running, last, hidden, now] = await Promise.all([read($, isRunning), read($, round), read($, isHidden), $.clock.now()])
-    const vm = toViewModel(last, { now, lang, minutes, running })
-    const band = vm.state === 'ok' ? vm.band : null
-    // With a round and nothing for me, a quiet line instead of nothing: the band says Argos is
-    // watching and what else there is. Before the first round, or with no repo, it stays away.
-    const calm = vm.state === 'ok' && !running && !band && !vm.failed && !vm.isLate
-    // A survey holds the band: yield to it. Otherwise never pass the band on, even with nothing
-    // to show: once passed, the app stops asking this plugin until the band's own props change
-    // (the person typing), so later state (a round loaded, a check running) never showed. An
-    // empty Box keeps the band ours, and its state writes draw it again.
-    if (e.props.hasSurvey) return next(e)
-    const ui = $.ui.resolve(e)
-    const { Box, Button, Text } = ui
-    if (hidden || (!running && !band && !vm.failed && !vm.isLate && !calm)) return <Box />
-    // The band says "Argos" at a glance and gets out of the way: the 16px logo leading the
-    // name, what needs me in body 600, the item in subtle, one secondary See and a quiet Hide,
-    // in a quiet violet frame tied to the logo. Every state says what is true: checking, what
-    // needs me (and "check failed" beside it when the data is old), a failure in words, or how
-    // long ago a late check ran. Red only marks a failure, always with its word.
-    const failed = vm.failed
-    const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : failed ? t(lang, 'in_failed') : calm ? t(lang, 'in_clear') : vm.checked
-    const hide = async () => {
-      await update($, isHidden, () => true)
-      redraw($)
-      $.ui.toast(t(lang, 'in_hidden'))
-    }
-    return (
-      // padding as the design: room before the logo, and the close word clear of the right edge
-      <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingLeft="sm" paddingRight="md" borderStyle="round" borderColor={BAND.border} backgroundColor={BAND.bg}>
-        {e.surface !== 'terminal' && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
-        <Text weight="semibold" color={C.text}>
-          Argos
-        </Text>
-        <Box flexShrink={0} marginLeft="xs">
-          <Text weight={calm ? 'regular' : 'semibold'} color={failed && !band && !running ? C.error : calm ? C.subtle : C.text}>
-            {lead}
-          </Text>
-        </Box>
-        {/* the PR's ref first, then the verb, cut at its end: the ref is what makes the band
-            worth a look, and a cut at the end reads as a sentence that goes on */}
-        <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} gap="xs">
-          {!running && band && (
-            <Box flexShrink={1} minWidth={0}>
-              <Text color={C.subtle} wrap="truncate">
-                {`· ${band.ref} · ${band.verb}`}
-              </Text>
-            </Box>
-          )}
-          {calm && vm.state === 'ok' && vm.clear && (
-            <Box flexShrink={1} minWidth={0}>
-              <Text color={C.subtle} wrap="truncate">
-                {`· ${vm.clear}`}
-              </Text>
-            </Box>
-          )}
-          {!running && band?.failed && (
-            <Box flexShrink={0}>
-              <Text color={C.error}>{`· ${t(lang, 'in_failed')}`}</Text>
-            </Box>
-          )}
-        </Box>
-        <Button key="open" variant="secondary" onPress={() => void openPane($, options)}>
-          {t(lang, 'ui_see')}
-        </Button>
-        {/* a word, not "×" (read aloud as "times"), and no fill, so See is the band's one action */}
-        <Box paddingX="xs">
-          <Button key="hide" plain={true} dimColor={true} onPress={() => void hide()}>
-            {t(lang, 'ui_hide')}
-          </Button>
-        </Box>
-      </Box>
-    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -337,7 +237,10 @@ export const register: Register = (on, options) => {
     const checkNow = () => void tick($, options, true)
     // a picker where the surface has one
     const Select = (ui as { Select?: any }).Select
-    const icon = (svg: string, text: string, w = 16, tall = 16) => (hasSvg ? <ui.Svg source={svg} alt={text} width={w} height={tall} /> : <Text>{text}</Text>)
+    // An icon says what it means on hover: its tip as the SVG's title, drawn interactive (no
+    // script, just the hover); the terminal draws its text mark instead.
+    const icon = (svg: string, text: string, w = 16, tall = 16, tip?: string) =>
+      hasSvg ? <ui.Svg source={titled(svg, tip)} alt={tip ?? text} width={w} height={tall} isInteractive={tip ? true : undefined} /> : <Text>{text}</Text>
     // Puts one request in the prompt without sending it: appended on a new line when there
     // is a draft, never twice. Two quick presses meet one lock, and a request whose PRs are
     // all in the prompt already adds nothing.
@@ -401,7 +304,7 @@ export const register: Register = (on, options) => {
         )}
         {vm.state === 'ok' && (
           <Box flexDirection="row" alignItems="center" gap="xs">
-            {icon(vm.progress ? STARS.run : STARS.done, '✦', 14, 14)}
+            {icon(vm.progress ? STARS.run : STARS.done, '✦', 14, 14, vm.auto.tip)}
             {vm.progress && (
               <Box flexShrink={0}>
                 <Text size="caption" weight="semibold" color={C.merged}>
@@ -502,7 +405,7 @@ export const register: Register = (on, options) => {
     const row = (p: Pr) => (
       <Box key={p.key} flexDirection="column" gap="xs" paddingX="sm" paddingY="sm" borderStyle="round" borderColor={p.box.border} backgroundColor={p.box.bg}>
         <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
-          {icon(p.glyph, '⑂')}
+          {icon(p.glyph, '⑂', 16, 16, p.glyphTip)}
           {/* the ref and the wait never wrap or shrink; the title takes what is left */}
           <Box flexShrink={0}>
             <Text size="caption" color={C.subtle} dimColor={dim}>
@@ -531,7 +434,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
             {p.tags.map((tg, i) => (
               <Box key={`t${i}`} flexDirection="row" alignItems="center">
-                {tg.svg ? icon(tg.svg, tg.text, tg.w) : null}
+                {tg.svg ? icon(tg.svg, tg.text, tg.w, 16, tg.tip) : null}
                 {tg.count && (hasSvg || !tg.svg) && (
                   <Text size="caption" weight="semibold" color={tg.color}>
                     {tg.count}
@@ -578,7 +481,7 @@ export const register: Register = (on, options) => {
     type Group = (typeof vm.groups)[number]
     const crow = (r: Group['rows'][number]) => (
       <Box key={r.key} flexDirection="row" alignItems="center" gap="xs" paddingLeft="sm" borderStyle={r.isPicked ? 'round' : undefined} borderColor={r.box.border} backgroundColor={r.box.bg}>
-        {icon(r.glyph, '⑂')}
+        {icon(r.glyph, '⑂', 16, 16, r.glyphTip)}
         <Box flexShrink={0}>
           <Text size="caption" color={C.subtle}>
             {r.ref}
@@ -590,7 +493,7 @@ export const register: Register = (on, options) => {
           </Text>
         </Box>
         <Box flexDirection="row" alignItems="center" flexShrink={0}>
-          {r.verdict.svg ? icon(r.verdict.svg, r.verdict.text, 14, 14) : null}
+          {r.verdict.svg ? icon(r.verdict.svg, r.verdict.text, 14, 14, r.verdict.tip) : null}
           {r.verdict.count && (
             <Text size="caption" weight="semibold" color={r.verdict.color}>
               {r.verdict.count}

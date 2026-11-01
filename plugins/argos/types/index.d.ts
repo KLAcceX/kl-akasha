@@ -45,7 +45,6 @@ declare module 'claude-code' {
   interface PluginState {
     argos: {
       round: Round | null
-      isHidden: boolean
       isRunning: boolean
       // showing the sample round from /argos demo
       isDemo: boolean

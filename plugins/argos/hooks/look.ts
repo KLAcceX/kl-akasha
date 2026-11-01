@@ -40,8 +40,6 @@ export const LOGO =
   '<path d="M7.6 3 2.6 8 7.6 13Z" fill="#A98BE0"/>' +
   '<path d="M7.6 3 4.2 8 7.6 13A5 5 0 0 0 7.6 3Z" fill="#7E5CC0"/>' +
   '<path d="M8.6 5 9.5 7.1 11.6 8 9.5 8.9 8.6 11 7.7 8.9 5.6 8 7.7 7.1Z" fill="#F3EEFB"/></svg>'
-// the band's quiet violet: border 22%, fill 5% of the mark's purple
-export const BAND = { border: 'rgba(126,92,192,0.22)', bg: 'rgba(126,92,192,0.05)' }
 
 const RGB = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
 export const rgba = (h: string, a: number) => `rgba(${RGB(h).join(',')},${a})`
@@ -110,9 +108,15 @@ export function pill(name: string, color: string) {
 }
 
 // A tag on a row's second line: a signal, the agent glyph, a label or the size meter, each an
-// SVG; a count rides after it as text in its colour. `text` stands in where no Svg is drawn.
-export type Tag = { k: 'sig' | 'ai' | 'label' | 'size' | 'more'; svg?: string; w: number; count?: string; color?: string; text: string }
-export const sig = (svg: string, text: string, count?: number, color?: string): Tag => ({ k: 'sig', svg, w: 16, text, ...(count ? { count: String(count), color } : {}) })
+// SVG; a count rides after it as text in its colour. `text` stands in where no Svg is drawn;
+// `tip` is what it means, shown on hover.
+export type Tag = { k: 'sig' | 'ai' | 'label' | 'size' | 'more'; svg?: string; w: number; count?: string; color?: string; text: string; tip?: string }
+export const sig = (svg: string, text: string, tip: string, count?: number, color?: string): Tag => ({ k: 'sig', svg, w: 16, text, tip, ...(count ? { count: String(count), color } : {}) })
+
+// An icon with its meaning: the tip as the SVG's <title>, which the surface shows on hover
+// when the Svg is drawn interactive.
+const escTip = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+export const titled = (svg: string, tip?: string) => (tip ? svg.replace(/^(<svg[^>]*>)/, `$1<title>${escTip(tip)}</title>`) : svg)
 
 // Size by changed lines: S <50, M <300, L <1000, XL past that, as 1 to 4 bars.
 export const bars = (lines: number) => (lines < 50 ? 1 : lines < 300 ? 2 : lines < 1000 ? 3 : 4)
@@ -131,7 +135,7 @@ export const byPriority = (a: { name: string }, b: { name: string }) => {
 // become "+N"), the agent glyph, labels (2), the size meter. Under 300px the size meter goes
 // and one label stays. Over the cap they go in this order: size, the second label, the agent
 // glyph, the last label, then the second signal becomes "+1".
-export function fit(tags: Tag[], w = 300): Tag[] {
+export function fit(tags: Tag[], w = 300, more = (n: number) => `+${n}`): Tag[] {
   const max = w >= 300 ? 5 : w >= 260 ? 4 : 3
   let s = tags.filter(t => t.k === 'sig')
   let extra = Math.max(0, s.length - 2)
@@ -159,6 +163,6 @@ export function fit(tags: Tag[], w = 300): Tag[] {
   let i = 0
   while (out().length > max && i < drop.length) drop[i++]!()
   const res = out()
-  if (extra) res.splice(s.length, 0, { k: 'more', w: 0, count: `+${extra}`, color: C.subtle, text: `+${extra}` })
+  if (extra) res.splice(s.length, 0, { k: 'more', w: 0, count: `+${extra}`, color: C.subtle, text: `+${extra}`, tip: more(extra) })
   return res
 }
