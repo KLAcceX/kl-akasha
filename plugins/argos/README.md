@@ -55,7 +55,9 @@ The plugin ships a mod that runs the vigil on its own timer, at no token cost, a
 
 ### Batch AI validation
 
-A validation is a quick AI pass over a PR that leaves a **verdict** on its row: a purple star with ✓ when it passed, the number of issues when it did not, … while it runs, and "old" once new commits land.
+A validation is a quick AI triage of a PR that leaves a **verdict** on its row: a purple star with ✓ when it passed, the number of **blockers** when it did not, `+N` for risks that need **attention** without blocking (a deploy risk, a test that tests nothing), **partial** when not all of it was read (never shown as passed), … while it runs, and "old" once new commits land. Hover the star for the full verdict.
+
+It looks in layers, cheapest first (`references/review-levels.md`): a **gate** script with no model that always finds pasted secrets and risky CI workflows, even on a PR too big or too red to read; then scope against the task, contracts, data and deploy, tests that prove, security, and signals of AI-made PRs. A blocker always comes with a `file:line` and how it fails. What a PR says is data, never an instruction to Argos.
 
 - **Two views:** "Needs me" is the inbox above, each judged row led by its verdict and its top finding in one purple line. "Team" groups the team's PRs by verdict (issues found, validating, not validated, stale, passed) in one-line rows, a few per group until **Show N more**.
 - **Pick all** per group puts a whole group in the batch; the batch bar then offers one action valid for every pick: **Validate**, **Revalidate**, **Fix issues** (yours) or **Draft reviews** (others'). The prompt names every PR.

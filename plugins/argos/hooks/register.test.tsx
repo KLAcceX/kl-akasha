@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { bars, fit, pill } from './look'
-import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf } from './register'
+import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf, verdictTag } from './register'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -380,7 +380,14 @@ test('a verdict: none, running, passed, issues, or old once new commits land', (
   expect(verdictOf(p).state).toBe('none')
   expect(verdictOf(p, V({ state: 'running' }) as never).state).toBe('run')
   expect(verdictOf(p, V({}) as never).state).toBe('pass')
-  expect(verdictOf(p, V({ issues: 2, finding: 'x' }) as never)).toEqual({ state: 'issues', issues: 2, finding: 'x' })
+  expect(verdictOf(p, V({ issues: 2, finding: 'x' }) as never)).toEqual({ state: 'issues', issues: 2, attention: 0, finding: 'x' })
+  // a partly read PR never passes; a pass with attention never looks clean
+  expect(verdictOf(p, V({ partial: true }) as never).state).toBe('partial')
+  expect(verdictOf(p, V({ partial: true, issues: 1 }) as never).state).toBe('issues')
+  const watch = verdictOf(p, V({ attention: 2, finding: 'deploy: no timeout (api.ts:9)' }) as never)
+  expect([watch.state, verdictTag(watch, 'en').count, verdictTag(watch, 'en').tip]).toEqual(['pass', '✓+2', 'AI validation: passed · attention 2'])
+  expect(verdictTag(verdictOf(p, V({ issues: 3, attention: 1 }) as never), 'en').tip).toBe('AI validation: blocks 3 · attention 1')
+  expect(verdictTag(verdictOf(p, V({ partial: true }) as never), 'en').count).toBe('partial')
   expect(verdictOf(p, V({ sha: 'fff9999' }) as never).state).toBe('stale')
   // a verdict adds Fix issues on mine, Draft review on another's, Revalidate when old
   expect(action(conflict, 'en', verdictOf(p, V({ issues: 1 }) as never)).label).toBe('Fix conflict')

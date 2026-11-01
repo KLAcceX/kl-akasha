@@ -13,7 +13,7 @@ import { C, I, LOGO, STARS, TINT, rgba, titled } from './look'
 import { UI, mentions, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
-export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf } from './view'
+export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf, verdictTag } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const

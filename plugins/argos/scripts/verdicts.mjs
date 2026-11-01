@@ -4,7 +4,10 @@
 //
 // Usage:
 //   node verdicts.mjs start <pr-url>...                          marks them as being validated
-//   node verdicts.mjs set <pr-url> --sha <head sha> --issues <n> [--finding "<top finding>"]
+//   node verdicts.mjs set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial]
+//                         [--finding "<top finding>"]
+//     issues: blockers only, each with file:line and how it fails; attention: risks that do
+//     not block (deploy, a weak test); partial: not all of it was read, so it never passes
 //   node verdicts.mjs auto <off|mine|all>                        revalidate new commits by itself
 //   node verdicts.mjs list                                       prints the file as JSON
 //   node verdicts.mjs --self-test
@@ -42,8 +45,8 @@ export function start(v, urls, now) {
   return { ...v, batch, prs };
 }
 
-export function set(v, url, { sha, issues, finding = "" }, now) {
-  return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, issues, finding: finding.trim().slice(0, 160), at: now } } };
+export function set(v, url, { sha, issues, attention = 0, partial = false, finding = "" }, now) {
+  return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, issues, attention, partial, finding: finding.trim().slice(0, 160), at: now } } };
 }
 
 function flag(args, name) {
@@ -66,10 +69,13 @@ function main(args) {
     const url = rest[0];
     const sha = flag(rest, "sha");
     const issues = Number(flag(rest, "issues"));
-    if (!isPr(url) || !/^[0-9a-f]{7,40}$/.test(sha ?? "") || !Number.isInteger(issues) || issues < 0)
-      throw new Error('set <pr-url> --sha <head sha> --issues <n> [--finding "<text>"]');
-    write(set(v, url, { sha, issues, finding: flag(rest, "finding") }, now));
-    return console.log(`${url}: ${issues ? `${issues} issue(s)` : "passed"}`);
+    const attention = Number(flag(rest, "attention") ?? 0);
+    const partial = rest.includes("--partial");
+    if (!isPr(url) || !/^[0-9a-f]{7,40}$/.test(sha ?? "") || ![issues, attention].every((n) => Number.isInteger(n) && n >= 0))
+      throw new Error('set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial] [--finding "<text>"]');
+    write(set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding") }, now));
+    const said = issues ? `blocks ${issues}` : partial ? "partial" : "passed";
+    return console.log(`${url}: ${said}${attention ? ` · attention ${attention}` : ""}`);
   }
   if (cmd === "auto") {
     if (!AUTO.includes(rest[0])) throw new Error(`auto takes ${AUTO.join(" | ")}`);
@@ -87,7 +93,8 @@ function selfTest() {
   assert.deepEqual(v.batch, { urls: [a, b], at: "t1" });
   assert.equal(v.prs[a].state, "running");
   v = set(v, a, { sha: "abc1234", issues: 2, finding: "  no backoff cap  " }, "t2");
-  assert.deepEqual(v.prs[a], { state: "done", sha: "abc1234", issues: 2, finding: "no backoff cap", at: "t2" });
+  assert.deepEqual(v.prs[a], { state: "done", sha: "abc1234", issues: 2, attention: 0, partial: false, finding: "no backoff cap", at: "t2" });
+  assert.equal(set(v, a, { sha: "abc1234", issues: 0, attention: 2, partial: true }, "t2").prs[a].partial, true);
   // b still runs: a new start joins the same batch
   v = start(v, [a], "t3");
   assert.deepEqual(v.batch.urls, [a, b]);

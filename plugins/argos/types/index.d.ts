@@ -25,7 +25,8 @@ export type Item = {
 }
 
 // What verdicts.mjs writes to verdicts.json: the last AI validation of each PR.
-export type Verdict = { state: 'running' | 'done'; sha?: string; issues?: number; finding?: string; at: string }
+// issues: blockers; attention: risks that do not block; partial: not all of it was read
+export type Verdict = { state: 'running' | 'done'; sha?: string; issues?: number; attention?: number; partial?: boolean; finding?: string; at: string }
 export type Verdicts = { auto: 'off' | 'mine' | 'all'; batch: { urls: string[]; at: string | null }; prs: Record<string, Verdict> }
 // What round.mjs writes to last-round.json.
 export type Round = {

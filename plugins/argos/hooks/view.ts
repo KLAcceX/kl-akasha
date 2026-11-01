@@ -61,20 +61,26 @@ export function sectionOf(p: Item): Section {
   return 'waiting'
 }
 
-// A PR's verdict from the last validation: none, running, old (new commits since), passed,
-// or issues found.
-export type VerdictState = 'none' | 'run' | 'stale' | 'pass' | 'issues'
-export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: number; finding: string } {
-  if (!v) return { state: 'none', issues: 0, finding: '' }
-  if (v.state === 'running') return { state: 'run', issues: 0, finding: '' }
-  if (v.sha && p.sha && !p.sha.startsWith(v.sha) && !v.sha.startsWith(p.sha)) return { state: 'stale', issues: v.issues ?? 0, finding: '' }
-  return v.issues ? { state: 'issues', issues: v.issues, finding: v.finding ?? '' } : { state: 'pass', issues: 0, finding: '' }
+// A PR's verdict from the last validation: none, running, old (new commits since), blockers
+// found, partly read (never a pass), or passed. Attention counts risks that do not block, so a
+// pass with them never looks clean.
+export type VerdictState = 'none' | 'run' | 'stale' | 'pass' | 'issues' | 'partial'
+export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: number; attention: number; finding: string } {
+  const attention = v?.attention ?? 0
+  if (!v) return { state: 'none', issues: 0, attention: 0, finding: '' }
+  if (v.state === 'running') return { state: 'run', issues: 0, attention: 0, finding: '' }
+  if (v.sha && p.sha && !p.sha.startsWith(v.sha) && !v.sha.startsWith(p.sha)) return { state: 'stale', issues: v.issues ?? 0, attention, finding: '' }
+  const finding = v.finding ?? ''
+  if (v.issues) return { state: 'issues', issues: v.issues, attention, finding }
+  return { state: v.partial ? 'partial' : 'pass', issues: 0, attention, finding }
 }
 // The verdict as the first tag: the star and ✓, the issue count, … or "old".
 export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   const purple = { color: C.merged }
-  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: '✓', ...purple, text: '✦✓', tip: t(lang, 'tip_v_pass') }
-  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: String(v.issues), ...purple, text: `✦${v.issues}`, tip: t(lang, 'tip_v_issues', v.issues) }
+  const more = v.attention ? `+${v.attention}` : ''
+  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: `✓${more}`, ...purple, text: `✦✓${more}`, tip: t(lang, 'tip_v_pass', v.attention) }
+  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, ...purple, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
+  if (v.state === 'partial') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_partial'), color: C.subtle, text: `☆${t(lang, 'vd_partial')}`, tip: t(lang, 'tip_v_partial', v.attention) }
   if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, count: '…', color: C.subtle, text: '◌…', tip: t(lang, 'tip_v_run') }
   if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_old'), color: C.subtle, text: `☆${t(lang, 'vd_old')}`, tip: t(lang, 'tip_v_stale') }
   return { k: 'sig', svg: STARS.none, w: 16, text: '✧', tip: t(lang, 'tip_v_none') }
@@ -158,8 +164,8 @@ export type Ui = { selected: string[]; open: string; filter: string; view: strin
 export const UI: Ui = { selected: [], open: '', filter: '', view: '', more: [], act: '' }
 
 // The team view: the team's PRs by verdict, a few rows each until "Show N more".
-export const GROUPS = ['issues', 'run', 'none', 'stale', 'pass'] as const
-const SHOWN: Record<(typeof GROUPS)[number], number> = { issues: 3, run: 3, none: 4, stale: 2, pass: 99 }
+export const GROUPS = ['issues', 'partial', 'run', 'none', 'stale', 'pass'] as const
+const SHOWN: Record<(typeof GROUPS)[number], number> = { issues: 3, partial: 2, run: 3, none: 4, stale: 2, pass: 99 }
 // The batch actions, offered only when valid for every pick.
 export const BATCH_ACTS = ['validate', 'revalidate', 'fix', 'draft'] as const
 
@@ -230,7 +236,8 @@ export function toViewModel(r: Round | null, o: Opts) {
       isOld: now - Date.parse(since(p)) >= 2 * 864e5,
       // a verdict leads the tags and takes a narrower fit; its top finding gets a line of its own
       tags: v.state === 'none' ? tags(p, lang) : [verdictTag(v, lang), ...tags(p, lang, 260)],
-      finding: v.state === 'issues' && v.finding ? `${v.finding}${v.issues > 1 ? ` · +${v.issues - 1}` : ''}` : '',
+      // the top finding: a blocker, or what a pass or a partial read must not hide
+      finding: v.finding && ['issues', 'pass', 'partial'].includes(v.state) ? `${v.finding}${v.issues > 1 ? ` · +${v.issues - 1}` : ''}` : '',
       act: a.label,
       prompt: a.prompt,
       isPicked,

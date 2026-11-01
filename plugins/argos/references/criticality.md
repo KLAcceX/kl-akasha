@@ -23,7 +23,11 @@ Raise one step (never lower) when the diff really touches something with a large
 - secrets, tokens, crypto;
 - money: payments, billing, prices, discounts, invoices;
 - data shape or data loss: migrations, schema changes, deletes and bulk updates;
-- shared plumbing: middleware, shared types and contracts, CI, infrastructure, env files.
+- shared plumbing: middleware, shared types and contracts, CI, infrastructure, env files;
+- a public surface: an OpenAPI, GraphQL or proto file, a package's entry (`index.ts`, `__init__.py`), a response or event payload, an enum other code reads;
+- supply chain: a manifest or lockfile (`package.json`, `pnpm-lock.yaml`, `requirements.txt`, `go.sum`), a workflow under `.github/workflows/`;
+- a migration and the code that depends on it in the same PR;
+- existing tests removed, skipped or loosened.
 
 The script flags these by path and label as **hints**. Confirm by reading the diff: a renamed comment in `auth/` is not a risk; an `UPDATE` without a `WHERE` in a file called `utils.ts` is.
 
