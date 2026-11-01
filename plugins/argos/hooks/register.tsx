@@ -193,6 +193,8 @@ export const register: Register = (on, options) => {
       await $.state.set(DEMO, true)
       await $.state.set(ROUND, { ...DEMO_ROUND, at, okAt: at })
       await $.state.set(VERDICTS, DEMO_VERDICTS)
+      // the demo opens By repo: its repos show every kind of header at once
+      await update($, view, () => 'repos')
       await $.ui.open({ id: PANE, title: 'Argos' })
       return { text: t(lang, 'ui_demo') }
     }
@@ -201,6 +203,8 @@ export const register: Register = (on, options) => {
       await $.state.set(ROUND, null)
       await $.state.set(VERDICTS, null)
       await update($, selected, () => [])
+      await update($, view, () => '')
+      await update($, folds, () => ({}))
     }
     await $.state.set(DEMO, false)
     await openPane($, options)

@@ -522,3 +522,14 @@ test('the by-repo view draws a header per repo, folds it, and hides the repo pic
   expect((await ui.find({ key: 'fold:repo:acme/portal' }))?.text).toBe('Show')
   await ui.unmount()
 })
+
+test('/argos demo opens in By repo, with its repo sections drawn', async ($, on) => {
+  on('clock.now', clock)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  await $.command.run({ command: 'argos', args: 'demo' })
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'view' }))?.props?.value).toBe('repos')
+  expect((await ui.find({ key: 'fold:repo:acme/checkout' }))?.text).toBe('Hide')
+  await ui.unmount()
+})
