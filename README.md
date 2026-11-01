@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/kl-akasha.svg" alt="KL · Akasha" width="112">
+
 # KL · Akasha
 
 **The record of all knowledge: a personal skill library for AI.**
