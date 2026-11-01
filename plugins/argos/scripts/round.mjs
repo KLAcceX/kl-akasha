@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { label, langArg, t } from "./i18n.mjs";
 import { read as readRepos } from "./repos.mjs";
+import { avatars } from "./avatars.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const QUEUE = join(here, "queue.mjs");
@@ -79,7 +80,7 @@ export const pending = (queue) => {
   return [...queue.mine, ...queue.toReview].filter((p) => cur[p.url]).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 };
 
-function main(args) {
+async function main(args) {
   const at = new Date().toISOString();
   const ROUND = join(dirname(STATE), "last-round.json");
   mkdirSync(dirname(STATE), { recursive: true });
@@ -131,6 +132,13 @@ function main(args) {
   } catch {} // first round: everything that needs action is new
   const items = news(prev, queue).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   writeFileSync(STATE, JSON.stringify(snapshot(queue), null, 2));
+  // each author's picture as a mosaic for the pane; one that fails keeps its letter
+  const authors = new Map(
+    [...queue.mine, ...queue.toReview, ...(queue.others ?? [])]
+      .filter((p) => p.author)
+      .map((p) => [p.author, { login: p.author, url: p.avatarUrl, isMachine: Boolean(p.isAI || p.isBot) }]),
+  );
+  const pics = await avatars([...authors.values()], join(dirname(STATE), "avatars.json")).catch(() => ({}));
   const round = {
     at,
     okAt: at,
@@ -140,6 +148,7 @@ function main(args) {
     // every open PR of mine, signals or not: the pane counts and charts them
     mine: queue.mine,
     others: queue.others ?? [],
+    avatars: pics,
     news: items,
     notify: items.length ? notification(items, lang) : null,
   };

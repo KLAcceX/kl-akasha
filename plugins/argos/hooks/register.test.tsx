@@ -211,6 +211,28 @@ test('a repo heading takes or leaves its whole repo; Clear leaves everything out
   await ui.unmount()
 })
 
+test('machines leave in bulk by kind; past six authors the switches fold, keeping what is out in sight', async ($, on) => {
+  const agentsOut = ok(vmOf(round, {}, 'en', ['kind:agent']))
+  expect(agentsOut.kinds.map(k => [k.kind, k.isOut, k.label])).toEqual([['agent', true, 'Agents ✕']])
+  expect(agentsOut.rows.find(x => x.author === 'Copilot')?.isIn).toBe(false)
+  expect(agentsOut.validate.count).toBe(4)
+  const many = Array.from({ length: 8 }, (_, i) => item({ kind: 'other', number: 500 + i, url: `u5${i}`, author: `dev${i}`, signals: [] }))
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: { ...round, pending: [], mine: [], others: many }, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('store.set', () => ({ value: undefined }))
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'authors-fold' }))?.text).toBe('Authors (8) ▾')
+  expect(await ui.find({ key: 'who:dev3' })).toBeUndefined()
+  await ui.press({ key: 'authors-fold' })
+  await ui.press({ key: 'who:dev3' })
+  await ui.press({ key: 'authors-fold' })
+  // folded again: dev3, left out by name, stays in sight
+  expect([(await ui.find({ key: 'who:dev3' }))?.text, await ui.find({ key: 'who:dev4' })]).toEqual(['dev3 ✕', undefined])
+  await ui.unmount()
+})
+
 test('the terminal draws the boxes in brackets', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)

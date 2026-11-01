@@ -13,10 +13,12 @@ export type Item = {
   since?: string
   // lines changed (additions + deletions)
   size?: number
-  // opened by a coding agent (Copilot, Devin...)
+  // opened by a machine that writes code: a coding agent (Copilot, Devin...)
   isAI?: boolean
-  // opened by a bot account (Dependabot, Snyk, Renovate)
+  // opened by a machine that only touches upkeep files: an update bot (Dependabot, Snyk...)
   isBot?: boolean
+  // the author's GitHub picture
+  avatarUrl?: string
   // GitHub labels, colour as GitHub's hex without #
   labels?: { name: string; color: string }[]
   // the head commit's SHA
@@ -39,6 +41,8 @@ export type Round = {
   pending?: Item[]
   mine?: Item[]
   others?: Item[]
+  // each author's picture as a 16×16 mosaic of SVG paths, by login
+  avatars?: Record<string, string>
   notify?: string | null
   error?: string
   needsRepos?: boolean
@@ -55,8 +59,10 @@ declare module 'claude-code' {
       out: string[]
       // PRs the pane left out by itself that the person brought back
       back: string[]
-      // authors left out everywhere (kept in $.store across sessions)
+      // authors left out everywhere, or a whole kind as kind:bot / kind:agent (kept in $.store)
       ignored: string[]
+      // the author switches unfolded
+      authorsOpen: boolean
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null
     }

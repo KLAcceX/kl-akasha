@@ -30,5 +30,5 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 ## Self-check
 
 ```bash
-node scripts/queue.mjs --self-test && node scripts/round.mjs --self-test && node scripts/facts.mjs --self-test && node scripts/lessons.mjs --self-test && node scripts/verdicts.mjs --self-test && node scripts/gate.mjs --self-test
+node scripts/queue.mjs --self-test && node scripts/round.mjs --self-test && node scripts/avatars.mjs --self-test && node scripts/facts.mjs --self-test && node scripts/lessons.mjs --self-test && node scripts/verdicts.mjs --self-test && node scripts/gate.mjs --self-test
 ```

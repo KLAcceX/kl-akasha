@@ -4,7 +4,7 @@
 // when something is left out: it dims in place. No mod runtime, so Node can import this file.
 import { t } from '../scripts/i18n.mjs'
 import type { Item, Round, Verdict, Verdicts } from '../types'
-import { AVATAR, C, STARS, type Tag } from './look'
+import { AVATAR, C, MOSAIC, STARS, type Tag } from './look'
 
 const base = (code: string) => code.split(':')[0] ?? code
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
@@ -12,7 +12,7 @@ const shortRepo = (repo: string) => repo.split('/')[1] ?? repo
 export const keyOf = (p: Item) => `${p.repo}#${p.number}`
 // Who opened a PR, as the pane names them, and what kind of author they are.
 export const authorOf = (p: Item) => (p.author || '?').replace(/\[bot\]$/, '')
-const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[bot\]$/.test(p.author ?? '') ? ('bot' as const) : ('human' as const))
+export const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[bot\]$/.test(p.author ?? '') ? ('bot' as const) : ('human' as const))
 
 // A PR's verdict from the last validation: none, running, old (new commits since), blockers
 // found, partly read (never a pass), or passed. Attention counts risks that do not block.
@@ -97,17 +97,25 @@ export function toViewModel(r: Round | null, o: Opts) {
   const names = [...new Set(all.map(p => p.repo))]
   const short = (repo: string) => (names.filter(n => shortRepo(n) === shortRepo(repo)).length > 1 ? repo : shortRepo(repo))
   const authorsOut = new Set(o.ignored ?? [])
+  // an author is out by name, or with their whole kind (kind:bot, kind:agent)
+  const isOut = (name: string, kind: string) => authorsOut.has(name) || authorsOut.has(`kind:${kind}`)
+  // the author's real picture as a mosaic when the round drew one; else their letter
+  const pic = (p: Item, kind: 'human' | 'bot' | 'agent', name: string) =>
+    r.avatars?.[p.author ?? ''] ? MOSAIC(r.avatars[p.author ?? '']!) : kind === 'agent' ? AVATAR.agent : AVATAR[kind](name)
   const byHand = new Set(ui.out)
   const back = new Set(ui.back)
+  // An author is an agent if any of their PRs writes code (see queue.mjs), else as their PRs say.
+  const kindOfAuthor = new Map<string, 'human' | 'bot' | 'agent'>()
+  for (const p of all) if (kindOfAuthor.get(authorOf(p)) !== 'agent') kindOfAuthor.set(authorOf(p), kindOf(p))
 
   const rows = all.map(p => {
     const key = keyOf(p)
     const v = verdictOf(p, o.verdicts?.prs?.[p.url])
     const auto = outOf(p, v)
     const name = authorOf(p)
-    const kind = kindOf(p)
+    const kind = kindOfAuthor.get(name)!
     // who left it out: the author switch, the person's own tap, or the pane by itself
-    const leftBy = authorsOut.has(name) ? 'author' : auto === 'running' ? 'running' : byHand.has(key) ? 'hand' : auto && !back.has(key) ? auto : null
+    const leftBy = isOut(name, kind) ? 'author' : auto === 'running' ? 'running' : byHand.has(key) ? 'hand' : auto && !back.has(key) ? auto : null
     return {
       key,
       url: p.url,
@@ -115,7 +123,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       num: `#${p.number}`,
       title: p.title,
       author: name,
-      avatar: kind === 'agent' ? AVATAR.agent : AVATAR[kind](name),
+      avatar: pic(p, kind, name),
       authorTip: t(lang, `tip_who_${kind}`, name),
       verdict: v.state === 'none' ? null : verdictTag(v, lang),
       isIn: leftBy === null,
@@ -133,16 +141,21 @@ export function toViewModel(r: Round | null, o: Opts) {
   // Authors as switches: tap to leave one out everywhere, tap again to bring them back. The
   // busiest first, people before bots at a tie.
   const order = { human: 0, agent: 1, bot: 2 }
-  const counts = new Map<string, { name: string; kind: 'human' | 'bot' | 'agent'; count: number }>()
+  const counts = new Map<string, { name: string; kind: 'human' | 'bot' | 'agent'; count: number; p: Item }>()
   for (const p of all) {
     const name = authorOf(p)
-    const a = counts.get(name) ?? { name, kind: kindOf(p), count: 0 }
+    const a = counts.get(name) ?? { name, kind: kindOfAuthor.get(name)!, count: 0, p }
     a.count++
     counts.set(name, a)
   }
   const authors = [...counts.values()]
     .sort((a, b) => b.count - a.count || order[a.kind] - order[b.kind] || a.name.localeCompare(b.name))
-    .map(a => ({ ...a, svg: a.kind === 'agent' ? AVATAR.agent : AVATAR[a.kind](a.name), tip: t(lang, `tip_who_${a.kind}`, a.name), isOut: authorsOut.has(a.name) }))
+    .map(({ p, ...a }) => ({ ...a, svg: pic(p, a.kind, a.name), tip: t(lang, `tip_who_${a.kind}`, a.name), isOut: isOut(a.name, a.kind), byName: authorsOut.has(a.name) }))
+  // Machines in bulk: one switch leaves every update bot (or every agent) out, new ones too.
+  const kinds = (['bot', 'agent'] as const)
+    .map(kind => ({ kind, count: authors.filter(a => a.kind === kind).reduce((n, a) => n + a.count, 0), isOut: authorsOut.has(`kind:${kind}`) }))
+    .filter(k => k.count > 0)
+    .map(k => ({ ...k, label: k.isOut ? `${t(lang, `in_kind_${k.kind}`)} ✕` : `${t(lang, `in_kind_${k.kind}`)} ${k.count}` }))
 
   // What the pane left out by itself, in one line.
   const autoOut = (['changes', 'draft', 'done'] as const)
@@ -188,6 +201,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     summary: t(lang, 'in_to_validate', going.length, new Set(going.map(x => x.repo)).size),
     autoLine: autoOut ? t(lang, 'in_auto_out', autoOut) : '',
     authors,
+    kinds,
     rows,
     groups,
     clear,

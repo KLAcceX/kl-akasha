@@ -8,8 +8,8 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { BOTMARK, C, I, LOGO, STARS, TINT, rgba, titled } from './look'
-import { UI, authorOf, toViewModel, verdictOf } from './view'
+import { AVATAR, BOTMARK, C, I, LOGO, STARS, TINT, rgba, titled } from './look'
+import { UI, authorOf, kindOf, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
 export { outOf, reason, toViewModel, verdictOf, verdictTag } from './view'
@@ -28,6 +28,7 @@ const out = atom({ plugin: 'argos', key: 'out' } as const, UI.out)
 const back = atom({ plugin: 'argos', key: 'back' } as const, UI.back)
 // authors left out everywhere, kept across sessions in $.store
 const ignored = atom(IGNORED, [] as string[])
+const authorsOpen = atom({ plugin: 'argos', key: 'authorsOpen' } as const, false)
 // what verdicts.mjs last wrote: the AI's validations, read by the lines
 const verdicts = atom(VERDICTS, null)
 
@@ -78,7 +79,7 @@ async function autoValidate($: any, r: Round | null, lang: string) {
   const v = await loadVerdicts($)
   if (!r || !v || v.auto === 'off') return
   const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? [])
-  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)))
+  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)) && !skip.has(`kind:${kindOf(p)}`))
   const urls = [...new Set(all.filter(p => (v.auto === 'all' || p.kind === 'mine') && verdictOf(p, v.prs[p.url]).state === 'stale').map(p => p.url))].slice(0, 10)
   await validate($, urls, lang)
 }
@@ -215,13 +216,14 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = ui
     // the terminal is the one surface without Svg: icons fall back to their text marks
     const hasSvg = e.surface !== 'terminal'
-    const [running, last, left, brought, judged, authorsOut] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, isOpen] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
       read($, back),
       read($, verdicts),
       read($, ignored),
+      read($, authorsOpen),
     ])
     const vm = toViewModel(last, { now: await $.clock.now(), lang, minutes, running, ui: { out: left, back: brought }, verdicts: judged, ignored: authorsOut })
     // tick returns at once while a round runs, so pressing twice does nothing
@@ -331,27 +333,41 @@ export const register: Register = (on, options) => {
     if (vm.state !== 'ok') return frame(head(true))
 
     // Authors are switches: one tap leaves an author out everywhere (and across sessions), one
-    // more brings them back. Nothing moves: the chip dims, its lines dim in place.
-    const toggleAuthor = async (name: string) => {
+    // more brings them back. Nothing moves: the chip dims, its lines dim in place. Machines go in
+    // bulk too (kind:bot, kind:agent), new ones included. Past FOLD authors the list folds: the
+    // kinds and whoever is left out by name stay in sight, so no filter is ever hidden.
+    const toggleIgnored = async (entry: string) => {
       let next: string[] = []
-      await update($, ignored, list => (next = list.includes(name) ? list.filter(x => x !== name) : [...list, name]))
+      await update($, ignored, list => (next = list.includes(entry) ? list.filter(x => x !== entry) : [...list, entry]))
       await $.store.set('ignored', next).catch(() => {})
     }
+    const FOLD = 6
+    const canFold = vm.authors.length > FOLD
+    const kindOut = new Set<string>(vm.kinds.filter(k => k.isOut).map(k => k.kind))
+    const shown = vm.authors.filter(a => !kindOut.has(a.kind) && (!canFold || isOpen || a.byName))
+    const chip = (key: string, isOut: boolean, label: string, onPress: () => void, pic?: any) => (
+      <Box key={`chip:${key}`} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" borderStyle="round" borderColor={isOut ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.14)'}>
+        {pic}
+        <Button key={key} plain={true} dimColor={isOut} onPress={onPress}>
+          {label}
+        </Button>
+      </Box>
+    )
     const authors = (
       <Box key="authors" flexDirection="column" gap="xs">
         <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap="xs">
           <Text size="caption" color={C.subtle}>
             {t(lang, 'in_leave_out')}
           </Text>
-          {vm.authors.map(a => (
-            <Box key={`chip:${a.name}`} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" borderStyle="round" borderColor={a.isOut ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.14)'}>
-              {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 18, 18, a.tip)}
-              {a.kind === 'bot' && icon(BOTMARK, '⚙', 12, 12, a.tip)}
-              <Button key={`who:${a.name}`} plain={true} dimColor={a.isOut} onPress={() => void toggleAuthor(a.name)}>
-                {a.isOut ? `${a.name} ✕` : `${a.name} ${a.count}`}
-              </Button>
-            </Box>
-          ))}
+          {vm.kinds.map(k => chip(`kind:${k.kind}`, k.isOut, k.label, () => void toggleIgnored(`kind:${k.kind}`), icon(k.kind === 'bot' ? BOTMARK : AVATAR.agent, '⚙', 14, 14)))}
+          {shown.map(a =>
+            chip(`who:${a.name}`, a.isOut, a.isOut ? `${a.name} ✕` : `${a.name} ${a.count}`, () => void toggleIgnored(a.name), icon(a.svg, a.name.slice(0, 1).toUpperCase(), 18, 18, a.tip)),
+          )}
+          {canFold && (
+            <Button key="authors-fold" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
+              {t(lang, 'in_authors', vm.authors.length, isOpen)}
+            </Button>
+          )}
         </Box>
         {vm.autoLine && (
           <Text size="caption" color={C.subtle}>
@@ -391,7 +407,7 @@ export const register: Register = (on, options) => {
             {vm.validate.label}
           </Button>
           {vm.clear && (
-            <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
+            <Button key="clear" variant="secondary" onPress={() => void clearAll(vm.clear!.keys)}>
               {vm.clear.label}
             </Button>
           )}
@@ -433,7 +449,7 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
           {g.action && (
-            <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
+            <Button key={`repo:${g.repo}`} variant="secondary" onPress={() => void pickRepo(g)}>
               {g.action}
             </Button>
           )}

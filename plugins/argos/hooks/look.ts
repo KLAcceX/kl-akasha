@@ -43,6 +43,10 @@ export const AVATAR = {
   agent:
     '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x=".75" y=".75" width="16.5" height="16.5" rx="4" fill="#2A2A28" stroke="#C9C7C0" stroke-width="1.5"/><rect x="4.5" y="6" width="9" height="7" rx="2" fill="none" stroke="#C9C7C0" stroke-width="1.3"/><circle cx="7.3" cy="9.5" r="1" fill="#C9C7C0"/><circle cx="10.7" cy="9.5" r="1" fill="#C9C7C0"/><path d="M9 6V4" stroke="#C9C7C0" stroke-width="1.3" stroke-linecap="round"/></svg>',
 }
+// An author's real GitHub picture, redrawn by the round as 16×16 cells (avatars.mjs): the
+// surface's Svg drops embedded images, so the pane draws the cells themselves.
+export const MOSAIC = (paths: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" shape-rendering="crispEdges">${paths}</svg>`
 export const BOTMARK =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="3.5" width="9" height="7" rx="2" fill="none" stroke="#9C9A93" stroke-width="1.2"/><circle cx="4.5" cy="7" r=".9" fill="#9C9A93"/><circle cx="7.5" cy="7" r=".9" fill="#9C9A93"/><path d="M6 3.5V1.5" stroke="#9C9A93" stroke-width="1.2" stroke-linecap="round"/></svg>'
 

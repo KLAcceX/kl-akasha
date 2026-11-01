@@ -19,7 +19,8 @@ query($q: String!, $after: String) {
       ... on PullRequest {
         number title url isDraft createdAt updatedAt reviewDecision mergeable additions deletions headRefOid
         repository { nameWithOwner }
-        author { login __typename }
+        author { login __typename avatarUrl(size: 16) }
+        files(first: 50) { nodes { path } }
         reviewRequests { totalCount }
         labels(first: 10) { nodes { name color } }
         commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
@@ -36,10 +37,16 @@ query($q: String!, $after: String) {
 
 const isBot = (a) => !a || a.__typename === "Bot" || /\[bot\]$/.test(a.login);
 const isOther = (a, me) => a && !isBot(a) && a.login !== me;
-// Coding agents that open PRs under their own account (GitHub's Copilot agent is "Copilot").
-const AGENT = /^(copilot|copilot-swe-agent|devin-ai-integration|codex|claude|cursor|openhands|sweep)(\[bot\])?$/i;
-export const isAI = (a) => AGENT.test(a?.login ?? "");
+// A machine account: a GitHub App, or a user account named as one (snyk-bot is a plain user).
+export const isMachine = (a) => Boolean(a) && (isBot(a) || /(^|[-_.])bot$/i.test(a.login));
+// What an update bot touches: manifests, lock files, workflows, Dockerfiles, changelogs.
+const UPKEEP =
+  /(^|\/)(package(-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|Pipfile(\.lock)?|poetry\.lock|pyproject\.toml|uv\.lock|go\.(mod|sum)|Cargo\.(toml|lock)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile|[^/]*\.csproj|packages\.lock\.json|Directory\.Packages\.props|mix\.(exs|lock)|pubspec\.(yaml|lock)|Podfile(\.lock)?|Package\.resolved|\.terraform\.lock\.hcl|Dockerfile|CHANGELOG[^/]*|\.release-please-manifest\.json)$|^\.github\/workflows\//i;
+// A machine that writes code is a coding agent (Copilot, Devin...); one that only touches
+// upkeep files is an update bot (Dependabot, Snyk, Renovate). Read from the PR, not from a list.
+export const isAI = (a, files = []) => isMachine(a) && files.some((f) => !UPKEEP.test(f));
 // The last commit's checks as pass, fail or pending; none when the repo runs no checks.
+const paths = (pr) => (pr.files?.nodes ?? []).map((f) => f.path);
 export const ci = (state) =>
   ({ SUCCESS: "pass", FAILURE: "fail", ERROR: "fail", PENDING: "pending", EXPECTED: "pending" })[state] ?? undefined;
 // Nobody was asked to review and nobody did: the PR has no owner on the other side.
@@ -165,9 +172,11 @@ function main(args) {
     since: kind === "review" ? askedAt(pr, me) : pr.createdAt,
     // lines changed: review quality drops past about 400
     size: (pr.additions ?? 0) + (pr.deletions ?? 0),
-    isAI: isAI(pr.author),
-    // a bot account (Dependabot, Snyk, Renovate): what the pane lets the person ignore in bulk
-    isBot: Boolean(pr.author) && isBot(pr.author) && !isAI(pr.author),
+    isAI: isAI(pr.author, paths(pr)),
+    // an update bot (Dependabot, Snyk, Renovate): what the pane lets the person leave out in bulk
+    isBot: isMachine(pr.author) && !isAI(pr.author, paths(pr)),
+    // the author's picture, drawn by the round as a vector mosaic
+    avatarUrl: pr.author?.avatarUrl,
     // the head commit: a verdict made on another one is out of date
     sha: pr.headRefOid,
     labels: (pr.labels?.nodes ?? []).map((l) => ({ name: l.name, color: l.color })),
@@ -275,10 +284,16 @@ function selfTest() {
   assert.deepEqual(mySignals(pr({ ...asks(0), isDraft: true }), me, day3), []);
   assert.deepEqual(mySignals(pr({ ...asks(0), latestReviews: reviewed }), me, day3), []);
   assert.deepEqual(othersSignals(theirs(asks(0)), me, day1), ["no_owner"]);
-  assert.equal(isAI({ login: "Copilot", __typename: "Bot" }), true);
-  assert.equal(isAI({ login: "devin-ai-integration[bot]" }), true);
-  assert.equal(isAI({ login: "dependabot[bot]" }), false);
-  assert.equal(isAI(user("ana")), false);
+  // a machine writing code is an agent, one bumping versions an update bot, whatever its name
+  const code = ["src/app.ts", "package.json"];
+  const bump = ["package.json", "package-lock.json", ".github/workflows/ci.yml"];
+  assert.equal(isAI({ login: "Copilot", __typename: "Bot" }, code), true);
+  assert.equal(isAI({ login: "some-new-agent[bot]" }, code), true);
+  assert.equal(isAI({ login: "dependabot[bot]" }, bump), false);
+  assert.equal(isAI({ login: "snyk-bot", __typename: "User" }, ["requirements.txt"]), false);
+  assert.equal(isMachine({ login: "snyk-bot", __typename: "User" }), true);
+  assert.equal(isMachine({ login: "abbot", __typename: "User" }), false);
+  assert.equal(isAI(user("ana"), code), false);
   // no commits/checks yet must not throw
   assert.deepEqual(mySignals(pr({ commits: { nodes: [] } }), me, day1), []);
   assert.equal(age("2026-10-01T00:00:00Z", Date.parse("2026-10-01T05:00:00Z")), "5h");
