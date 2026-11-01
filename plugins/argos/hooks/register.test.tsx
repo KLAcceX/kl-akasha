@@ -243,17 +243,12 @@ test('every button shows on a desktop the text it holds', async ($, on) => {
   await ui.unmount()
 })
 
-test('picked PRs turn the band into the batch bar; the team unfolds', { options: { language: 'pt-BR' } }, async ($, on) => {
-  on('state.get', stored({ round, selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'], open: 'team', isHidden: true }))
+test('picked PRs bring the batch bar; the team unfolds', { options: { language: 'pt-BR' } }, async ($, on) => {
+  on('state.get', stored({ round, selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'], open: 'team' }))
   on('clock.now', clock)
-  // the band shows the batch even after Hide: picks are a choice just made
-  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await band.find({ key: 'send' }))?.text).toBe('Pôr no prompt')
-  expect((await band.find({ type: 'Text', text: /marcados$/ }))?.text).toBe('3 marcados')
-  expect(await band.find({ key: 'open' })).toBeUndefined()
-  await band.unmount()
   const ui = await $.ui.mount(PANE)
-  expect(await ui.find({ key: 'send' })).toBeUndefined()
+  expect((await ui.find({ key: 'send' }))?.text).toBe('Pôr no prompt')
+  expect((await ui.find({ type: 'Text', text: /marcados$/ }))?.text).toBe('3 marcados')
   expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Resumir')
   expect((await ui.find({ key: 'pick:acme/web#8' }))?.text).toBe('✓')
   await ui.unmount()
@@ -332,16 +327,12 @@ test('an action fills the prompt once; picks and the batch go in as lines', asyn
   expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Summarize')
   await ui.press({ key: 'pick:acme/portal#219' })
   await ui.press({ key: 'pick:acme/web#8' })
-  await ui.unmount()
-  // the batch goes in from the band
-  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await band.find({ type: 'Text', text: /picked$/ }))?.text).toBe('2 picked')
-  await band.press({ key: 'send' })
+  expect((await ui.find({ type: 'Text', text: /picked$/ }))?.text).toBe('2 picked')
+  await ui.press({ key: 'send' })
   expect(fills).toEqual(['Review PR u7 by @bia', '\nResolve the merge conflict in PR u219\nSummarize PR u8'])
-  // the batch went in: the picks clear and the band goes back to what needs me
-  expect(await band.find({ key: 'send' })).toBeUndefined()
-  expect((await band.find({ key: 'open' }))?.text).toBe('See')
-  await band.unmount()
+  // the batch went in: the picks clear
+  expect(await ui.find({ key: 'send' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('a bare /argos repos add connects the session folder', async ($, on) => {
@@ -451,7 +442,7 @@ test('the team view groups by verdict; Pick all, Show more, and one batch action
   expect(picked.groups.find(g => g.id === 'stale')?.pickAll).toBe('Unpick all')
   // old verdicts can be revalidated; a teammate's PR is never "Fix issues"
   expect(picked.batch?.acts.map(a => a.id)).toEqual(['validate', 'revalidate'])
-  expect(picked.batch?.detail).toBe('api#9')
+  expect(picked.batch?.detail).toBe('Validate api#9')
   expect(at({ view: 'team', selected: ['acme/api#9'], act: 'revalidate' }).batch?.prompt).toBe(
     'Revalidate these PRs against their new commits with Argos and record each verdict:\n- u9',
   )
@@ -466,13 +457,9 @@ test('the team view draws compact rows, Pick all and the batch picker', async ($
   expect((await ui.find({ key: 'all:stale' }))?.text).toBe('Unpick all')
   expect((await ui.find({ key: 'pick:acme/api#9' }))?.text).toBe('✓')
   expect((await ui.find({ type: 'Text', text: 'Validating 1 of 2' }))?.text).toBe('Validating 1 of 2')
+  expect((await ui.find({ key: 'send' }))?.text).toBe('Add to prompt')
   expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
   await ui.unmount()
-  // the band offers one action valid for every pick
-  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await band.find({ key: 'send' }))?.text).toBe('Add to prompt')
-  expect((await band.find({ type: 'Text', text: /^·/ }))?.text).toBe('· api#9')
-  await band.unmount()
 })
 
 test('auto-validate sends old verdicts on my PRs to one background subagent after a round', async ($, on) => {

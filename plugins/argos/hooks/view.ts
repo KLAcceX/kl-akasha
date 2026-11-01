@@ -285,8 +285,7 @@ export function toViewModel(r: Round | null, o: Opts) {
   const chosen = acts.find(k => k === ui.act) ?? acts[0]!
   const refOf = (p: Item) => `${short(p.repo)}#${p.number}`
   const teamBatch = {
-    // the action is named by its Select beside it; the detail lists the PRs
-    detail: `${items.slice(0, 4).map(refOf).join(', ')}${items.length > 4 ? ` +${items.length - 4}` : ''}`,
+    detail: `${t(lang, `bo_${chosen}`)} ${items.slice(0, 4).map(refOf).join(', ')}${items.length > 4 ? ` +${items.length - 4}` : ''}`,
     prompt: [t(lang, `b_${chosen}`), ...items.map(p => `- ${p.url}`)].join('\n'),
     acts: acts.map(k => ({ id: k, name: t(lang, `bo_${k}`) })),
     act: chosen,
