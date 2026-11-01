@@ -11,6 +11,9 @@ strip.txt, deny.txt, allow.txt), and strip.txt must drop them.
 Usage (from anywhere inside the private checkout):
   python publish.py check     build, scan, compare with public; changes nothing
   python publish.py push      the same, then push to public when every check passes
+  python publish.py push --force   replace a diverged public branch, only on the user's yes:
+                              no leak may be found; the rule that stops force pushes is
+                              paused for the push and always restored
   python publish.py protect   apply the public repo's missing protections
 The same rules always give the same SHAs, so the public history only ever grows. A rule
 that rewrites a commit already public breaks that on purpose: check reports it.
@@ -132,7 +135,23 @@ def protect(cfg, env):
     print("lethe: protections applied; missing now:", protections(cfg, env) or "none")
 
 
-def main(cmd):
+# The rulesets that stop a force push to the branch, paused while --force replaces it.
+def no_force_rulesets(cfg, env):
+    repo = cfg["repo"]
+    found = []
+    for r in json.loads(sh("gh", "api", f"repos/{repo}/rulesets", env=env)):
+        full = json.loads(sh("gh", "api", f"repos/{repo}/rulesets/{r['id']}", env=env))
+        if full.get("enforcement") == "active" and any(x["type"] == "non_fast_forward" for x in full.get("rules", [])):
+            found.append(full["id"])
+    return found
+
+
+def set_enforcement(cfg, env, ids, value):
+    for i in ids:
+        sh("gh", "api", "-X", "PUT", f"repos/{cfg['repo']}/rulesets/{i}", "-f", f"enforcement={value}", env=env)
+
+
+def main(cmd, force=False):
     cfg = config()
     env = {**os.environ, "GH_TOKEN": sh("gh", "auth", "token", "-u", cfg["account"]).strip()}
     if cmd == "protect":
@@ -157,11 +176,21 @@ def main(cmd):
         print("history: " + ("fast-forward of public" if ff else "DIVERGED from public: a rule rewrote a published commit, or public got its own commits"))
         print("protections missing: " + (", ".join(missing) if missing else "none"))
         ok = not found and ff and not missing
-        if cmd == "push" and ok and new:
+        # --force replaces a diverged public branch: a leak still stops it, and a license the
+        # public repo lacks only because its branch is empty comes with the push
+        forced = cmd == "push" and force and not found and set(missing) <= {"license", "main cannot be force-pushed"}
+        if cmd == "push" and ((ok and new) or forced):
             git = ["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
-            sh(*git, "push", "-q", sh("git", "remote", "get-url", cfg["public"], cwd=root).strip(), f"HEAD:{cfg['branch']}", cwd=out, env=env)
-            sh(*git, "fetch", "-q", cfg["public"], cwd=root, env=env)
-            print(f"pushed: {sh('git', 'rev-parse', '--short', 'HEAD', cwd=out).strip()}")
+            url = sh("git", "remote", "get-url", cfg["public"], cwd=root).strip()
+            paused = no_force_rulesets(cfg, env) if forced and not ff else []
+            try:
+                set_enforcement(cfg, env, paused, "disabled")
+                sh(*git, "push", "-q", *(["--force"] if forced and not ff else []), url, f"HEAD:{cfg['branch']}", cwd=out, env=env)
+            finally:
+                set_enforcement(cfg, env, paused, "active")
+            sh(*git, "fetch", "-q", "--force", cfg["public"], cwd=root, env=env)
+            print(f"pushed: {sh('git', 'rev-parse', '--short', 'HEAD', cwd=out).strip()}" + (" (forced; protections restored)" if paused else ""))
+            ok = True
         elif cmd == "push":
             print("not pushed: " + ("nothing new" if ok else "fix what is listed above first"))
         sys.exit(0 if ok else 1)
@@ -171,4 +200,4 @@ def main(cmd):
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
-    main(sys.argv[1] if len(sys.argv) > 1 else "check")
+    main(sys.argv[1] if len(sys.argv) > 1 else "check", force="--force" in sys.argv)
