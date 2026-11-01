@@ -188,10 +188,18 @@ test('the band shows the most urgent PR with its verb', async ($, on) => {
   await ui.unmount()
 })
 
-test('the band stays out of the way when nothing needs action', async ($, on) => {
-  on('state.get', stored({ round: { ...round, pending: [], mine: [quiet, ready], others: [] } }))
+test('with nothing for me the band is a quiet line of what else there is', async ($, on) => {
+  expect(await bandText($, on, { round: { ...round, pending: [], mine: [quiet, ready, draft], others: [] } })).toEqual([
+    'Argos',
+    'Nothing needs you',
+    '· 1 ready to merge · 1 waiting on others · 1 draft',
+  ])
+})
+
+test('the band stays away before the first round', async ($, on) => {
+  on('state.get', stored({}))
   on('clock.now', clock)
-  on('ui.render', ($, e) => {
+  on('ui.render', ($: any, e: any) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })

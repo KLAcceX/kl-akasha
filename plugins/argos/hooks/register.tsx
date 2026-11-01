@@ -229,7 +229,10 @@ export const register: Register = (on, options) => {
     const [running, last, hidden, now] = await Promise.all([read($, isRunning), read($, round), read($, isHidden), $.clock.now()])
     const vm = toViewModel(last, { now, lang, minutes, running })
     const band = vm.state === 'ok' ? vm.band : null
-    if (e.props.hasSurvey || hidden || (!running && !band && !vm.failed && !vm.isLate)) return next(e)
+    // With a round and nothing for me, a quiet line instead of nothing: the band says Argos is
+    // watching and what else there is. Before the first round, or with no repo, it stays away.
+    const calm = vm.state === 'ok' && !running && !band && !vm.failed && !vm.isLate
+    if (e.props.hasSurvey || hidden || (!running && !band && !vm.failed && !vm.isLate && !calm)) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
@@ -239,7 +242,7 @@ export const register: Register = (on, options) => {
     // needs me (and "check failed" beside it when the data is old), a failure in words, or how
     // long ago a late check ran. Red only marks a failure, always with its word.
     const failed = vm.failed
-    const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : failed ? t(lang, 'in_failed') : vm.checked
+    const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : failed ? t(lang, 'in_failed') : calm ? t(lang, 'in_clear') : vm.checked
     const hide = async () => {
       await update($, isHidden, () => true)
       redraw($)
@@ -253,7 +256,7 @@ export const register: Register = (on, options) => {
           Argos
         </Text>
         <Box flexShrink={0} marginLeft="xs">
-          <Text weight="semibold" color={failed && !band && !running ? C.error : C.text}>
+          <Text weight={calm ? 'regular' : 'semibold'} color={failed && !band && !running ? C.error : calm ? C.subtle : C.text}>
             {lead}
           </Text>
         </Box>
@@ -264,6 +267,13 @@ export const register: Register = (on, options) => {
             <Box flexShrink={1} minWidth={0}>
               <Text color={C.subtle} wrap="truncate">
                 {`· ${band.ref} · ${band.verb}`}
+              </Text>
+            </Box>
+          )}
+          {calm && vm.state === 'ok' && vm.clear && (
+            <Box flexShrink={1} minWidth={0}>
+              <Text color={C.subtle} wrap="truncate">
+                {`· ${vm.clear}`}
               </Text>
             </Box>
           )}
