@@ -23,12 +23,14 @@ export const C = {
 } as const
 export type Tone = 'error' | 'warning' | 'suggestion' | 'success'
 
-// The Argos mark. MARK is the app icon (256, used at 28px and up); LOGO is drawn for 16px,
-// where the main one's star turns to mush and its frame smears.
+// The Argos mark. MARK is the app icon (256, used at 28px and up): the brand's own frame
+// (ground rx 56, frame rx 40, stroke 18) around the mark the design recentred (58% of the inner
+// width, shifted so it reads centred). LOGO is drawn for 16px, where the main one's star turns
+// to mush and its frame smears.
 export const MARK =
   '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">' +
-  '<rect width="256" height="256" rx="50" fill="#1E1430"/>' +
-  '<rect x="22" y="22" width="212" height="212" rx="31" fill="none" stroke="#51408A" stroke-width="18"/>' +
+  '<rect width="256" height="256" rx="56" fill="#1E1430"/>' +
+  '<rect x="22" y="22" width="212" height="212" rx="40" fill="none" stroke="#51408A" stroke-width="18"/>' +
   '<path d="M123 72 67 128 123 184Z" fill="#A98BE0"/>' +
   '<path d="M123 72 85 128 123 184A56 56 0 0 0 123 72Z" fill="#7E5CC0"/>' +
   '<path d="M135 100 141 122 163 128 141 134 135 156 129 134 107 128 129 122Z" fill="#F3EEFB"/></svg>'

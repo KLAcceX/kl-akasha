@@ -231,12 +231,13 @@ export const register: Register = (on, options) => {
       $.ui.toast(t(lang, 'in_hidden'))
     }
     return (
-      <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingX="sm" borderStyle="round" borderColor={BAND.border} backgroundColor={BAND.bg}>
+      // padding as the design: room before the logo, and the close word clear of the right edge
+      <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingLeft="sm" paddingRight="md" borderStyle="round" borderColor={BAND.border} backgroundColor={BAND.bg}>
         {e.surface !== 'terminal' && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
         <Text weight="semibold" color={C.text}>
           Argos
         </Text>
-        <Box flexShrink={0}>
+        <Box flexShrink={0} marginLeft="xs">
           <Text weight="semibold" color={failed && !band && !running ? C.error : C.text}>
             {lead}
           </Text>
@@ -261,9 +262,11 @@ export const register: Register = (on, options) => {
           {t(lang, 'ui_see')}
         </Button>
         {/* a word, not "×" (read aloud as "times"), and no fill, so See is the band's one action */}
-        <Button key="hide" plain={true} dimColor={true} onPress={() => void hide()}>
-          {t(lang, 'ui_hide')}
-        </Button>
+        <Box paddingX="xs">
+          <Button key="hide" plain={true} dimColor={true} onPress={() => void hide()}>
+            {t(lang, 'ui_hide')}
+          </Button>
+        </Box>
       </Box>
     )
   })
