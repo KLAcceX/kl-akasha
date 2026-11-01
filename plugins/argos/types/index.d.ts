@@ -15,6 +15,10 @@ export type Item = {
   size?: number
   // opened by a coding agent (Copilot, Devin...)
   isAI?: boolean
+  // GitHub labels, colour as GitHub's hex without #
+  labels?: { name: string; color: string }[]
+  // the last commit's checks
+  ci?: 'pass' | 'fail' | 'pending'
   signals: string[]
 }
 

@@ -21,6 +21,7 @@ query($q: String!, $after: String) {
         repository { nameWithOwner }
         author { login __typename }
         reviewRequests { totalCount }
+        labels(first: 10) { nodes { name color } }
         commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
         reviewThreads(first: 50) { nodes { isResolved comments(last: 1) { nodes { author { login __typename } } } } }
         comments(last: 1) { nodes { createdAt author { login __typename } } }
@@ -38,6 +39,9 @@ const isOther = (a, me) => a && !isBot(a) && a.login !== me;
 // Coding agents that open PRs under their own account (GitHub's Copilot agent is "Copilot").
 const AGENT = /^(copilot|copilot-swe-agent|devin-ai-integration|codex|claude|cursor|openhands|sweep)(\[bot\])?$/i;
 export const isAI = (a) => AGENT.test(a?.login ?? "");
+// The last commit's checks as pass, fail or pending; none when the repo runs no checks.
+export const ci = (state) =>
+  ({ SUCCESS: "pass", FAILURE: "fail", ERROR: "fail", PENDING: "pending", EXPECTED: "pending" })[state] ?? undefined;
 // Nobody was asked to review and nobody did: the PR has no owner on the other side.
 // Unknown (no reviewRequests in the answer) never counts.
 const noOwner = (pr, author) =>
@@ -162,6 +166,8 @@ function main(args) {
     // lines changed: review quality drops past about 400
     size: (pr.additions ?? 0) + (pr.deletions ?? 0),
     isAI: isAI(pr.author),
+    labels: (pr.labels?.nodes ?? []).map((l) => ({ name: l.name, color: l.color })),
+    ci: ci(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state),
     author: pr.author?.login ?? "",
     // someone else's PR I already left a review on: the pane counts what is left to look at
     reviewed: kind !== "mine" && pr.latestReviews.nodes.some((r) => r.author?.login === me),

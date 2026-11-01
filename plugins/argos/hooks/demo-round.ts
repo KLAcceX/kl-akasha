@@ -25,7 +25,18 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "signals": [
         "conflict",
         "threads:2"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "bug",
+          "color": "d73a4a"
+        },
+        {
+          "name": "pricing",
+          "color": "0e8a16"
+        }
+      ],
+      "ci": "fail"
     },
     {
       "kind": "mine",
@@ -38,7 +49,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 48,
       "signals": [
         "unanswered"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "ui",
+          "color": "a2eeef"
+        }
+      ],
+      "ci": "pass"
     },
     {
       "kind": "review",
@@ -52,7 +70,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 310,
       "signals": [
         "late"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "feature",
+          "color": "a2eeef"
+        }
+      ],
+      "ci": "pass"
     },
     {
       "kind": "mine",
@@ -66,7 +91,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "signals": [
         "ci_failed",
         "changes_requested"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "security",
+          "color": "b60205"
+        }
+      ],
+      "ci": "fail"
     },
     {
       "kind": "review",
@@ -80,7 +112,18 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 36,
       "signals": [
         "changed"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "breaking",
+          "color": "b60205"
+        },
+        {
+          "name": "infra",
+          "color": "5319e7"
+        }
+      ],
+      "ci": "pass"
     },
     {
       "kind": "review",
@@ -106,7 +149,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 140,
       "signals": [
         "ready"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "feature",
+          "color": "a2eeef"
+        }
+      ],
+      "ci": "pass"
     },
     {
       "kind": "mine",
@@ -119,6 +169,12 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 60,
       "signals": [
         "no_owner"
+      ],
+      "labels": [
+        {
+          "name": "docs",
+          "color": "0075ca"
+        }
       ]
     }
   ],
@@ -135,7 +191,18 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "signals": [
         "conflict",
         "threads:2"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "bug",
+          "color": "d73a4a"
+        },
+        {
+          "name": "pricing",
+          "color": "0e8a16"
+        }
+      ],
+      "ci": "fail"
     },
     {
       "kind": "mine",
@@ -148,7 +215,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 48,
       "signals": [
         "unanswered"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "ui",
+          "color": "a2eeef"
+        }
+      ],
+      "ci": "pass"
     },
     {
       "kind": "mine",
@@ -162,7 +236,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "signals": [
         "ci_failed",
         "changes_requested"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "security",
+          "color": "b60205"
+        }
+      ],
+      "ci": "fail"
     },
     {
       "kind": "mine",
@@ -175,7 +256,14 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 140,
       "signals": [
         "ready"
-      ]
+      ],
+      "labels": [
+        {
+          "name": "feature",
+          "color": "a2eeef"
+        }
+      ],
+      "ci": "pass"
     },
     {
       "kind": "mine",
@@ -188,6 +276,12 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 60,
       "signals": [
         "no_owner"
+      ],
+      "labels": [
+        {
+          "name": "docs",
+          "color": "0075ca"
+        }
       ]
     },
     {
@@ -201,7 +295,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 230,
       "signals": [
         "no_review"
-      ]
+      ],
+      "ci": "pending"
     },
     {
       "kind": "mine",
@@ -212,7 +307,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "author": "you",
       "createdAt": "2026-10-30T12:00:00Z",
       "size": 90,
-      "signals": []
+      "signals": [],
+      "ci": "pending"
     },
     {
       "kind": "mine",

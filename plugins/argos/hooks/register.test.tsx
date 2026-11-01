@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { act, byRank, rank, reason, sectionOf, sizeTag, toViewModel, tone, verb } from './register'
+import { bars, fit, pill } from './look'
+import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb } from './register'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -55,26 +56,55 @@ test('verbs follow the fixed signal order, in each language', () => {
   expect(verb(changed, 'pt-BR')).toBe('Revisar de novo')
 })
 
-test('each PR lands in the section of its next move, with one action in the colour of what it asks', () => {
+test('each PR lands in the section of its next move, with one action and the colour that wins', () => {
   expect([conflict, ready, quiet, draft, lateReview, changed, theirs].map(sectionOf)).toEqual(['move', 'ready', 'waiting', 'drafts', 'move', 'team', 'team'])
-  const a = (p: never) => [act(p, 'en')?.label ?? null, tone(p)]
-  expect(a(conflict)).toEqual(['Fix conflict', 'error'])
-  expect(act(item({ signals: ['threads:2'] }), 'en')?.label).toBe('Reply to 2')
-  expect(a(ready)).toEqual(['Merge', 'success'])
-  expect(a(quiet)).toEqual([null, null])
-  expect(a(item({ signals: ['no_review'] }))).toEqual(['Nudge', 'warning'])
-  expect(a(item({ signals: ['no_owner'] }))).toEqual(['Find a reviewer', 'warning'])
-  expect(a(draft)).toEqual(['Pre-check', null])
-  expect(a(lateReview)).toEqual(['Review', 'warning'])
-  expect(a(changed)).toEqual(['Review again', 'merged'])
-  // a teammate's PR that waits on nobody asks nothing of me
-  expect(a(item({ kind: 'other', signals: ['conflict'] }))).toEqual([null, null])
-  expect(act(ready, 'en')?.prompt).toBe('Merge u220 with Argos once its checks pass: check it first, and merge only on my yes.')
-  expect(act(draft, 'pt-BR')?.prompt).toBe('Confira u222 contra as minhas lições do repo com o Argos antes de eu pedir review.')
-  expect([sizeTag(120), sizeTag(400), sizeTag(1000), sizeTag(undefined)]).toEqual([null, 'L', 'XL', null])
+  const a = (p: never) => [action(p, 'en').label, tone(p)]
+  expect([conflict, ready, quiet, draft, lateReview, changed, theirs].map(a)).toEqual([
+    ['Fix conflict', 'error'],
+    ['Merge', 'success'],
+    ['Nudge', null],
+    ['Finish', null],
+    ['Review', 'suggestion'],
+    ['Summarize', null],
+    ['Summarize', null],
+  ])
+  // blockers outrank feedback: CI reruns after a rebase
+  expect(action(item({ signals: ['threads:2', 'ci_failed'] }), 'en').label).toBe('Fix CI')
+  expect(a(item({ signals: ['changes_requested'] }))).toEqual(['Address review', 'warning'])
+  expect(action(item({ signals: ['threads:2'] }), 'en').prompt).toBe('Respond to the 2 open threads on PR u1')
+  expect(action(lateReview, 'en').prompt).toBe('Review PR u7 by @bia')
+  expect(action(item({ kind: 'review', signals: ['changed'] }), 'pt-BR').label).toBe('Revisar de novo')
+  // nobody asked to review: it waits on others, and the button finds someone
+  const lonely = item({ signals: ['no_owner'] })
+  expect([sectionOf(lonely), action(lonely, 'en').label]).toEqual(['waiting', 'Find reviewer'])
 })
 
-test('the inbox: sections in order, the longest wait first, a summary of what needs me', () => {
+test('tags: signals, the agent glyph, labels by risk, the size meter; five at most', () => {
+  const marks = (p: never) => tags(p).map(t => t.text)
+  expect(marks(conflict)).toEqual(['◆', '¶2', '▂▄▆█'])
+  expect(tags(conflict)[1]?.count).toBe('2')
+  expect(marks(theirs)).toEqual(['?', '¤'])
+  expect(marks(item({ signals: ['ready'], ci: 'pass' }))).toEqual(['✓', '✓'])
+  expect(marks(item({ ci: 'pending', size: 10 }))).toEqual(['◌', '▂'])
+  const busy = item({
+    signals: ['conflict', 'ci_failed', 'changes_requested'],
+    isAI: true,
+    size: 500,
+    labels: [
+      { name: 'zeta', color: 'cccccc' },
+      { name: 'ui', color: 'a2eeef' },
+      { name: 'bug', color: 'd73a4a' },
+    ],
+  })
+  // two signals then "+1" (outside the five), the agent, labels by risk then a–z; size goes first
+  expect(marks(busy)).toEqual(['◆', '✕', '+1', '¤', '(bug)', '(ui)'])
+  expect(bars(49)).toBe(1)
+  expect(bars(1000)).toBe(4)
+  expect(fit(Array.from({ length: 4 }, () => ({ k: 'label' as const, w: 10, text: 'l' })))).toHaveLength(2)
+  expect(pill('a-very-long-label', 'd73a4a').svg).toContain('a-very-lo…')
+})
+
+test('the inbox: sections in order, what needs me, tinted rows where I act', () => {
   const vm = ok(vmOf(round))
   expect(shape(vm)).toEqual([
     ['move', [7, 219]],
@@ -83,106 +113,66 @@ test('the inbox: sections in order, the longest wait first, a summary of what ne
     ['drafts', [222]],
     ['team', [9, 8]],
   ])
-  expect(vm.summary).toBe('2 need you · 1 ready · 1 waiting')
+  expect([vm.need, vm.checked, vm.clear]).toEqual(['2 need you', 'checked 1h ago', null])
+  const [review, blocked] = vm.sections[0]!.prs
+  expect([review?.ref, review?.act, blocked?.ref, blocked?.isOld]).toEqual(['web#7', 'Review', 'portal#219', true])
+  expect(blocked?.box).toEqual({ bg: 'rgba(240,122,114,0.07)', border: 'rgba(240,122,114,0.35)' })
+  expect(vm.sections[2]!.prs[0]?.box.bg).toBeUndefined()
   expect(vm.sections.find(s => s.id === 'team')?.isFolded).toBe(true)
   expect(ok(vmOf(round, { open: 'team' })).sections.find(s => s.id === 'team')?.isFolded).toBe(false)
-  const [review, mine] = vm.sections[0]!.prs
-  // a review waits since I was asked; mine since it opened
-  expect([review?.wait, review?.owner, mine?.wait, mine?.owner, mine?.size]).toEqual(['1d', 'bia', '7w', null, 'XL'])
-  expect(vm.sections.find(s => s.id === 'team')?.prs[0]).toMatchObject({ owner: 'Copilot', isAI: true, act: 'Review' })
-  // the band counts what Your move counts, and names its first PR
-  expect(vm.band).toEqual({ count: 2, verb: "Review bia's PR", ref: 'web#7' })
-  // a PR names its repo only when the list mixes repos
-  expect(review?.repo).toBe('web')
-  expect(ok(vmOf(round, { filter: 'acme/web' })).sections[0]?.prs[0]?.repo).toBeNull()
-  expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] })).sections[0]?.prs[0]?.repo).toBeNull()
-  expect(ok(vmOf({ ...round, pending: [], mine: [quiet], others: [] })).summary).toBe('nothing needs you · 1 waiting')
+  // under one repo the ref drops its prefix
+  expect(ok(vmOf(round, { filter: 'acme/web' })).sections[0]?.prs[0]?.ref).toBe('#7')
+  const calm = { ...round, pending: [], mine: [quiet, draft], others: [] }
+  expect(ok(vmOf(calm)).clear).toBe('1 waiting on others · 1 draft')
+  expect(ok(vmOf(calm, {}, 'pt-BR')).need).toBe('')
 })
 
-test('repo chips narrow the inbox, zeros included; twin short names show their owner', () => {
-  const vm = ok(vmOf(round, { filter: 'acme/web' }))
-  expect(vm.repos.map(r => [r.name, r.count, r.isActive])).toEqual([
-    ['All', 7, false],
-    ['portal', 4, false],
-    ['web', 2, true],
-    ['api', 1, false],
-    ['docs', 0, false],
+test('one Select narrows to a repo; twin short names show their owner', () => {
+  const vm = ok(vmOf(round))
+  expect(vm.repos.map(r => [r.id, r.name])).toEqual([
+    ['', 'All repos'],
+    ['acme/portal', 'portal'],
+    ['acme/web', 'web'],
+    ['acme/api', 'api'],
+    ['acme/docs', 'docs'],
   ])
-  expect(shape(vm)).toEqual([
-    ['move', [7]],
-    ['ready', []],
-    ['waiting', []],
-    ['drafts', []],
-    ['team', [8]],
-  ])
-  // an unknown repo falls back to all; one repo gets no chips
-  expect(ok(vmOf(round, { filter: 'help' })).repos[0]?.isActive).toBe(true)
+  expect(ok(vmOf(round, { filter: 'help' })).filter).toBe('')
   expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] })).repos).toEqual([])
-  const twins = ok(vmOf({ ...round, repos: ['acme/api', 'beta/api'], pending: [], mine: [item({ repo: 'beta/api' })], others: [] }))
-  expect(twins.repos.map(r => r.name)).toEqual(['All', 'acme/api', 'beta/api'])
+  const twins = ok(vmOf({ ...round, repos: ['acme/api', 'beta/api'], pending: [], mine: [], others: [item({ repo: 'beta/api', kind: 'other' })] }))
+  expect(twins.repos.map(r => r.name)).toEqual(['All repos', 'acme/api', 'beta/api'])
 })
 
-test('the send bar carries the picks of the batch sections: mine to fix, the others to review', () => {
-  expect(ok(vmOf(round)).send.count).toBe(0)
-  const vm = ok(vmOf(round, { selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8', 'acme/portal#220', 'acme/gone#1'] }))
-  // a ready PR is not batch work; it has its own Merge
-  expect(vm.send.count).toBe(3)
-  expect(vm.send.prompt).toBe(
-    [
-      'Work on these PRs with Argos.',
-      'My PRs, to fix with Argos:',
-      '- u219: Resolve the conflict',
-      'To review with Argos (draft only, nothing is posted without my yes):',
-      '- u7',
-      '- u8',
-    ].join('\n'),
-  )
-  expect(vm.sections[0]?.pick).toBe('all')
-  expect(ok(vmOf(round, { selected: ['acme/web#7'] })).sections[0]?.pick).toBe('some')
-  // picks outlive narrowing; the summary counts the ones elsewhere
-  expect(ok(vmOf(round, { filter: 'acme/web', selected: ['acme/portal#219', 'acme/web#7'] })).send.summary).toBe(
-    'Going to the AI: 1 to fix, 1 to review. 1 of them is from another repo.',
-  )
-  // a pick that left the list is named, and the next press drops it
-  expect(vm.send.summary).toBe('Going to the AI: 1 to fix, 2 to review. 1 picked PR left the list.')
-  expect(vm.send.keep).not.toContain('acme/gone#1')
-  // "In prompt ✓" reads the prompt itself: delete the request and the button comes back
-  const asked = ok(vmOf(round, { selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'] }, 'en', 'see u219 and u7 and u8'))
-  expect(asked.send.inPrompt).toBe(true)
-  expect(asked.sections[0]?.prs.map(p => p.inPrompt)).toEqual([true, true])
-  expect(ok(vmOf(round, { selected: ['acme/web#7'] }, 'en', 'u219')).send.inPrompt).toBe(false)
-  // a partial batch adds only what the prompt does not hold yet
-  expect(ok(vmOf(round, { selected: ['acme/portal#219', 'acme/web#7'] }, 'en', 'u219')).send.prompt).not.toContain('u219')
-  // pull/1 is not pull/12: a request for #12 leaves #1's action alone
+test('the batch: each pick sends its winning action as one line; gone picks drop', () => {
+  expect(ok(vmOf(round)).batch).toBeNull()
+  const vm = ok(vmOf(round, { selected: ['acme/portal#219', 'acme/web#7', 'acme/gone#1'] }))
+  expect(vm.batch?.count).toBe('2 picked')
+  expect(vm.batch?.detail).toBe('Review #7 · Fix conflict #219')
+  expect(vm.batch?.prompt).toBe('Review PR u7 by @bia\nResolve the merge conflict in PR u219')
+  expect(vm.keep).toEqual(['acme/portal#219', 'acme/web#7'])
+  expect(vm.sections[0]?.prs.map(p => [p.isPicked, p.box.border])).toEqual([
+    [true, 'rgba(224,138,104,0.7)'],
+    [true, 'rgba(224,138,104,0.7)'],
+  ])
+  // a request already in the prompt is not asked for twice
+  expect(ok(vmOf(round, { selected: ['acme/portal#219', 'acme/web#7'] }, 'en', 'see u7')).batch?.prompt).toBe('Resolve the merge conflict in PR u219')
+  // pull/1 is not pull/12
   const one = item({ number: 1, url: 'https://github.com/acme/portal/pull/1', signals: ['conflict'] })
   const twelve = { ...round, pending: [one], mine: [one], others: [] }
   expect(ok(vmOf(twelve, {}, 'en', 'fix https://github.com/acme/portal/pull/12 now')).sections[0]?.prs[0]?.inPrompt).toBe(false)
   expect(ok(vmOf(twelve, {}, 'en', 'fix https://github.com/acme/portal/pull/1/files')).sections[0]?.prs[0]?.inPrompt).toBe(true)
-  expect(ok(vmOf(round)).sections.find(s => s.id === 'waiting')?.prs[0]?.status).toBe('Waiting for review')
   // a folded section never hides a pick
-  const team = ok(vmOf(round, { selected: ['acme/web#8'] })).sections.find(s => s.id === 'team')
-  expect([team?.isFolded, team?.canFold, team?.picked]).toEqual([false, false, 1])
+  expect(ok(vmOf(round, { selected: ['acme/web#8'] })).sections.find(s => s.id === 'team')?.isFolded).toBe(false)
 })
 
-test('the send checks wait for a running check and warn on stale data or a big batch', () => {
-  expect(ok(vmOf(round)).send.block).toBe('Pick PRs to add them to the prompt together.')
-  const running = ok(toViewModel(round as never, { now: NOW, lang: 'en', minutes: 60, running: true, ui: { selected: ['acme/web#7'] } }))
-  expect(running.send.block).toBe('Wait for the check to finish.')
-  const stale = ok(vmOf({ ...round, okAt: ago(0.2), at: ago(0.2) }, { selected: ['acme/web#7'] }))
-  expect(stale.send.warn).toMatch(/^The data is from \d\d:\d\d\. Check again before sending\.$/)
-  const many = Array.from({ length: 11 }, (_, i) => item({ kind: 'review', repo: 'acme/web', number: 100 + i, url: `m${i}` }))
-  const keys = many.map(p => `acme/web#${(p as { number: number }).number}`)
-  expect(ok(vmOf({ ...round, pending: many }, { selected: keys })).send.warn).toBe('11 PRs at once: the AI works through them by priority.')
-})
-
-test('failures and late rounds say so in words', () => {
+test('failures and late rounds say so', () => {
   expect(reason('gh: not logged into any GitHub hosts', 'en')).toContain('gh auth login')
   expect(reason('Error: timed out', 'pt-BR')).toContain('2 min')
   const failed = vmOf({ ...round, at: new Date(NOW).toISOString(), error: 'Error: timed out' })
-  expect(failed.status).toMatch(/^The \d\d:\d\d check failed: GitHub took over 2 min to answer\. Showing data from \d\d:\d\d\.$/)
+  expect([failed.failed, failed.checked, failed.error?.isAuth]).toEqual([true, 'data from 1h ago', false])
+  expect(vmOf({ ...round, error: 'gh: not logged into any GitHub hosts' }).error?.isAuth).toBe(true)
   expect(vmOf({ at: round.at, okAt: null, error: 'x' }).state).toBe('noData')
   const late = vmOf({ ...round, okAt: ago(0.2), at: ago(0.2) })
-  expect([late.seen, late.status]).toEqual(['checked 4 h ago', "Last check 4 h ago; the next one didn't run."])
+  expect([late.isLate, late.checked]).toEqual([true, 'checked 4h ago'])
 })
 
 test('the band shows the most urgent PR with its verb', async ($, on) => {
@@ -205,21 +195,20 @@ test('the band stays out of the way when nothing needs action', async ($, on) =>
   await ui.unmount()
 })
 
-test('a narrow pane: the summary under the title, Check now, sections with two-line PRs', async ($, on) => {
+test('the pane: Pull requests, what needs me, two-line rows with a pick and one button', async ($, on) => {
   on('state.get', stored({ round }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you · 1 ready · 1 waiting')
+  expect((await ui.find({ type: 'Text', text: 'Pull requests' }))?.text).toBe('Pull requests')
+  expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you')
   expect((await ui.find({ key: 'check' }))?.text).toBe('Check now')
-  expect((await ui.find({ type: 'Text', text: /^Your move/ }))?.text).toBe('Your move · 2')
-  expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict ›')
-  expect((await ui.find({ key: 'act:acme/portal#220' }))?.text).toBe('Merge ›')
-  // marks ride in the truncated meta text, cut before the action ever drops a line
-  expect((await ui.find({ type: 'Text', text: / · XL$/ }))?.text).toBe(' · portal · XL')
-  // the team is folded; the send bar keeps its place under the head and says how to use it
+  expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
+  expect((await ui.find({ key: 'act:acme/portal#220' }))?.text).toBe('Merge')
+  expect((await ui.find({ key: 'pick:acme/portal#219' }))?.text).toBe('+')
+  // the team is folded behind Show; no batch bar without picks
   expect(await ui.find({ key: 'act:acme/web#8' })).toBeUndefined()
-  expect((await ui.find({ key: 'send' }))?.text).toBe('Add to prompt')
-  expect((await ui.find({ type: 'Text', text: /^Pick PRs/ }))?.text).toBe('Pick PRs to add them to the prompt together.')
+  expect((await ui.find({ key: 'fold:team' }))?.text).toBe('Show')
+  expect(await ui.find({ key: 'send' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -247,90 +236,95 @@ test('every button shows on a desktop the text it holds', async ($, on) => {
   await ui.unmount()
 })
 
-test('picked PRs bring the send bar; the team unfolds', { options: { language: 'pt-BR' } }, async ($, on) => {
+test('picked PRs bring the batch bar; the team unfolds', { options: { language: 'pt-BR' } }, async ($, on) => {
   on('state.get', stored({ round, selected: ['acme/portal#219', 'acme/web#7', 'acme/web#8'], open: 'team' }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ key: 'send' }))?.text).toBe('Pôr 3 no prompt')
-  expect((await ui.find({ type: 'Text', text: /^Vai para a IA/ }))?.text).toBe('Vai para a IA: 1 para corrigir, 2 para revisar.')
-  expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Revisar de novo ›')
-  expect((await ui.find({ key: 'box:move' }))?.text).toBe('☑')
+  expect((await ui.find({ key: 'send' }))?.text).toBe('Pôr no prompt')
+  expect((await ui.find({ type: 'Text', text: /marcados$/ }))?.text).toBe('3 marcados')
+  expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Resumir')
+  expect((await ui.find({ key: 'pick:acme/web#8' }))?.text).toBe('✓')
   await ui.unmount()
 })
 
-test('the terminal draws boxes in brackets', async ($, on) => {
-  on('state.get', stored({ round, selected: ['acme/portal#219'] }))
+test('the terminal draws icons as their text marks', async ($, on) => {
+  on('state.get', stored({ round }))
   on('clock.now', clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', viewport: { columns: 36, rows: 30 } })
-  expect((await ui.find({ key: 'box:move' }))?.text).toBe('[-]')
-  expect((await ui.find({ key: 'box:acme/portal#219' }))?.text).toBe('[x]')
+  expect((await ui.find({ type: 'Text', text: '◆' }))?.text).toBe('◆')
+  expect((await ui.find({ type: 'Text', text: '¶2' }))?.text).toBe('¶2')
   await ui.unmount()
 })
 
-test('with nothing for me the inbox says so calmly', async ($, on) => {
-  on('state.get', stored({ round: { ...round, pending: [], mine: [], others: [] } }))
+test('with nothing for me a green banner takes the place of Your move', async ($, on) => {
+  on('state.get', stored({ round: { ...round, pending: [], mine: [quiet], others: [] } }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /^Nothing needs you/ }))?.text).toBe('Nothing needs you right now.')
-  expect(await ui.find({ type: 'Text', text: /^Ready to merge/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: 'Nothing needs you' }))?.text).toBe('Nothing needs you')
+  expect((await ui.find({ type: 'Text', text: '1 waiting on others' }))?.text).toBe('1 waiting on others')
+  expect(await ui.find({ type: 'Text', text: 'Your move' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('a failed round keeps the last good data under a retry strip', async ($, on) => {
+test('a failed check: a red banner, the stale rows still act', async ($, on) => {
   on('state.get', stored({ round: { ...round, at: new Date(NOW).toISOString(), error: 'Error: timed out' } }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /check failed/ }))?.text).toContain('Showing data from')
-  expect((await ui.find({ type: 'Button', text: 'Try again' }))?.text).toBe('Try again')
-  expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict ›')
+  expect((await ui.find({ type: 'Text', text: 'Check failed' }))?.text).toBe('Check failed')
+  expect((await ui.find({ type: 'Text', text: "Couldn't reach GitHub" }))?.text).toBe("Couldn't reach GitHub")
+  expect((await ui.find({ key: 'failed-btn' }))?.text).toBe('Retry')
+  expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
   await ui.unmount()
 })
 
-test('no connected repo shows how to connect one', async ($, on) => {
+test('no connected repo: one sentence, one button', async ($, on) => {
   on('state.get', stored({ round: { at: round.at, okAt: round.at, repos: [], pending: [], others: [], needsRepos: true } }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /No repositories watched/ }))?.text).toBe('No repositories watched')
+  expect((await ui.find({ type: 'Text', text: 'No GitHub repo here' }))?.text).toBe('No GitHub repo here')
+  expect((await ui.find({ key: 'norepo-btn' }))?.text).toBe('Set up')
+  expect(await ui.find({ key: 'check' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('the first check says what is happening', async ($, on) => {
+test('the first check shows placeholders and says what is happening', async ($, on) => {
   on('state.get', stored({ isRunning: true }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /First check/ }))?.text).toBe('First check running. It takes a few seconds per repository.')
-  expect((await ui.find({ key: 'check' }))?.text).toBe('Check now')
+  expect((await ui.find({ type: 'Text', text: /^First check/ }))?.text).toBe('First check takes a few seconds.')
   expect((await ui.find({ type: 'Text', text: 'Checking…' }))?.text).toBe('Checking…')
+  expect(await ui.find({ key: 'check' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('a chip narrows to its repo, an action fills the prompt, and the list ends with a way to add a repo', async ($, on) => {
+test('an action fills the prompt once; picks and the batch go in as lines', async ($, on) => {
   const fills: unknown[] = []
+  let box = ''
   // the round from here, the pane's own atoms from the real store, so a press shows
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
   )
-  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
-  on('prompt.fill', (_: unknown, e: { text: string }) => {
+  on('prompt.read', () => ({ value: { text: box, cursor: 0 } }))
+  on('prompt.fill', (_: unknown, e: { text: string; mode: string }) => {
     fills.push(e.text)
+    box = e.mode === 'append' ? box + e.text : e.text
     return { isFilled: true }
   })
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ key: 'repo:all' }))?.text).toMatch(/^All ?7$/)
-  await ui.press({ key: 'repo:acme/web' })
-  expect((await ui.find({ key: 'repo:acme/web' }))?.text).toMatch(/^web ?2$/)
-  expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
-  expect((await ui.find({ key: 'act:acme/web#7' }))?.text).toBe('Review ›')
   // two quick presses meet one lock: the request goes in once
   await Promise.all([ui.press({ key: 'act:acme/web#7' }), ui.press({ key: 'act:acme/web#7' })])
+  // already in the prompt: a third press adds nothing
+  await ui.press({ key: 'act:acme/web#7' })
   await ui.press({ key: 'fold:team' })
-  expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Review again ›')
-  await ui.press({ key: 'add-repo' })
-  expect(fills).toEqual([
-    ['Work on these PRs with Argos.', 'To review with Argos (draft only, nothing is posted without my yes):', '- u7'].join('\n'),
-    '/argos repos add ',
-  ])
+  expect((await ui.find({ key: 'act:acme/web#8' }))?.text).toBe('Summarize')
+  await ui.press({ key: 'pick:acme/portal#219' })
+  await ui.press({ key: 'pick:acme/web#8' })
+  expect((await ui.find({ type: 'Text', text: /picked$/ }))?.text).toBe('2 picked')
+  await ui.press({ key: 'send' })
+  expect(fills).toEqual(['Review PR u7 by @bia', '\nResolve the merge conflict in PR u219\nSummarize PR u8'])
+  // the batch went in: the picks clear
+  expect(await ui.find({ key: 'send' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -356,17 +350,6 @@ test('a bare /argos repos add connects the session folder', async ($, on) => {
   await ticked
 })
 
-test('an action already asked for in the prompt says so instead of asking twice', async ($, on) => {
-  on('state.get', stored({ round }))
-  on('clock.now', clock)
-  on('prompt.read', () => ({ value: { text: 'Fix it: u219', cursor: 0 } }))
-  const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: 'In prompt ✓' }))?.text).toBe('In prompt ✓')
-  expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
-  expect((await ui.find({ key: 'act:acme/web#7' }))?.text).toBe('Review ›')
-  await ui.unmount()
-})
-
 test('a failed round shows the reason round.mjs wrote, not the wrapper', async ($, on) => {
   const failed = { ...round, at: new Date(NOW + 1000).toISOString(), error: 'gh: not logged into any GitHub hosts' }
   on('clock.now', clock)
@@ -378,6 +361,7 @@ test('a failed round shows the reason round.mjs wrote, not the wrapper', async (
   on('ui.open', () => ({ value: { isPlaced: true } }))
   await $.command.run({ command: 'argos', args: '' })
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: /check failed/ }))?.text).toContain('gh auth login')
+  expect((await ui.find({ type: 'Text', text: /gh auth login/ }))?.text).toContain('gh auth login')
+  expect((await ui.find({ key: 'failed-btn' }))?.text).toBe('Fix auth')
   await ui.unmount()
 })

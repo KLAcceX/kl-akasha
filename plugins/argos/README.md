@@ -36,25 +36,24 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 The plugin ships a mod that runs the vigil on its own timer, at no token cost. It shows a band above the prompt with the next action, toasts what is new, and `/argos` opens a pane built for a narrow sidebar: an inbox sorted by your next move.
 
-- **Head:** "Argos", what needs you ("3 need you · 1 ready · 2 waiting"), when Argos last checked, and **Check now**.
-- **Send bar**, right under the head and always in the same place, so the list never jumps: with nothing picked it says how to use it; with picks it says what will go ("1 to fix, 2 to review"), names any pick that left the list since, and **Add N to prompt** puts them all in the prompt. It is the pane's one accent.
-- **Repo chips:** All, then every connected repo with its open PRs, zeros included. A chip narrows the inbox to that repo; past six repos a picker takes their place.
+- **Head:** "Pull requests" and **Check now**; under it what needs you ("3 need you") and when Argos last checked; then one picker to narrow the inbox to a repo.
 - **Sections**, each shown only when it holds something, longest wait first:
 
   | Section | Holds |
   |---|---|
-  | **Your move** | reviews asked of you, and your PRs that came back: changes requested, open threads, a failed CI, a conflict, no reviewer asked |
+  | **Your move** | reviews asked of you, and your PRs that came back: a conflict, a failed CI, changes requested, open threads |
   | **Ready to merge** | your approved PRs with nothing blocking |
-  | **Waiting on others** | your PRs on someone else's desk, with how long they have waited |
+  | **Waiting on others** | your PRs on someone else's desk, including those nobody was asked to review |
   | **Drafts** | your PRs not out yet |
-  | **Team** | teammates' PRs nobody asked you about; folded until you open it, and never folded while it holds a pick |
+  | **Team** | teammates' PRs nobody asked you about; behind **Show**, and never hidden while it holds a pick |
 
-- **Each PR takes two lines**, so nothing gets squeezed in a narrow pane. The first line is the title. The second has its number, how long it has waited (a review: since you were asked), whose it is and where, plus **L** or **XL** past 400 or 1,000 changed lines (where review quality drops) and **AI** for a PR opened by a coding agent.
-- **One action per PR**, on the right, naming its reason, with a dot in its colour: **Fix conflict**, **Fix CI**, **Address changes**, **Reply to 2**, **Review**, **Review again**, **Find a reviewer**, **Nudge**, **Merge**, or **Pre-check** (checks a draft against your lessons). A PR with nothing to do says where it stands ("Waiting for review").
-- **In prompt ✓:** once a PR's request is in the prompt, its action says so instead of asking twice. It reads the prompt itself, so deleting the request brings the action back.
-- **Batch picks** in Your move and Team: a box picks a PR or a whole section, and picks survive narrowing to a repo.
+- **Each PR is a box of two lines.** Line 1: a PR icon in the colour of what wins, `repo#number` (the repo only when the list mixes repos), the title and how long it has waited (bold from two days). Line 2: why it is here as icons (conflict, CI, changes requested, open threads with their count, review asked, no reviewer), the agent icon for a PR opened by a coding agent, up to two GitHub labels in their own colours, and a four-bar size meter; then a **+** to pick it and its one action.
+- **One colour per meaning:** red blocked, amber reviewers answered, blue asked of you, green ready, orange going to the prompt. Only rows you act on are tinted; waiting rows, drafts and the team stay neutral.
+- **One action per PR**, by rank: **Fix conflict**, **Fix CI**, **Address review**, **Answer threads**, **Review**, **Re-review**, **Find reviewer**, **Merge**, **Finish**, **Nudge**, and **Summarize** for a teammate's PR.
+- **Batch:** picked rows turn orange and a bar at the end of the list says how many and what each will do; **Add to prompt** puts every pick's action in as one line each.
+- **States:** a green "Nothing needs you" banner when Your move is empty, placeholders on the first check, a red banner when a check fails (the last data stays, dimmed, and still acts; **Fix auth** asks for help with `gh`), and one button to set up a repo when none is connected.
 
-**Every action only puts a request in the prompt.** Two quick presses add it once, a PR already in the prompt is not added again, and nothing reaches GitHub until you send it and say yes to what the AI drafts. Stale data or a big batch is flagged before you press. With several sessions open, only one runs each round.
+**Every action only puts a request in the prompt.** Two quick presses add it once, a PR already in the prompt is not added again, and nothing reaches GitHub until you send it and say yes to what the AI drafts. With several sessions open, only one runs each round.
 
 | Command | Does |
 |---|---|

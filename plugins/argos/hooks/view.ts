@@ -3,6 +3,7 @@
 // import this file.
 import { t } from '../scripts/i18n.mjs'
 import type { Item, Round } from '../types'
+import { C, I, NEUTRAL, PICKED, bars, byPriority, fit, pill, sig, tint, type Tag, type Tone } from './look'
 
 const base = (code: string) => code.split(':')[0]
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
@@ -61,8 +62,6 @@ export function ageShort(iso: string, now: number, lang: string): string {
 // else's desk; drafts: mine not out yet; team: teammates' PRs nobody asked me about.
 export const SECTIONS = ['move', 'ready', 'waiting', 'drafts', 'team'] as const
 export type Section = (typeof SECTIONS)[number]
-// Sections the person can send to the AI in a batch; the others take one action per PR.
-const BATCH: Section[] = ['move', 'team']
 // Folded until opened: the rest of the team's work is context, not a to-do.
 export const FOLDED: Section[] = ['team']
 
@@ -71,42 +70,63 @@ export function sectionOf(p: Item): Section {
   if (p.kind !== 'mine') return 'team'
   if (p.isDraft) return 'drafts'
   if (has(p, 'ready')) return 'ready'
-  if (has(p, 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews', 'no_owner')) return 'move'
+  if (has(p, 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews')) return 'move'
   return 'waiting'
 }
 
-// The colour of a PR's action, by what it asks: red when blocked, amber when someone
-// waits, blue for a conversation, purple for a changed PR, green to merge.
-export type Tone = 'error' | 'warning' | 'suggestion' | 'merged' | 'success'
+// The one action a PR offers, highest rank first: blockers before feedback (CI reruns after a
+// rebase, so the conflict comes before CI), then my review, a reviewer, merging, drafts,
+// nudges; a teammate's PR nobody asked me about is read, not acted on.
+export function action(p: Item, lang: string): { label: string; prompt: string } {
+  const go = (k: string, ...args: unknown[]) => ({ label: t(lang, `x_${k}`), prompt: t(lang, `p_${k}`, p.url, ...args) })
+  const threads = Number(p.signals.find(s => base(s) === 'threads')?.split(':')[1] ?? 0)
+  if (p.kind === 'other') return go('summary')
+  if (p.kind === 'review') return has(p, 'changed') ? go('rereview') : go('review', (p.author || '?').replace(/\[bot\]$/, ''))
+  if (p.isDraft) return go('finish')
+  if (has(p, 'conflict')) return go('conflict')
+  if (has(p, 'ci_failed')) return go('ci')
+  if (has(p, 'changes_requested')) return go('changes')
+  if (has(p, 'threads', 'unanswered', 'new_reviews')) return go('threads', threads)
+  if (has(p, 'no_owner')) return go('owner')
+  if (has(p, 'ready')) return go('merge')
+  return go('nudge')
+}
+
+// The colour that wins a row: blocked, then reviewers answered, then asked of me, then ready.
+// A row with nothing for me to do has none.
 export function tone(p: Item): Tone | null {
-  if (p.kind === 'review') return has(p, 'changed') ? 'merged' : 'warning'
-  if (has(p, 'conflict', 'ci_failed', 'changes_requested')) return p.kind === 'mine' ? 'error' : null
-  if (has(p, 'threads', 'unanswered', 'new_reviews')) return 'suggestion'
+  if (p.kind === 'other' || p.isDraft) return null
+  if (p.kind === 'review') return 'suggestion'
+  if (has(p, 'conflict', 'ci_failed')) return 'error'
+  if (has(p, 'changes_requested', 'threads', 'unanswered', 'new_reviews')) return 'warning'
   if (has(p, 'ready')) return 'success'
-  if (has(p, 'changed')) return 'merged'
-  if (has(p, 'no_owner', 'no_review')) return 'warning'
   return null
 }
 
-// The one or two words on a PR's action, and the request that press puts in the prompt.
-// A teammate's PR only offers a review, and only when it waits on one.
-export function act(p: Item, lang: string): { label: string; prompt: string } | null {
-  const s = sectionOf(p)
-  if (s === 'drafts') return { label: t(lang, 'a_draft'), prompt: t(lang, 'prompt_ready', p.url) }
-  if (s === 'ready') return { label: t(lang, 'a_ready'), prompt: t(lang, 'prompt_merge', p.url) }
-  if (p.kind === 'mine' && has(p, 'no_owner') && !has(p, 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews'))
-    return { label: t(lang, 'a_no_owner'), prompt: t(lang, 'prompt_owner', p.url) }
-  if (s === 'waiting') return has(p, 'no_review') ? { label: t(lang, 'a_no_review'), prompt: t(lang, 'prompt_nudge', p.url) } : null
-  if (p.kind === 'review') return { label: t(lang, has(p, 'changed') ? 'a_changed' : 'a_review'), prompt: prompt([p], lang) }
-  if (p.kind === 'other') return has(p, 'changed', 'no_owner', 'no_review') ? { label: t(lang, has(p, 'changed') ? 'a_changed' : 'a_review'), prompt: prompt([p], lang) } : null
-  const [k, n] = top(p)?.split(':') ?? []
-  return k ? { label: t(lang, `a_${k}`, Number(n)), prompt: prompt([p], lang) } : null
+// A row's tags, before they are fitted: why it is here (signals), then the agent glyph, its
+// labels and its size. State, draft and kind are not tags: the glyph and section say them.
+export function tags(p: Item): Tag[] {
+  const out: Tag[] = []
+  for (const s of p.signals) {
+    const [k, n] = s.split(':')
+    if (k === 'conflict') out.push(sig(I.conflict, '◆'))
+    if (k === 'ci_failed') out.push(sig(I.ciFail, '✕'))
+    if (k === 'changes_requested') out.push(sig(I.changes, '±'))
+    if (k === 'threads') out.push(sig(I.threads, `¶${n}`, Number(n), C.warning))
+    if ((k === 'unanswered' || k === 'new_reviews') && !has(p, 'threads')) out.push(sig(I.threads, '¶', Number(n) || undefined, C.warning))
+    if (k === 'no_owner') out.push(sig(I.noOwner, '?'))
+  }
+  if (p.kind === 'review') out.unshift(has(p, 'changed') ? sig(I.eye(C.subtle), '◎') : sig(I.eye(C.suggestion), '◉'))
+  if (has(p, 'ready')) out.unshift(...(p.ci === 'pass' ? [sig(I.ciPass, '✓')] : []), sig(I.approved, '✓'))
+  if (p.kind === 'mine' && !p.isDraft && p.ci === 'pending') out.push(sig(I.ciPending, '◌'))
+  if (p.isAI) out.push({ k: 'ai', svg: I.ai, w: 16, text: '¤' })
+  for (const l of [...(p.labels ?? [])].sort(byPriority)) out.push({ k: 'label', ...pill(l.name, l.color), text: `(${l.name})` })
+  if (p.size !== undefined) out.push({ k: 'size', svg: I.size(bars(p.size)), w: 16, text: '▂▄▆█'.slice(0, bars(p.size)) })
+  return fit(out)
 }
 
-// Review quality drops past about 400 changed lines; past 1,000, most defects go unseen.
-export const sizeTag = (n?: number) => (n === undefined ? null : n >= 1000 ? 'XL' : n >= 400 ? 'L' : null)
-// More PRs than this in one send gets a warning: the AI works through them in order.
-export const MANY = 10
+// The row's state glyph: the PR icon in the winning colour, dashed for a draft.
+const glyph = (p: Item) => (p.isDraft ? I.draft : I.pr(C[tone(p) ?? 'subtle']))
 
 export function reason(error: string, lang: string) {
   if (/gh auth|not logged/i.test(error)) return t(lang, 'err_gh_auth')
@@ -119,36 +139,35 @@ export function reason(error: string, lang: string) {
 export type Ui = { selected: string[]; open: string; filter: string }
 export const UI: Ui = { selected: [], open: '', filter: '' }
 
-// The request the send button puts in the prompt: my PRs to fix, the others to review.
-export function prompt(prs: Item[], lang: string) {
-  const fix = prs.filter(p => p.kind === 'mine').map(p => `- ${p.url}: ${verb(p, lang)}`)
-  const review = prs.filter(p => p.kind !== 'mine').map(p => `- ${p.url}`)
-  return [
-    t(lang, 'prompt_batch'),
-    ...(fix.length ? [t(lang, 'prompt_fix'), ...fix] : []),
-    ...(review.length ? [t(lang, 'prompt_review'), ...review] : []),
-  ].join('\n')
-}
-
-// prompt: what the prompt holds now, so a PR already asked for there shows "In prompt ✓".
+// prompt: what the prompt holds now, so a request already there is never added twice.
 type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string }
+
+// How long ago, in the row's units: minutes under an hour, then ageShort's.
+export const ago = (iso: string, now: number, lang: string) => {
+  const m = Math.floor((now - Date.parse(iso)) / 6e4)
+  return m < 60 ? t(lang, 'in_u_m', Math.max(1, m)) : ageShort(iso, now, lang)
+}
 
 export function toViewModel(r: Round | null, o: Opts) {
   const { now, lang } = o
   const ui = { ...UI, ...o.ui }
   const okAt = r?.okAt ?? (r?.error ? null : r?.at) ?? null
-  const agoH = okAt ? Math.floor((now - Date.parse(okAt)) / 36e5) : 0
   // a scheduled round should have run by now (interval + 15 min) and none did
   const isLate = Boolean(okAt && !r?.error && now - Date.parse(okAt) > (o.minutes + 15) * 6e4)
-  const seen = !okAt ? '' : r?.error ? t(lang, 'ui_data_from', hhmm(okAt)) : isLate ? t(lang, 'ui_seen_ago', agoH) : t(lang, 'ui_seen', hhmm(okAt))
-  const status = r?.error
-    ? t(lang, 'ui_error', hhmm(r.at), reason(r.error, lang), okAt && hhmm(okAt))
-    : isLate
-      ? t(lang, 'ui_stale', agoH)
-      : null
-  const head = { running: o.running, seen, status, isLate }
+  // The line under the title: what needs me, then when Argos last looked; a failed check
+  // says so in red, with how old the data under it is.
+  const failed = Boolean(r?.error)
+  const checked = o.running
+    ? t(lang, 'ui_checking')
+    : !okAt
+      ? ''
+      : failed
+        ? t(lang, 'in_data_from', ago(okAt, now, lang))
+        : t(lang, 'in_checked', ago(okAt, now, lang))
+  const error = r?.error ? { why: reason(r.error, lang), isAuth: /gh auth|not logged/i.test(r.error) } : null
+  const head = { running: o.running, checked, failed, error, isLate }
 
-  if (!r) return { ...head, state: o.running ? ('loading' as const) : ('never' as const) }
+  if (!r) return { ...head, state: o.running ? ('loading' as const) : ('never' as const), repoCount: 0 }
   if (r.error && !okAt) return { ...head, state: 'noData' as const }
   const connected = r.repos ?? []
   if (r.needsRepos || !connected.length) return { ...head, state: 'noRepos' as const }
@@ -163,108 +182,78 @@ export function toViewModel(r: Round | null, o: Opts) {
   const scope = names.includes(ui.filter) ? ui.filter : ''
   const inScope = all.filter(p => !scope || p.repo === scope)
   const picks = new Set(ui.selected)
-  // a PR names its repo only when the list mixes repos
+  // the repo prefix only under All repos, when the list mixes repos
   const showRepo = names.length > 1 && !scope
-
   const asked = (url: string) => mentions(o.prompt, url)
-  const row = (p: Item) => {
-    const a = act(p, lang)
-    const picked = picks.has(keyOf(p))
+
+  const row = (p: Item, section: Section) => {
+    const a = action(p, lang)
+    const isPicked = picks.has(keyOf(p))
+    // tint only where I act; a pick overrides it, the glyph keeps the signal colour
+    const tn = section === 'move' || section === 'ready' ? tone(p) : null
     return {
       key: keyOf(p),
       url: p.url,
       number: p.number,
+      glyph: glyph(p),
+      ref: showRepo ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
       title: p.title,
-      repo: showRepo ? short(p.repo) : null,
       wait: ageShort(since(p), now, lang),
-      // who opened it, when it is not mine
-      owner: p.kind === 'mine' ? null : (p.author || '?').replace(/\[bot\]$/, ''),
-      size: sizeTag(p.size),
-      isAI: Boolean(p.isAI),
-      act: a?.label ?? null,
-      prompt: a?.prompt ?? null,
-      tone: a ? tone(p) : null,
-      // a PR with nothing to do says where it stands instead
-      status: a ? null : verb(p, lang),
-      // already asked for in the prompt: the action says so instead of asking twice
+      // two days and more: white and bold; age is weight, so colours stay free
+      isOld: now - Date.parse(since(p)) >= 2 * 864e5,
+      tags: tags(p),
+      act: a.label,
+      prompt: a.prompt,
+      isPicked,
       inPrompt: asked(p.url),
-      isPicked: picked,
+      box: isPicked ? PICKED : tn ? tint(tn) : NEUTRAL,
     }
   }
   const sections = SECTIONS.map(id => {
     const prs = inScope.filter(p => sectionOf(p) === id).sort(byRank)
-    const canPick = BATCH.includes(id)
-    const chosen = canPick ? prs.filter(p => picks.has(keyOf(p))).length : 0
-    const title = t(lang, `s_${id}`)
-    const pick = chosen === 0 ? ('none' as const) : chosen === prs.length ? ('all' as const) : ('some' as const)
+    const picked = prs.filter(p => picks.has(keyOf(p))).length
     // a folded section never hides a pick: it stays open while it holds one
-    const isFolded = FOLDED.includes(id) && ui.open !== id && chosen === 0
-    return {
-      id,
-      title,
-      count: prs.length,
-      canPick,
-      picked: chosen,
-      pick,
-      keys: canPick ? prs.map(keyOf) : [],
-      isFolded,
-      canFold: FOLDED.includes(id) && chosen === 0,
-      prs: prs.map(row),
-    }
+    const isFolded = FOLDED.includes(id) && ui.open !== id && picked === 0
+    return { id, title: t(lang, `s_${id}`), count: prs.length, isFolded, canFold: FOLDED.includes(id) && picked === 0, prs: prs.map(p => row(p, id)) }
   })
   const n = (id: Section) => sections.find(s => s.id === id)!.count
-  // The line under the title: what needs me, then what is ready and what waits, zeros left out.
-  const summary = [
-    n('move') ? t(lang, 'sum_move', n('move')) : t(lang, 'sum_calm'),
-    ...(n('ready') ? [t(lang, 'sum_ready', n('ready'))] : []),
-    ...(n('waiting') ? [t(lang, 'sum_waiting', n('waiting'))] : []),
-  ].join(' · ')
+  const need = n('move') ? t(lang, 'in_need', n('move')) : ''
+  // Nothing needs me: a green banner takes Your move's place and says what else there is.
+  const clear = n('move')
+    ? null
+    : [
+        ...(n('ready') ? [t(lang, 'in_clear_ready', n('ready'))] : []),
+        ...(n('waiting') ? [t(lang, 'in_clear_waiting', n('waiting'))] : []),
+        ...(n('drafts') ? [t(lang, 'in_clear_drafts', n('drafts'))] : []),
+      ].join(' · ')
 
-  // Narrowing chips, only when there is more than one repo to narrow to: every connected repo
-  // with its open PRs, zeros included.
-  const repos =
-    names.length > 1
-      ? [
-          { id: '', name: t(lang, 'f_all'), count: all.length, isActive: !scope },
-          ...names.map(repo => ({ id: repo, name: short(repo), count: all.filter(p => p.repo === repo).length, isActive: scope === repo })),
-        ]
-      : []
+  // One Select narrows the list to a repo, when there is more than one.
+  const repos = names.length > 1 ? [{ id: '', name: t(lang, 'in_all_repos') }, ...names.map(repo => ({ id: repo, name: short(repo) }))] : []
 
-  // Send carries every pick, also one outside the narrowed repo; the summary says how many,
-  // and how many picks left the list (merged, closed) since they were made.
-  const items = all.filter(p => BATCH.includes(sectionOf(p)) && picks.has(keyOf(p)))
-  const fix = items.filter(p => p.kind === 'mine').length
-  const hidden = items.filter(p => scope && p.repo !== scope).length
-  const known = new Set(all.map(keyOf))
-  const gone = ui.selected.filter(k => !known.has(k)).length
-  const block = o.running ? t(lang, 'ui_send_wait') : !items.length ? t(lang, 'ui_send_idle') : null
-  const warn = r.error || isLate ? t(lang, 'ui_send_stale', okAt ? hhmm(okAt) : '') : items.length > MANY ? t(lang, 'ui_send_many', items.length) : null
+  // The batch: every pick, each row's winning action as one line of the prompt; a pick that
+  // left the list (merged, closed) is dropped by the next press.
+  const items = all.filter(p => picks.has(keyOf(p)))
+  const lines = items.map(p => ({ p, a: action(p, lang) }))
+  const fresh = lines.filter(({ p }) => !asked(p.url))
 
   return {
     ...head,
     state: 'ok' as const,
-    summary,
+    need,
+    clear,
     counts: Object.fromEntries(SECTIONS.map(id => [id, n(id)])) as Record<Section, number>,
     repos,
+    filter: scope,
     sections,
-    send: {
-      count: items.length,
-      // a PR already asked for in the prompt is not asked for twice
-      prompt: prompt(items.some(p => !asked(p.url)) ? items.filter(p => !asked(p.url)) : items, lang),
-      urls: items.map(p => p.url),
-      inPrompt: items.length > 0 && items.every(p => asked(p.url)),
-      summary: [
-        items.length ? t(lang, 'ui_send_summary', fix, items.length - fix) : '',
-        hidden ? t(lang, 'ui_send_hidden', hidden) : '',
-        gone ? t(lang, 'ui_send_gone', gone) : '',
-      ]
-        .filter(Boolean)
-        .join(' '),
-      // the picks that still mean something, for a press to keep
-      keep: ui.selected.filter(k => known.has(k)),
-      block,
-      warn,
-    },
+    batch: items.length
+      ? {
+          count: t(lang, 'in_picked', items.length),
+          detail: lines.map(({ p, a }) => `${a.label} #${p.number}`).join(' · '),
+          prompt: (fresh.length ? fresh : lines).map(({ a }) => a.prompt).join('\n'),
+          urls: items.map(p => p.url),
+        }
+      : null,
+    keep: ui.selected.filter(k => all.some(p => keyOf(p) === k)),
     // the band names what needs me first, the same count as Your move
     band: (() => {
       const move = all.filter(p => sectionOf(p) === 'move').sort(byRank)

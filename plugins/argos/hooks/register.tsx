@@ -1,18 +1,19 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one Argos round over
 // the connected repos. The band above the prompt shows the most urgent PR; /argos opens
 // the pane, an inbox: what needs me, what is ready, what waits on others, my drafts and
-// the team's PRs, each PR on two lines with its one action, chips to narrow to a repo, a
-// way to add one, and a send bar for the PRs picked for the AI. Words and numbers come from
-// toViewModel (view.ts).
+// the team's PRs, each PR a tinted box of two lines with icons, labels and one action, a
+// picker to narrow to a repo, and a batch bar for the PRs picked for the AI. Words and
+// numbers come from toViewModel (view.ts); colours and icons from look.ts.
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND } from './demo-round'
+import { C, I, TINT, rgba } from './look'
 import { UI, mentions, toViewModel } from './view'
 import type { Round } from '../types'
 
-export { act, byRank, prompt, rank, reason, sectionOf, sizeTag, toViewModel, tone, verb } from './view'
+export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
@@ -38,11 +39,7 @@ const ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="56" fill="#1E1430"/>' +
   '<rect x="22" y="22" width="212" height="212" rx="40" fill="none" stroke="#51408A" stroke-width="18"/>' +
   `<g transform="translate(128 128) scale(1.25) translate(-160 -96)">${GLYPH}</g></svg>`
-const RED = '#E5384A'
 
-const LAYER = 'rgba(127, 127, 127, 0.10)'
-// a picked row: a neutral lift, so the accent stays the send button's alone
-const PICKED = 'rgba(127, 127, 127, 0.16)'
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 60),
@@ -174,7 +171,7 @@ export const register: Register = (on, options) => {
     const [running, last, hidden, now] = await Promise.all([read($, isRunning), read($, round), read($, isHidden), $.clock.now()])
     const vm = toViewModel(last, { now, lang, minutes, running })
     const band = vm.state === 'ok' ? vm.band : null
-    if (e.props.hasSurvey || hidden || (!running && !band && !vm.status)) return next(e)
+    if (e.props.hasSurvey || hidden || (!running && !band && !vm.failed && !vm.isLate)) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
@@ -183,7 +180,7 @@ export const register: Register = (on, options) => {
         {e.surface !== 'terminal' && <ui.Svg source={ICON} alt="KL · Akasha" width={16} height={16} />}
         <Text> Argos </Text>
         {running && <Text dimColor>{t(lang, 'ui_checking')} </Text>}
-        {!running && vm.status && <Text>{t(lang, 'ui_failed')} · </Text>}
+        {!running && (vm.failed || vm.isLate) && <Text>{t(lang, 'ui_failed')} · </Text>}
         {!running && band && (
           <Text>
             {t(lang, 'ui_needs', band.count)} · {band.verb}: {band.ref}{' '}
@@ -201,8 +198,8 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Button, Text, Link, Code } = ui
-    // the terminal is the one surface without Svg (its table still carries the name)
+    const { Box, Button, Text } = ui
+    // the terminal is the one surface without Svg: icons fall back to their text marks
     const hasSvg = e.surface !== 'terminal'
     const [running, last, picks, opened, narrowed, box] = await Promise.all([
       read($, isRunning),
@@ -215,88 +212,9 @@ export const register: Register = (on, options) => {
     const vm = toViewModel(last, { now: await $.clock.now(), lang, minutes, running, ui: { selected: picks, open: opened, filter: narrowed }, prompt: box.text })
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
-    const fill = (color: string) => (hasSvg ? color : undefined)
-
-    // The head: the mark, "Argos", what needs me and when Argos last looked; Check now on the
-    // right. While it runs the button dims and the line under the title says so, so the head
-    // never changes width.
-    // A desktop draws every Button as a native button whose text is its label, or its one
-    // string child: so no Button here carries a label apart from its text.
-    const top = (summary?: string) => (
-      <Box key="top" flexDirection="row" alignItems="center" gap="sm">
-        {hasSvg && <ui.Svg source={ICON} alt="KL · Akasha" width={28} height={28} />}
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text size="heading" weight="semibold">
-            Argos
-          </Text>
-          {summary && <Text size="caption">{summary}</Text>}
-          {(running || vm.seen) && (
-            <Text size="caption" dimColor>
-              {running ? t(lang, 'ui_checking') : vm.seen}
-            </Text>
-          )}
-        </Box>
-        <Button key="check" variant="secondary" dimColor={running} onPress={checkNow}>
-          {t(lang, 'ui_check')}
-        </Button>
-      </Box>
-    )
-    const status = vm.status && (
-      <Box borderStyle="round" borderColor={RED} paddingX="sm" flexDirection="column" gap="xs">
-        <Text>{vm.status}</Text>
-        <Box flexDirection="row">
-          <Button key="retry" plain={true} onPress={checkNow}>
-            {vm.isLate ? t(lang, 'ui_check') : t(lang, 'ui_retry')}
-          </Button>
-        </Box>
-      </Box>
-    )
-    // a part a state does not have is left out, so no gap is spent on it
-    const frame = (first: any, ...body: any[]) => (
-      <Box flexDirection="column" gap="lg" paddingX="md" paddingY="md">
-        {[first, status, ...body].filter(Boolean)}
-      </Box>
-    )
-    // Every state but the list leads with the bare head; the list adds its summary.
-    const page = (...body: any[]) => frame(top(), ...body)
-
-    if (vm.state === 'loading') return page(<Text key="b">{t(lang, 'ui_loading')}</Text>)
-    if (vm.state === 'never') return page(<Text key="b">{t(lang, 'ui_never')}</Text>)
-    if (vm.state === 'noData') return page(<Text key="b">{t(lang, 'ui_no_data')}</Text>)
-    if (vm.state === 'noRepos')
-      return page(
-        <Box key="b" flexDirection="column" gap="sm">
-          <Text size="heading" weight="semibold">
-            {t(lang, 'ui_no_repos_title')}
-          </Text>
-          <Text>{t(lang, 'ui_no_repos_body')}</Text>
-          <Code source="/argos repos add <folder or owner/name>" />
-          <Box flexDirection="row">
-            <Button key="connect" variant="primary" onPress={() => void addRepo($)}>
-              {t(lang, 'ui_connect')}
-            </Button>
-          </Box>
-        </Box>,
-      )
-    // narrows vm for TypeScript; every other state returned above
-    if (vm.state !== 'ok') return page()
-    const { send } = vm
-
-    // A pick starts from the picks that still mean something, so a PR that left the list is
-    // dropped by the next press instead of riding along forever.
-    const toggle = (keys: string[], pick: boolean) =>
-      void update($, selected, () => (pick ? [...new Set([...send.keep, ...keys])] : send.keep.filter(k => !keys.includes(k))))
-    // A checkbox is a one-glyph plain button, so the box itself takes the press. The terminal
-    // writes brackets. A row with nothing to pick keeps the same column with an empty box-wide
-    // gap, so every title starts at one left edge.
-    const GLYPH = hasSvg ? { all: '☑', some: '⊟', none: '☐' } : { all: '[x]', some: '[-]', none: '[ ]' }
-    const check = (key: string, state: 'all' | 'some' | 'none', onPress: () => void) => (
-      <Button key={key} plain={true} onPress={onPress}>
-        {GLYPH[state]}
-      </Button>
-    )
-    // an em space the width of a box, which a screen reader does not announce
-    const gap = <Text>{hasSvg ? '\u2003' : '   '}</Text>
+    // a picker where the surface has one
+    const Select = (ui as { Select?: any }).Select
+    const icon = (svg: string, text: string, w = 16) => (hasSvg ? <ui.Svg source={svg} alt={text} width={w} height={16} /> : <Text>{text}</Text>)
     // Puts one request in the prompt without sending it: appended on a new line when there
     // is a draft, never twice. Two quick presses meet one lock, and a request whose PRs are
     // all in the prompt already adds nothing.
@@ -305,8 +223,7 @@ export const register: Register = (on, options) => {
       busy.add(request)
       try {
         const { text } = await $.prompt.read()
-        // already there (asked before, or pasted by hand): add nothing, but show that it is
-        if (!urls.every(u => mentions(text, u)))
+        if (!urls.length || !urls.every(u => mentions(text, u)))
           await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
         $.ui.invalidate('ui.render')
       } finally {
@@ -314,188 +231,224 @@ export const register: Register = (on, options) => {
       }
     }
 
-    type Section = (typeof vm.sections)[number]
-    type Pr = Section['prs'][number]
-    // One PR on two lines, so it fits a narrow sidebar: the title, then its number, how long
-    // it has waited, whose it is and where, a size or AI mark when one applies, and on the
-    // right the one action that puts this PR in the prompt, its reason in its words, its
-    // colour on the dot beside it (a button draws its own text colour).
-    const prRow = (p: Pr, canPick: boolean) => (
-      <Box
-        key={p.key}
-        flexDirection="row"
-        alignItems="flex-start"
-        gap="sm"
-        paddingX="sm"
-        paddingY="xs"
-        backgroundColor={p.isPicked ? fill(PICKED) : undefined}
-        borderStyle={hasSvg && p.isPicked ? 'round' : undefined}
-        borderColor={p.isPicked ? fill(PICKED) : undefined}
-      >
-        {canPick && p.act ? check(`box:${p.key}`, p.isPicked ? 'all' : 'none', () => toggle([p.key], !p.isPicked)) : gap}
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text wrap="truncate">{p.title}</Text>
-          {/* The number and the wait never shrink; whose it is and where truncate; when the
-              action does not fit beside them, it drops to its own line instead of squeezing. */}
-          <Box flexDirection="row" alignItems="center" flexWrap="wrap" justifyContent="space-between" columnGap="sm">
-            <Box flexDirection="row" alignItems="center" columnGap="xs" flexShrink={1} minWidth={0}>
-              <Box flexShrink={0}>
-                <Link href={p.url} label={`#${p.number}`} />
-              </Box>
-              <Box flexShrink={0}>
-                <Text size="caption" dimColor tabular>
-                  {`· ${p.wait}`}
-                </Text>
-              </Box>
-              {(p.owner || p.repo || p.size || p.isAI) && (
-                <Box flexShrink={1} minWidth={0}>
-                  <Text size="caption" dimColor wrap="truncate">
-                    {['', p.owner, p.repo, p.size, p.isAI ? t(lang, 'ui_ai') : null].filter(x => x !== null).join(' · ')}
-                  </Text>
-                </Box>
-              )}
-            </Box>
-            {p.status && (
-              <Box flexDirection="row" justifyContent="flex-end" flexGrow={1} flexShrink={0}>
-                <Text size="caption" dimColor>
-                  {p.status}
-                </Text>
-              </Box>
-            )}
-            {p.act && p.prompt && (
-              <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="xs" flexGrow={1} flexShrink={0}>
-                {p.inPrompt ? (
-                  <Text key={`act:${p.key}`} size="caption" dimColor>
-                    {t(lang, 'ui_in_prompt')}
-                  </Text>
-                ) : (
-                  // a Box, not a fragment: the kit draws a fragment as a column
-                  <Box flexDirection="row" alignItems="center" gap="xs">
-                    {p.tone && (
-                      <Text size="caption" color={p.tone}>
-                        ●
-                      </Text>
-                    )}
-                    <Button key={`act:${p.key}`} plain={true} onPress={() => void fillPrompt(p.prompt!, [p.url])}>
-                      {`${p.act} ›`}
-                    </Button>
-                  </Box>
-                )}
-              </Box>
-            )}
+    // The head: "Pull requests" and Check now; under it what needs me and when Argos last
+    // looked (a failed check in red); then one Select to narrow to a repo.
+    const needLine = vm.failed ? t(lang, 'in_failed') : vm.state === 'ok' ? vm.need : ''
+    const checked = vm.state === 'noRepos' ? '' : vm.checked
+    const head = (withCheck: boolean) => (
+      <Box key="head" flexDirection="column" gap="xs">
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text size="heading" weight="semibold" color={C.text}>
+              {t(lang, 'in_title')}
+            </Text>
           </Box>
+          {withCheck && (
+            <Button key="check" plain={true} dimColor={running} onPress={checkNow}>
+              {t(lang, 'ui_check')}
+            </Button>
+          )}
         </Box>
-      </Box>
-    )
-    // One section: its title and count (a box that picks them all where a batch makes sense,
-    // a fold on the team's), then its PRs. "Your move" leads in the body size; the rest are
-    // quiet captions. An empty section is left out, except "Your move", which says nothing
-    // needs me.
-    const section = (s: Section) => {
-      if (s.id === 'move' && !s.count)
-        return (
-          <Text key="calm" dimColor>
-            {t(lang, 'ui_calm')}
-          </Text>
-        )
-      if (!s.count) return null
-      const title = `${s.title} · ${s.count}${s.picked ? ` · ${t(lang, 'ui_picked', s.picked)}` : ''}`
-      const lead = s.id === 'move'
-      return (
-        <Box key={`sec:${s.id}`} flexDirection="column" gap="xs">
-          <Box flexDirection="row" alignItems="center" gap="sm" paddingX="sm">
-            {s.canPick && !s.isFolded ? check(`box:${s.id}`, s.pick, () => toggle(s.keys, s.pick !== 'all')) : gap}
-            {s.canFold || s.isFolded ? (
-              <Button key={`fold:${s.id}`} plain={true} dimColor={true} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
-                {`${title}  ${s.isFolded ? '▾' : '▴'}`}
-              </Button>
-            ) : (
-              <Text size={lead ? 'body' : 'caption'} weight="semibold" dimColor={!lead}>
-                {title}
+        {(needLine || checked) && (
+          <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="xs">
+            {needLine && (
+              <Text weight="semibold" color={vm.failed ? C.error : C.text}>
+                {needLine}
+              </Text>
+            )}
+            {checked && (
+              <Text size="caption" color={C.subtle}>
+                {needLine ? `· ${checked}` : checked}
               </Text>
             )}
           </Box>
-          {!s.isFolded && s.prs.map(p => prRow(p, s.canPick))}
-        </Box>
-      )
-    }
-
-    // Narrowing to one repo, when there is more than one: chips up to six repos, the active one
-    // a real button; past that a picker, so the list never starts five lines down.
-    const narrowTo = (id: string) => void update($, filter, () => id)
-    // a picker where the surface has one; chips otherwise
-    const Select = (ui as { Select?: any }).Select
-    const repoPick =
-      vm.repos.length === 0 ? null : vm.repos.length > 7 && Select ? (
-        <Select
-          key="repo-select"
-          label={t(lang, 'ui_repo')}
-          value={vm.repos.find(r => r.isActive)?.id || 'all'}
-          options={vm.repos.map(r => ({ value: r.id || 'all', label: `${r.name} · ${r.count}` }))}
-          onSelect={(v: string) => narrowTo(v === 'all' ? '' : v)}
-        />
-      ) : (
-        <Box key="repos" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="md" rowGap="xs">
-          {vm.repos.map(r => (
-            <Button
-              key={`repo:${r.id || 'all'}`}
-              variant={r.isActive ? 'secondary' : undefined}
-              plain={r.isActive ? undefined : true}
-              onPress={() => narrowTo(r.id)}
-            >
-              {`${r.name} ${r.count}`}
-            </Button>
-          ))}
-        </Box>
-      )
-    const addRow = (
-      <Box key="add-repo-row" flexDirection="row" paddingX="sm">
-        <Button key="add-repo" plain={true} dimColor={true} onPress={() => void addRepo($)}>
-          {t(lang, 'ui_add_repo')}
-        </Button>
-      </Box>
-    )
-
-    // The send bar sits under the head and keeps its place: with nothing picked it says how to
-    // use it and its button waits; with picks it says what will go and adds them to the prompt
-    // (never sends). The one accent of the pane is its button.
-    const sendNow = async () => {
-      if (send.block) return
-      await fillPrompt(send.prompt, send.urls)
-      await update($, selected, () => send.keep)
-    }
-    const sendBar = (
-      <Box
-        key="send-bar"
-        flexDirection="column"
-        gap="xs"
-        backgroundColor={fill(LAYER)}
-        borderStyle={hasSvg ? 'round' : undefined}
-        borderColor={fill(LAYER)}
-        paddingX="md"
-        paddingY="sm"
-      >
-        <Text size="caption" dimColor={Boolean(send.block)}>
-          {send.summary || send.block}
-        </Text>
-        <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="md">
-          {send.count > 0 && (
-            <Button key="clear" plain={true} dimColor={true} onPress={() => void update($, selected, () => [])}>
-              {t(lang, 'ui_clear')}
-            </Button>
-          )}
-          <Button key="send" variant={send.block ? 'secondary' : 'primary'} dimColor={Boolean(send.block)} onPress={() => void sendNow()}>
-            {send.inPrompt ? t(lang, 'ui_in_prompt') : t(lang, 'ui_send', send.count)}
-          </Button>
-        </Box>
-        {send.warn && send.count > 0 && (
-          <Text size="caption" color="warning">
-            {send.warn}
-          </Text>
+        )}
+        {vm.state === 'ok' && vm.repos.length > 0 && Select && (
+          <Select
+            key="repo"
+            label={t(lang, 'in_all_repos')}
+            value={vm.filter || 'all'}
+            options={vm.repos.map(r => ({ value: r.id || 'all', label: r.name }))}
+            onSelect={(v: string) => void update($, filter, () => (v === 'all' ? '' : v))}
+          />
         )}
       </Box>
     )
+    // A banner in a state's colour: clear (green), check failed (red), no repo (neutral).
+    const banner = (key: string, look: { bg?: string; border: string }, svg: string, title: string, sub: string, btn?: { label: string; onPress: () => void }) => (
+      <Box key={key} flexDirection="row" gap="sm" padding="sm" borderStyle="round" borderColor={look.border} backgroundColor={look.bg}>
+        {icon(svg, '●')}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text weight="semibold" color={C.text}>
+            {title}
+          </Text>
+          {sub && (
+            <Text size="caption" color={C.subtle}>
+              {sub}
+            </Text>
+          )}
+          {btn && (
+            <Box flexDirection="row" justifyContent="flex-end" marginTop="xs">
+              <Button key={`${key}-btn`} variant="secondary" onPress={btn.onPress}>
+                {btn.label}
+              </Button>
+            </Box>
+          )}
+        </Box>
+      </Box>
+    )
+    const frame = (...body: any[]) => (
+      <Box flexDirection="column" gap="md" padding="md">
+        {body.filter(Boolean)}
+      </Box>
+    )
+    const failedBanner =
+      vm.error &&
+      banner(
+        'failed',
+        { bg: rgba(C.error, TINT + 0.01), border: rgba(C.error, 0.35) },
+        I.error,
+        t(lang, 'in_err_title'),
+        vm.error.why,
+        vm.error.isAuth ? { label: t(lang, 'in_fix_auth'), onPress: () => void fillPrompt(t(lang, 'p_auth', vm.error!.why), []) } : { label: t(lang, 'in_retry'), onPress: checkNow },
+      )
 
-    return frame(top(vm.summary), sendBar, repoPick, ...vm.sections.map(section), addRow)
+    // The first check: static placeholders sized like real rows, so nothing jumps.
+    if (vm.state === 'loading' || vm.state === 'never')
+      return frame(
+        head(vm.state === 'never'),
+        <Box key="skeleton" flexDirection="column" gap="xs">
+          {[
+            ['78%', '42%'],
+            ['64%', '50%'],
+            ['72%', '36%'],
+          ].map(([a, b], i) => (
+            <Box key={`sk${i}`} flexDirection="column" gap="sm" padding="sm" borderStyle="round" borderColor="rgba(255,255,255,0.06)" backgroundColor="rgba(255,255,255,0.03)">
+              <Box height={8} width={a} backgroundColor="#2E2E2C" />
+              <Box height={8} width={b} backgroundColor="#2A2A28" />
+            </Box>
+          ))}
+          <Text size="caption" color={C.subtle}>
+            {t(lang, 'in_first')}
+          </Text>
+        </Box>,
+      )
+    if (vm.state === 'noData') return frame(head(true), failedBanner)
+    if (vm.state === 'noRepos')
+      return frame(
+        head(false),
+        banner('norepo', { bg: 'rgba(255,255,255,0.03)', border: 'rgba(255,255,255,0.10)' }, I.pr(C.subtle), t(lang, 'in_norepo_title'), t(lang, 'in_norepo_body'), {
+          label: t(lang, 'in_setup'),
+          onPress: () => void addRepo($),
+        }),
+      )
+    if (vm.state !== 'ok') return frame(head(true))
+
+    // a failed check keeps the stale rows, dimmed; their actions still work
+    const dim = vm.failed
+    const toggle = (key: string) => void update($, selected, () => (vm.keep.includes(key) ? vm.keep.filter(k => k !== key) : [...vm.keep, key]))
+    type Pr = (typeof vm.sections)[number]['prs'][number]
+    // One PR on two lines. Line 1 says what it is and how long it waited; line 2 why it is
+    // here (icons, colour) and what to do: a pick and one button. The box is tinted where I act.
+    const row = (p: Pr) => (
+      <Box key={p.key} flexDirection="column" gap="xs" paddingX="sm" paddingY="sm" borderStyle="round" borderColor={p.box.border} backgroundColor={p.box.bg}>
+        <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
+          {icon(p.glyph, '⑂')}
+          {/* the ref and the wait never wrap or shrink; the title takes what is left */}
+          <Box flexShrink={0}>
+            <Text size="caption" color={C.subtle} dimColor={dim}>
+              {p.ref}
+            </Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text weight="medium" color={C.text} dimColor={dim} wrap="truncate">
+              {p.title}
+            </Text>
+          </Box>
+          <Box flexShrink={0}>
+            <Text size="caption" color={p.isOld ? C.text : C.subtle} weight={p.isOld ? 'bold' : 'regular'} dimColor={dim}>
+              {p.wait}
+            </Text>
+          </Box>
+        </Box>
+        <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
+          <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
+            {p.tags.map((tg, i) => (
+              <Box key={`t${i}`} flexDirection="row" alignItems="center">
+                {tg.svg ? icon(tg.svg, tg.text, tg.w) : null}
+                {tg.count && (hasSvg || !tg.svg) && (
+                  <Text size="caption" weight="semibold" color={tg.color}>
+                    {tg.count}
+                  </Text>
+                )}
+              </Box>
+            ))}
+          </Box>
+          {/* grows into the space left, so the buttons sit right; on a narrow pane they wrap to their own line */}
+          <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="xs" flexGrow={1}>
+            <Button key={`pick:${p.key}`} plain={true} onPress={() => toggle(p.key)}>
+              {p.isPicked ? '✓' : '+'}
+            </Button>
+            <Button key={`act:${p.key}`} variant="secondary" onPress={() => void fillPrompt(p.prompt, [p.url])}>
+              {p.act}
+            </Button>
+          </Box>
+        </Box>
+      </Box>
+    )
+    // A section: its name and count, Show/Hide on the folded Team; empty sections are hidden.
+    const section = (s: (typeof vm.sections)[number]) =>
+      s.count > 0 && (
+        <Box key={`sec:${s.id}`} flexDirection="column" gap="xs">
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            <Text size="caption" weight="semibold" color={C.subtle}>
+              {s.title}
+            </Text>
+            <Box flexGrow={1}>
+              <Text size="caption" weight="semibold" color={C.text}>
+                {String(s.count)}
+              </Text>
+            </Box>
+            {s.canFold && (
+              <Button key={`fold:${s.id}`} plain={true} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
+                {t(lang, s.isFolded ? 'in_show' : 'in_hide')}
+              </Button>
+            )}
+          </Box>
+          {!s.isFolded && s.prs.map(row)}
+        </Box>
+      )
+    const clearBanner = vm.clear !== null && banner('clear', { bg: rgba(C.success, TINT + 0.01), border: rgba(C.success, 0.35) }, I.approved, t(lang, 'in_clear'), vm.clear)
+    // The batch: what is picked, each row's action, and the pane's one primary button.
+    const batch = vm.batch && (
+      <Box key="batch" flexDirection="column" gap="sm" padding="sm" borderStyle="round" borderColor={rgba(C.claude, 0.55)} backgroundColor={rgba(C.claude, 0.1)}>
+        <Box flexDirection="row" alignItems="center" gap="xs">
+          <Box flexGrow={1}>
+            <Text weight="semibold" color={C.text}>
+              {vm.batch.count}
+            </Text>
+          </Box>
+          <Button key="clear" plain={true} onPress={() => void update($, selected, () => [])}>
+            {t(lang, 'ui_clear')}
+          </Button>
+        </Box>
+        <Text size="caption" color={C.subtle} wrap="truncate">
+          {vm.batch.detail}
+        </Text>
+        <Box flexDirection="row" justifyContent="flex-end">
+          <Button
+            key="send"
+            variant="primary"
+            onPress={async () => {
+              await fillPrompt(vm.batch!.prompt, vm.batch!.urls)
+              await update($, selected, () => [])
+            }}
+          >
+            {t(lang, 'in_add')}
+          </Button>
+        </Box>
+      </Box>
+    )
+    return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section), batch)
   })
 }
