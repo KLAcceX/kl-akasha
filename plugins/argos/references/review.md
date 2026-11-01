@@ -70,7 +70,7 @@ Offer to post. On a clear yes, post what the user saw, as they edited it, labels
 
 ## 9. Approve, or approve and merge
 
-The user asks in their own words ("approve it", "approve and merge"); the pane's **Merge** on one of the user's own approved PRs asks to merge it.
+The user asks in their own words ("approve it", "approve and merge").
 
 1. **Review first.** Run sections 2 to 6 at the task's level. Without a task, a small PR (about 100 changed lines or less) gets a quick low-level look; a bigger one asks once for the task as in section 4. Show the verdict in a few lines: level, project rules used, blockers, and how many other findings.
 2. **Stop on a blocker.** If the review finds a blocker (or a broken project rule that blocks), don't approve: show it and offer the request-changes draft from section 7. Also stop when the PR is a draft, closed, or the user's own.

@@ -35,7 +35,7 @@ Work out the repository from what the user gave, then run one `add` per reposito
 
 A name that is also an existing folder is read as the folder. A name is checked with `gh repo view` as `--account <login>`, or the active `gh` account without it (see `references/sources.md`); when it says not found, the repo may be private to another account, so retry with `--account` set to that account before telling the user. A folder whose origin is not on GitHub is refused; offer to connect it by `owner/name` instead. Report what each line says.
 
-For the user doing it themselves: the pane's **Add a repository** button and `/argos repos add` take a folder or an `owner/name` (or a GitHub link), the same as the script. The list lives in `~/.claude/kl-akasha/argos/repos.json`.
+For the user doing it themselves: the pane's **Set up** button and `/argos repos add` take a folder or an `owner/name` (or a GitHub link), the same as the script. The list lives in `~/.claude/kl-akasha/argos/repos.json`.
 
 ## Change the language
 

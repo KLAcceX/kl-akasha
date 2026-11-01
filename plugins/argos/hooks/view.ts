@@ -1,67 +1,21 @@
-// Round → ViewModel: every word and number the pane shows comes from here,
-// so the counts and the prompt sent to the AI always agree. No mod runtime, so Node can
-// import this file.
+// Round → ViewModel for the pane. The pane exists to take PR review off the person's back: every
+// open PR across the connected repos is one line, and all of them go to validation unless the
+// person leaves some out (an author, or one PR) or the PR is not ready for it. Nothing reorders
+// when something is left out: it dims in place. No mod runtime, so Node can import this file.
 import { t } from '../scripts/i18n.mjs'
 import type { Item, Round, Verdict, Verdicts } from '../types'
-import { AVATAR, C, I, NEUTRAL, PICKED, STARS, bars, byPriority, fit, pill, sig, tint, type Tag, type Tone } from './look'
+import { AVATAR, C, STARS, type Tag } from './look'
 
-const base = (code: string) => code.split(':')[0]
+const base = (code: string) => code.split(':')[0] ?? code
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
 const shortRepo = (repo: string) => repo.split('/')[1] ?? repo
 export const keyOf = (p: Item) => `${p.repo}#${p.number}`
-// Whether text names this PR: its URL not followed by another digit, so .../pull/1 is never
-// found inside .../pull/12.
-export const mentions = (text: string | undefined, url: string) =>
-  Boolean(text) && new RegExp(`${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`).test(text!)
-export const hhmm = (iso: string) => {
-  const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-// What to do first: merge, then a late review that blocks a teammate, then unblock mine,
-// answer, review on time, find a reviewer; teammates' PRs after, drafts last.
-export function rank(p: Item): number {
-  if (p.kind === 'mine') {
-    if (has(p, 'ready')) return 1
-    if (has(p, 'conflict', 'ci_failed', 'changes_requested')) return 3
-    if (has(p, 'threads', 'unanswered', 'new_reviews')) return 4
-    if (has(p, 'no_owner', 'no_review')) return 6
-    return 9
-  }
-  if (p.kind === 'review') return has(p, 'late') ? 2 : 5
-  if (p.isDraft) return 10
-  if (has(p, 'no_owner', 'no_review')) return 7
-  return p.signals.length ? 8 : 9
-}
-const since = (p: Item) => p.since ?? p.createdAt
-export const byRank = (a: Item, b: Item) => rank(a) - rank(b) || since(a).localeCompare(since(b))
-
-// 5h, 12d, 3w: hours under a day, days under two weeks, then weeks.
-export function ageShort(iso: string, now: number, lang: string): string {
-  const h = Math.max(0, (now - Date.parse(iso)) / 36e5)
-  if (h < 24) return t(lang, 'u_h', Math.max(1, Math.floor(h)))
-  const d = Math.floor(h / 24)
-  return d < 14 ? t(lang, 'u_d', d) : t(lang, 'u_w', Math.floor(d / 7))
-}
-
-// The inbox: one section per next move, in this order. move: what waits on me (reviews I
-// was asked for, my PRs that came back); ready: mine to merge; waiting: mine on someone
-// else's desk; drafts: mine not out yet; team: teammates' PRs nobody asked me about.
-export const SECTIONS = ['move', 'ready', 'waiting', 'drafts', 'team'] as const
-export type Section = (typeof SECTIONS)[number]
-
-export function sectionOf(p: Item): Section {
-  if (p.kind === 'review') return p.isDraft ? 'team' : 'move'
-  if (p.kind !== 'mine') return 'team'
-  if (p.isDraft) return 'drafts'
-  if (has(p, 'ready')) return 'ready'
-  if (has(p, 'conflict', 'ci_failed', 'changes_requested', 'threads', 'unanswered', 'new_reviews')) return 'move'
-  return 'waiting'
-}
+// Who opened a PR, as the pane names them, and what kind of author they are.
+export const authorOf = (p: Item) => (p.author || '?').replace(/\[bot\]$/, '')
+const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[bot\]$/.test(p.author ?? '') ? ('bot' as const) : ('human' as const))
 
 // A PR's verdict from the last validation: none, running, old (new commits since), blockers
-// found, partly read (never a pass), or passed. Attention counts risks that do not block, so a
-// pass with them never looks clean.
+// found, partly read (never a pass), or passed. Attention counts risks that do not block.
 export type VerdictState = 'none' | 'run' | 'stale' | 'pass' | 'issues' | 'partial'
 export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: number; attention: number; finding: string } {
   const attention = v?.attention ?? 0
@@ -72,7 +26,8 @@ export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: 
   if (v.issues) return { state: 'issues', issues: v.issues, attention, finding }
   return { state: v.partial ? 'partial' : 'pass', issues: 0, attention, finding }
 }
-// The verdict as the first tag: the star and ✓, the issue count, … or "old".
+// The verdict as a star and a count: ✓ passed, the number of blockers, … while it runs, "old"
+// once new commits land; `+N` counts what needs attention without blocking.
 export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   const purple = { color: C.merged }
   const more = v.attention ? `+${v.attention}` : ''
@@ -84,69 +39,17 @@ export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   return { k: 'sig', svg: STARS.none, w: 16, text: '✧', tip: t(lang, 'tip_v_none') }
 }
 
-// The one action a PR offers, highest rank first: blockers before feedback (CI reruns after a
-// rebase, so the conflict comes before CI), then my review, a reviewer, merging, drafts,
-// nudges; a teammate's PR nobody asked me about is read, not acted on.
-// A verdict adds three: Fix issues on mine after CI, Draft review on another's before my review,
-// Revalidate on an old verdict before the quiet actions.
-export function action(p: Item, lang: string, v = verdictOf(p)): { label: string; prompt: string } {
-  const go = (k: string, ...args: unknown[]) => ({ label: t(lang, `x_${k}`), prompt: t(lang, `p_${k}`, p.url, ...args) })
-  const threads = Number(p.signals.find(s => base(s) === 'threads')?.split(':')[1] ?? 0)
-  if (p.kind !== 'mine') {
-    if (v.state === 'issues') return go('draft', v.issues)
-    if (p.kind === 'review') return has(p, 'changed') ? go('rereview') : go('review', (p.author || '?').replace(/\[bot\]$/, ''))
-    return v.state === 'stale' ? go('revalidate') : go('summary')
-  }
-  if (p.isDraft) return go('finish')
-  if (has(p, 'conflict')) return go('conflict')
-  if (has(p, 'ci_failed')) return go('ci')
-  if (v.state === 'issues') return go('fix')
-  if (has(p, 'changes_requested')) return go('changes')
-  if (has(p, 'threads', 'unanswered', 'new_reviews')) return go('threads', threads)
-  if (v.state === 'stale') return go('revalidate')
-  if (has(p, 'no_owner')) return go('owner')
-  if (has(p, 'ready')) return go('merge')
-  return go('nudge')
-}
-
-// The colour that wins a row: blocked, then reviewers answered, then asked of me, then ready.
-// A row with nothing for me to do has none.
-export function tone(p: Item): Tone | null {
-  if (p.kind === 'other' || p.isDraft) return null
-  if (p.kind === 'review') return 'suggestion'
-  if (has(p, 'conflict', 'ci_failed')) return 'error'
-  if (has(p, 'changes_requested', 'threads', 'unanswered', 'new_reviews')) return 'warning'
-  if (has(p, 'ready')) return 'success'
+// What keeps a PR out of a validation by itself: someone asked for changes (changes requested,
+// open threads, an unanswered comment), it is a draft, it was validated with no commit since,
+// or a validation of it is running now.
+export type Out = 'changes' | 'draft' | 'done' | 'running'
+export function outOf(p: Item, v: ReturnType<typeof verdictOf>): Out | null {
+  if (v.state === 'run') return 'running'
+  if (p.isDraft) return 'draft'
+  if (has(p, 'changes_requested', 'threads', 'unanswered', 'new_reviews')) return 'changes'
+  if (v.state === 'pass' || v.state === 'issues' || v.state === 'partial') return 'done'
   return null
 }
-
-// A row's tags, before they are fitted: why it is here (signals), then the agent glyph, its
-// labels and its size. State, draft and kind are not tags: the glyph and section say them.
-export function tags(p: Item, lang: string, w = 300): Tag[] {
-  const tip = (k: string, ...a: unknown[]) => t(lang, `tip_${k}`, ...a)
-  const out: Tag[] = []
-  for (const s of p.signals) {
-    const [k, n] = s.split(':')
-    if (k === 'conflict') out.push(sig(I.conflict, '◆', tip('conflict')))
-    if (k === 'ci_failed') out.push(sig(I.ciFail, '✕', tip('ci_fail')))
-    if (k === 'changes_requested') out.push(sig(I.changes, '±', tip('changes')))
-    if (k === 'threads') out.push(sig(I.threads, `¶${n}`, tip('threads', Number(n)), Number(n), C.warning))
-    if ((k === 'unanswered' || k === 'new_reviews') && !has(p, 'threads')) out.push(sig(I.threads, '¶', tip('threads', 0), Number(n) || undefined, C.warning))
-    if (k === 'no_owner') out.push(sig(I.noOwner, '?', tip('no_owner')))
-  }
-  if (p.kind === 'review') out.unshift(has(p, 'changed') ? sig(I.eye(C.subtle), '◎', tip('rereview')) : sig(I.eye(C.suggestion), '◉', tip('review')))
-  if (has(p, 'ready')) out.unshift(...(p.ci === 'pass' ? [sig(I.ciPass, '✓', tip('ci_pass'))] : []), sig(I.approved, '✓', tip('approved')))
-  if (p.kind === 'mine' && !p.isDraft && p.ci === 'pending') out.push(sig(I.ciPending, '◌', tip('ci_pending')))
-  if (p.isAI) out.push({ k: 'ai', svg: I.ai, w: 16, text: '¤', tip: tip('ai') })
-  for (const l of [...(p.labels ?? [])].sort(byPriority)) out.push({ k: 'label', ...pill(l.name, l.color), text: `(${l.name})`, tip: tip('label', l.name) })
-  if (p.size !== undefined) out.push({ k: 'size', svg: I.size(bars(p.size)), w: 16, text: '▂▄▆█'.slice(0, bars(p.size)), tip: tip('size', ['S', 'M', 'L', 'XL'][bars(p.size) - 1], p.size) })
-  return fit(out, w, n => tip('more', n))
-}
-
-// The row's state glyph: the PR icon in the winning colour, dashed for a draft; its tip says
-// what the colour means.
-const glyph = (p: Item) => (p.isDraft ? I.draft : I.pr(C[tone(p) ?? 'subtle']))
-const glyphTip = (p: Item, lang: string) => t(lang, `tip_g_${p.isDraft ? 'draft' : p.kind === 'other' ? 'team' : (tone(p) ?? 'waiting')}`)
 
 export function reason(error: string, lang: string) {
   if (/gh auth|not logged/i.test(error)) return t(lang, 'err_gh_auth')
@@ -154,36 +57,21 @@ export function reason(error: string, lang: string) {
   return t(lang, 'err_generic')
 }
 
-// The pane's own state: the PRs picked for the AI (repo#number), the folded section opened,
-// and the repo the list is narrowed to ('' = all).
-// view: '' the inbox of what needs me, 'team' the team's PRs grouped by verdict; more: the
-// verdict groups shown in full; act: the batch action picked in the team view.
-// folds: sections the person opened or folded by hand, by view and section ("needs:team",
-// "repos:acme/web"), with the PRs that needed them then; a new one that needs them reopens it.
-export type Fold = { open: boolean; needs: string[] }
-// author: the one author the lists are filtered to ('' = everyone).
-export type Ui = { selected: string[]; filter: string; view: string; more: string[]; act: string; folds: Record<string, Fold>; author: string }
-export const UI: Ui = { selected: [], filter: '', view: '', more: [], act: '', folds: {}, author: '' }
-
-// The team view: the team's PRs by verdict, a few rows each until "Show N more".
-export const GROUPS = ['issues', 'partial', 'run', 'none', 'stale', 'pass'] as const
-const SHOWN: Record<(typeof GROUPS)[number], number> = { issues: 3, partial: 2, run: 3, none: 4, stale: 2, pass: 99 }
-// The batch actions, offered only when valid for every pick.
-export const BATCH_ACTS = ['validate', 'revalidate', 'fix', 'draft', 'merge'] as const
-
-// prompt: what the prompt holds now, so a request already there is never added twice.
-// ignored: authors the person hid everywhere; undo: the last ignore, offered back until the next tap.
-type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string; verdicts?: Verdicts | null; ignored?: string[]; undo?: { author: string; hidden: number } | null }
-
-// Who opened a PR, as the pane names them, and what kind of author they are.
-export const authorOf = (p: Item) => (p.author || '?').replace(/\[bot\]$/, '')
-const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[bot\]$/.test(p.author ?? '') ? ('bot' as const) : ('human' as const))
-
-// How long ago, in the row's units: minutes under an hour, then ageShort's.
-export const ago = (iso: string, now: number, lang: string) => {
-  const m = Math.floor((now - Date.parse(iso)) / 6e4)
-  return m < 60 ? t(lang, 'in_u_m', Math.max(1, m)) : ageShort(iso, now, lang)
+// 5m, 5h, 12d, 3w: minutes under an hour, hours under a day, days under two weeks, then weeks.
+export function ago(iso: string, now: number, lang: string): string {
+  const m = Math.max(0, (now - Date.parse(iso)) / 6e4)
+  if (m < 60) return t(lang, 'in_u_m', Math.max(1, Math.floor(m)))
+  const h = m / 60
+  if (h < 24) return t(lang, 'u_h', Math.floor(h))
+  const d = Math.floor(h / 24)
+  return d < 14 ? t(lang, 'u_d', d) : t(lang, 'u_w', Math.floor(d / 7))
 }
+
+// The pane's own choices: PRs left out by hand, and PRs the pane left out by itself that the
+// person brought back. Authors left out are kept apart (`ignored`), across sessions.
+export type Ui = { out: string[]; back: string[] }
+export const UI: Ui = { out: [], back: [] }
+type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; verdicts?: Verdicts | null; ignored?: string[] }
 
 export function toViewModel(r: Round | null, o: Opts) {
   const { now, lang } = o
@@ -191,356 +79,91 @@ export function toViewModel(r: Round | null, o: Opts) {
   const okAt = r?.okAt ?? (r?.error ? null : r?.at) ?? null
   // a scheduled round should have run by now (interval + 15 min) and none did
   const isLate = Boolean(okAt && !r?.error && now - Date.parse(okAt) > (o.minutes + 15) * 6e4)
-  // The line under the title: what needs me, then when Argos last looked; a failed check
-  // says so in red, with how old the data under it is.
   const failed = Boolean(r?.error)
-  const checked = o.running
-    ? t(lang, 'ui_checking')
-    : !okAt
-      ? ''
-      : failed
-        ? t(lang, 'in_data_from', ago(okAt, now, lang))
-        : t(lang, 'in_checked', ago(okAt, now, lang))
+  const checked = o.running ? t(lang, 'ui_checking') : !okAt ? '' : t(lang, failed ? 'in_data_from' : 'in_checked', ago(okAt, now, lang))
   const error = r?.error ? { why: reason(r.error, lang), isAuth: /gh auth|not logged/i.test(r.error) } : null
   const head = { running: o.running, checked, failed, error, isLate }
 
-  if (!r) return { ...head, state: o.running ? ('loading' as const) : ('never' as const), repoCount: 0 }
+  if (!r) return { ...head, state: o.running ? ('loading' as const) : ('never' as const) }
   if (r.error && !okAt) return { ...head, state: 'noData' as const }
   const connected = r.repos ?? []
   if (r.needsRepos || !connected.length) return { ...head, state: 'noRepos' as const }
 
-  const pending = [...(r.pending ?? [])].sort(byRank)
-  const seenUrl = new Set<string>()
-  const allRaw = [...pending, ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !seenUrl.has(p.url) && Boolean(seenUrl.add(p.url)))
-  // An ignored author is gone from every view, count and need-you; a review asked of me always shows.
-  const ignored = new Set(o.ignored ?? [])
-  const isIgnored = (p: Item) => ignored.has(authorOf(p)) && p.kind !== 'review'
-  const all = allRaw.filter(p => !isIgnored(p))
-  // the one author the lists are filtered to, when the person tapped a chip
-  const author = all.some(p => authorOf(p) === ui.author) ? ui.author : ''
-  const byAuthor = (p: Item) => !author || authorOf(p) === author
-
-  // Repos by short name, unless two share it: then owner/name, so they never look alike.
-  const names = [...new Set([...connected, ...all.map(p => p.repo)])]
+  // Every open PR once, in a fixed order (repo, then number), so the list never jumps.
+  const seen = new Set<string>()
+  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])]
+    .filter(p => !seen.has(p.url) && Boolean(seen.add(p.url)))
+    .sort((a, b) => a.repo.localeCompare(b.repo) || a.number - b.number)
+  const names = [...new Set(all.map(p => p.repo))]
   const short = (repo: string) => (names.filter(n => shortRepo(n) === shortRepo(repo)).length > 1 ? repo : shortRepo(repo))
-  const scope = names.includes(ui.filter) ? ui.filter : ''
-  const inScope = all.filter(p => !scope || p.repo === scope)
-  const picks = new Set(ui.selected)
-  // the repo prefix only under All repos, when the list mixes repos
-  const showRepo = names.length > 1 && !scope
-  const asked = (url: string) => mentions(o.prompt, url)
+  const authorsOut = new Set(o.ignored ?? [])
+  const byHand = new Set(ui.out)
+  const back = new Set(ui.back)
 
-  const vOf = (p: Item) => verdictOf(p, o.verdicts?.prs?.[p.url])
-  // bare: under a repo's own header, the ref drops the repo it would repeat
-  const row = (p: Item, section: Section, bare = false) => {
-    const v = vOf(p)
-    const a = action(p, lang, v)
-    const isPicked = picks.has(keyOf(p))
-    // tint only where I act; a pick overrides it, the glyph keeps the signal colour
-    const tn = section === 'move' || section === 'ready' ? tone(p) : null
+  const rows = all.map(p => {
+    const key = keyOf(p)
+    const v = verdictOf(p, o.verdicts?.prs?.[p.url])
+    const auto = outOf(p, v)
+    const name = authorOf(p)
+    const kind = kindOf(p)
+    // who left it out: the author switch, the person's own tap, or the pane by itself
+    const leftBy = authorsOut.has(name) ? 'author' : auto === 'running' ? 'running' : byHand.has(key) ? 'hand' : auto && !back.has(key) ? auto : null
     return {
-      key: keyOf(p),
+      key,
       url: p.url,
-      number: p.number,
-      glyph: glyph(p),
-      glyphTip: glyphTip(p, lang),
-      ref: showRepo && !bare ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
+      repo: p.repo,
+      ref: names.length > 1 ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
       title: p.title,
-      wait: ageShort(since(p), now, lang),
-      // two days and more: white and bold; age is weight, so colours stay free
-      isOld: now - Date.parse(since(p)) >= 2 * 864e5,
-      // a verdict leads the tags and takes a narrower fit; its top finding gets a line of its own
-      tags: v.state === 'none' ? tags(p, lang) : [verdictTag(v, lang), ...tags(p, lang, 260)],
-      // the top finding: a blocker, or what a pass or a partial read must not hide
-      finding: v.finding && ['issues', 'pass', 'partial'].includes(v.state) ? `${v.finding}${v.issues > 1 ? ` · +${v.issues - 1}` : ''}` : '',
-      act: a.label,
-      prompt: a.prompt,
-      isPicked,
-      inPrompt: asked(p.url),
-      box: isPicked ? PICKED : tn ? tint(tn) : NEUTRAL,
+      author: name,
+      avatar: kind === 'agent' ? AVATAR.agent : AVATAR[kind](name),
+      authorTip: t(lang, `tip_who_${kind}`, name),
+      verdict: v.state === 'none' ? null : verdictTag(v, lang),
+      isIn: leftBy === null,
+      // why the pane left a line out, said at its end; the person's own choices need no word
+      why: leftBy === null || leftBy === 'hand' || leftBy === 'author' ? '' : t(lang, `why_${leftBy}`),
+      // a running validation and an author left out are not toggled from the line
+      canToggle: leftBy !== 'running' && leftBy !== 'author',
+      // the pane left it out by itself: a tap brings it back rather than leaving it out
+      isAuto: leftBy !== null && leftBy !== 'hand' && leftBy !== 'author' && leftBy !== 'running',
     }
-  }
-  // Who opened these PRs: one chip per author, the busiest first, people before bots at a tie.
-  const authorsIn = (prs: Item[]) => {
-    const by = new Map<string, { name: string; kind: 'human' | 'bot' | 'agent'; count: number }>()
-    for (const p of prs) {
-      const name = authorOf(p)
-      const a = by.get(name) ?? { name, kind: kindOf(p), count: 0 }
-      a.count++
-      by.set(name, a)
-    }
-    const order = { human: 0, agent: 1, bot: 2 }
-    return [...by.values()]
-      .sort((a, b) => b.count - a.count || order[a.kind] - order[b.kind] || a.name.localeCompare(b.name))
-      .map(a => ({ ...a, svg: a.kind === 'agent' ? AVATAR.agent : AVATAR[a.kind](a.name), tip: t(lang, `tip_who_${a.kind}`, a.name), isActive: a.name === author }))
-  }
-
-  // The collapse system, one for every view. A section's header keeps what must not hide when it
-  // is folded: the count merged with what needs me ("3 need you", "7 · 2 need you", "7"), what is
-  // picked, and the glyph of its worst signal (blocked › feedback › asked of me › validator issues
-  // › ready › waiting). Which sections start open is each view's; a fold by hand stands until
-  // something new that needs me arrives in that section.
-  const worst = (p: Item) => {
-    const tn = sectionOf(p) === 'team' ? null : tone(p)
-    if (tn === 'error') return 0
-    if (tn === 'warning') return 1
-    if (tn === 'suggestion') return 2
-    if (vOf(p).state === 'issues') return 3
-    if (tn === 'success') return 4
-    return 5
-  }
-  const WORST = [
-    { svg: I.pr(C.error), tip: 'tip_g_error' },
-    { svg: I.pr(C.warning), tip: 'tip_g_warning' },
-    { svg: I.pr(C.suggestion), tip: 'tip_g_suggestion' },
-    { svg: STARS.done, tip: 'tip_g_issues' },
-    { svg: I.pr(C.success), tip: 'tip_g_success' },
-    { svg: I.pr(C.subtle), tip: 'tip_g_waiting' },
-  ]
-  const needsMe = (p: Item) => sectionOf(p) === 'move'
-  // total: the section's PRs before an author filter, so a filtered header reads "8 of 17"
-  const fold = (view: string, id: string, label: string, prs: Item[], openByDefault: boolean, total = prs.length) => {
-    const foldKey = `${view}:${id}`
-    const needKeys = prs.filter(needsMe).map(keyOf)
-    const keys = prs.map(keyOf)
-    const picked = keys.filter(k => picks.has(k)).length
-    const hand = ui.folds[foldKey]
-    // a filter opens what it shows; clearing it brings back each section's own fold
-    const isOpen = author ? true : hand && !(hand.open === false && needKeys.some(k => !hand.needs.includes(k))) ? hand.open : openByDefault
-    const rank = Math.min(5, ...prs.map(worst))
-    const need = needKeys.length
-    return {
-      foldKey,
-      label,
-      count: prs.length,
-      tally: author ? t(lang, 'in_of', prs.length, total) : need && need === prs.length ? t(lang, 'in_need', need) : need ? `${prs.length} · ${t(lang, 'in_need', need)}` : String(prs.length),
-      isUrgent: need > 0,
-      picked: picked ? t(lang, 'in_picked', picked) : '',
-      allPicked: keys.length > 0 && picked === keys.length,
-      keys,
-      needKeys,
-      rank,
-      isOpen,
-      glyph: WORST[rank]!.svg,
-      glyphTip: t(lang, WORST[rank]!.tip),
-    }
-  }
-
-  // Needs me: Your move and Ready to merge start open; Waiting, Drafts and Team start folded.
-  const OPEN_NEEDS: Section[] = ['move', 'ready']
-  const sections = SECTIONS.map(id => {
-    const scoped = inScope.filter(p => sectionOf(p) === id).sort(byRank)
-    const prs = scoped.filter(byAuthor)
-    return { id: id as string, total: scoped.length, ...fold('needs', id, t(lang, `s_${id}`), prs, OPEN_NEEDS.includes(id), scoped.length), prs: prs.map(p => row(p, id)) }
   })
-  // the head counts what is there, whatever the author filter shows
-  const n = (id: Section) => sections.find(s => s.id === id)!.total
-  const need = n('move') ? t(lang, 'in_need', n('move')) : ''
-  const team = inScope.filter(p => p.kind === 'other')
-  // Nothing needs me: a green banner takes Your move's place and says what else there is.
-  const clear = n('move')
-    ? null
-    : [
-        ...(n('ready') ? [t(lang, 'in_clear_ready', n('ready'))] : []),
-        ...(n('waiting') ? [t(lang, 'in_clear_waiting', n('waiting'))] : []),
-        ...(n('drafts') ? [t(lang, 'in_clear_drafts', n('drafts'))] : []),
-      ].join(' · ')
 
-  // One Select narrows the list to a repo, when there is more than one; each says how many
-  // open PRs it holds.
-  // the count follows the view: the rows that view shows for the repo
-  const viewed = ui.view === 'team' ? all.filter(p => p.kind === 'other') : all
-  const countIn = (repo: string) => viewed.filter(p => p.repo === repo).length
-  const repos =
-    names.length > 1
-      ? [{ id: '', name: `${t(lang, 'in_all_repos')} · ${viewed.length}` }, ...names.map(repo => ({ id: repo, name: `${short(repo)} · ${countIn(repo)}` }))]
-      : []
-  // By repo: one section per repo with open PRs, open when something in it needs me; inside, what
-  // needs me first, four rows, then "Show N more"; refs drop the repo the header names. Order: what
-  // needs me, then the worst signal, then the busiest.
-  const repoSections = (ui.view === 'repos' ? names : [])
-    .map(repo => {
-      const inRepo = all.filter(p => p.repo === repo).sort((a, b) => Number(needsMe(b)) - Number(needsMe(a)) || byRank(a, b))
-      const prs = inRepo.filter(byAuthor)
-      const f = fold('repos', repo, short(repo), prs, prs.some(needsMe), inRepo.length)
-      const shown = f.isOpen ? (ui.more.includes(`repo:${repo}`) ? prs : prs.slice(0, 4)) : []
-      return {
-        repo,
-        ...f,
-        // who opened this repo's PRs, under its header while it is open
-        authors: authorsIn(inRepo),
-        prs: shown.map(p => row(p, sectionOf(p), true)),
-        more: f.isOpen && prs.length > shown.length ? t(lang, 'in_more', prs.length - shown.length) : '',
-      }
-    })
-    .filter(s => s.count > 0)
-    .sort((a, b) => b.needKeys.length - a.needKeys.length || a.rank - b.rank || b.count - a.count || a.label.localeCompare(b.label))
-
-  // The batch: every pick, each row's winning action as one line of the prompt; a pick that
-  // left the list (merged, closed) is dropped by the next press.
-  const items = all.filter(p => picks.has(keyOf(p)))
-  const lines = items.map(p => ({ p, a: action(p, lang, vOf(p)) }))
-  const fresh = lines.filter(({ p }) => !asked(p.url))
-  const isTeam = ui.view === 'team' && team.length > 0
-  const view = isTeam ? 'team' : ui.view === 'repos' && names.length > 1 ? 'repos' : ''
-  const valid = {
-    validate: true,
-    revalidate: items.every(p => ['stale', 'pass', 'issues'].includes(vOf(p).state)),
-    fix: items.every(p => p.kind === 'mine' && vOf(p).state === 'issues'),
-    draft: items.every(p => p.kind !== 'mine' && vOf(p).state === 'issues'),
-    // a bot's bumps are merged in bulk; Argos still checks each and merges only on a yes
-    merge: items.every(p => kindOf(p) === 'bot'),
+  // Authors as switches: tap to leave one out everywhere, tap again to bring them back. The
+  // busiest first, people before bots at a tie.
+  const order = { human: 0, agent: 1, bot: 2 }
+  const counts = new Map<string, { name: string; kind: 'human' | 'bot' | 'agent'; count: number }>()
+  for (const p of all) {
+    const name = authorOf(p)
+    const a = counts.get(name) ?? { name, kind: kindOf(p), count: 0 }
+    a.count++
+    counts.set(name, a)
   }
-  const acts = BATCH_ACTS.filter(k => valid[k])
-  const chosen = acts.find(k => k === ui.act) ?? acts[0]!
-  const refOf = (p: Item) => `${short(p.repo)}#${p.number}`
-  const teamBatch = {
-    detail: `${t(lang, `bo_${chosen}`)} ${items.slice(0, 4).map(refOf).join(', ')}${items.length > 4 ? ` +${items.length - 4}` : ''}`,
-    prompt: [t(lang, `b_${chosen}`), ...items.map(p => `- ${p.url}`)].join('\n'),
-    acts: acts.map(k => ({ id: k, name: t(lang, `bo_${k}`) })),
-    act: chosen,
-  }
+  const authors = [...counts.values()]
+    .sort((a, b) => b.count - a.count || order[a.kind] - order[b.kind] || a.name.localeCompare(b.name))
+    .map(a => ({ ...a, svg: a.kind === 'agent' ? AVATAR.agent : AVATAR[a.kind](a.name), tip: t(lang, `tip_who_${a.kind}`, a.name), isOut: authorsOut.has(a.name) }))
 
-  // Auto-validate and the batch in flight: "Validating 9 of 22" while any of it runs.
+  // What the pane left out by itself, in one line.
+  const autoOut = (['changes', 'draft', 'done'] as const)
+    .map(why => [why, rows.filter(x => x.isAuto && x.why === t(lang, `why_${why}`)).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([why, n]) => t(lang, `out_${why}`, n))
+    .join(' · ')
+
+  const going = rows.filter(x => x.isIn)
+  // Validation in flight: "Validating 9 of 22" while any of it runs.
   const vb = o.verdicts?.batch?.urls ?? []
   const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
-  const progress = vrun ? { done: vb.length - vrun, total: vb.length, label: t(lang, 'in_validating', vb.length - vrun, vb.length), pct: `${Math.round(((vb.length - vrun) / vb.length) * 100)}%` } : null
-
-  // The team view: verdict groups. Issues found starts open, and Validating while a run is active.
-  const groups = GROUPS.map(id => {
-    const scoped = team.filter(p => vOf(p).state === id).sort(byRank)
-    const prs = scoped.filter(byAuthor)
-    const f = fold('team', id, t(lang, `g_${id}`), prs, id === 'issues' || (id === 'run' && Boolean(progress)), scoped.length)
-    const shown = f.isOpen ? (ui.more.includes(id) ? prs : prs.slice(0, SHOWN[id])) : []
-    const hidden = prs.slice(shown.length)
-    return {
-      id,
-      ...f,
-      // picking a whole group is the point of the view; a running one is busy
-      pickAll: id === 'run' ? null : t(lang, f.allPicked ? 'in_unpick_all' : 'in_pick_all'),
-      more: f.isOpen && hidden.length ? t(lang, hidden.every(p => picks.has(keyOf(p))) ? 'in_more_picked' : 'in_more', hidden.length) : '',
-      rows: shown.map(p => {
-        const isPicked = picks.has(keyOf(p))
-        return { key: keyOf(p), url: p.url, glyph: I.pr(C.subtle), glyphTip: t(lang, 'tip_g_team'), ref: showRepo ? refOf(p) : `#${p.number}`, title: p.title, verdict: verdictTag(vOf(p), lang), isPicked, box: isPicked ? PICKED : { bg: undefined, border: undefined } }
-      }),
-    }
-  })
-  // Authors (design 00d). Each one's chip: the avatar by kind, the name and the count; people
-  // before bots at the same count. Needs me and Team get an Authors section at the top, scoped like
-  // the list, open by itself when one author floods it (a third or more of the PRs, or five);
-  // folded, its header names the top two.
-  const viewKey = view === 'team' ? 'team' : 'needs'
-  const scopeForAuthors = view === 'team' ? team : inScope
-  const authorsSection = view === 'repos' || !scopeForAuthors.length ? null : (() => {
-    const chips = authorsIn(scopeForAuthors)
-    const top = chips[0]!
-    const flood = top.count >= 5 || top.count / scopeForAuthors.length >= 0.3
-    const hand = ui.folds[`${viewKey}:authors`]
-    return {
-      foldKey: `${viewKey}:authors`,
-      label: t(lang, 'in_authors'),
-      count: chips.length,
-      tally: chips.slice(0, 2).map(a => `${a.name} ${a.count}`).join(' · '),
-      isUrgent: false,
-      picked: '',
-      glyph: top.svg,
-      glyphTip: top.tip,
-      isOpen: author ? true : hand ? hand.open : flood,
-      keys: [],
-      needKeys: [],
-      allPicked: false,
-      chips,
-    }
-  })()
-  // Tapping a chip filters to that author: one line offers to pick them all, validate them all in
-  // one prompt line, or ignore the author everywhere.
-  const theirs = author ? (view === 'team' ? team : view === 'repos' ? all : inScope).filter(byAuthor) : []
-  const authorLine = author
-    ? {
-        name: author,
-        count: theirs.length,
-        keys: theirs.map(keyOf),
-        // what an ignore would hide, in every repo and view
-        hidden: all.filter(p => authorOf(p) === author && p.kind !== 'review').length,
-        pick: t(lang, 'in_pick_n', theirs.length),
-        validate: t(lang, 'in_validate_n', theirs.length),
-        prompt: [t(lang, 'b_validate'), ...theirs.map(p => `- ${p.url}`)].join('\n'),
-        urls: theirs.map(p => p.url),
-      }
-    : null
-  // Nothing an ignore hides is lost: the head counts it, and a folded Ignored section ends every
-  // view with Unignore per author.
-  const hiddenPrs = allRaw.filter(isIgnored)
-  const ignoredSection = ignored.size
-    ? (() => {
-        const chips = authorsIn(hiddenPrs).concat([...ignored].filter(a => !hiddenPrs.some(p => authorOf(p) === a)).map(a => ({ name: a, kind: 'human' as const, count: 0, svg: AVATAR.human(a), tip: a, isActive: false })))
-        const hand = ui.folds[`${viewKey}:ignored`]
-        return {
-          foldKey: `${viewKey}:ignored`,
-          label: t(lang, 'in_ignored'),
-          count: hiddenPrs.length,
-          tally: String(hiddenPrs.length),
-          isUrgent: false,
-          picked: '',
-          glyph: chips[0]?.svg ?? AVATAR.human('?'),
-          glyphTip: t(lang, 'in_ignored'),
-          isOpen: hand ? hand.open : false,
-          keys: [],
-          needKeys: [],
-          allPicked: false,
-          chips,
-        }
-      })()
-    : null
-
-  // Fold all / Open all, for the sections the current view shows: "Fold all" while any is open.
-  const shownSections = (view === 'team' ? groups : view === 'repos' ? repoSections : sections).filter(x => x.count > 0)
-  const anyOpen = shownSections.some(x => x.isOpen)
-  const foldAll = shownSections.length
-    ? { label: t(lang, anyOpen ? 'in_fold_all' : 'in_open_all'), open: !anyOpen, targets: shownSections.map(x => ({ foldKey: x.foldKey, needKeys: x.needKeys })) }
-    : null
+  const progress = vrun ? { label: t(lang, 'in_validating', vb.length - vrun, vb.length), pct: `${Math.round(((vb.length - vrun) / vb.length) * 100)}%` } : null
 
   return {
     ...head,
     state: 'ok' as const,
-    foldAll,
-    authorsSection,
-    authorLine,
-    ignoredSection,
-    ignoredCount: hiddenPrs.length,
-    undo: o.undo && ignored.has(o.undo.author) ? { label: t(lang, 'in_ignored_line', o.undo.author, o.undo.hidden), author: o.undo.author } : null,
-    need,
-    teamCount: team.length,
-    clear,
-    // the views: what needs me, by repo when there is more than one, the team when it has PRs
-    views:
-      team.length || names.length > 1
-        ? [
-            { id: '', name: t(lang, 'in_view_needs', n('move')) },
-            ...(names.length > 1 ? [{ id: 'repos', name: t(lang, 'in_view_repos', names.filter(r => all.some(p => p.repo === r)).length) }] : []),
-            ...(team.length ? [{ id: 'team', name: t(lang, 'in_view_team', team.length) }] : []),
-          ]
-        : [],
-    view,
-    repoSections,
-    groups,
-    auto: { tip: t(lang, 'tip_auto'), value: o.verdicts?.auto ?? 'off', options: ['off', 'mine', 'all'].map(id => ({ id, name: t(lang, `au_${id}`) })) },
+    summary: t(lang, 'in_to_validate', going.length, new Set(going.map(x => x.repo)).size),
+    autoLine: autoOut ? t(lang, 'in_auto_out', autoOut) : '',
+    authors,
+    rows,
     progress,
-    counts: Object.fromEntries(SECTIONS.map(id => [id, n(id)])) as Record<Section, number>,
-    repos,
-    filter: scope,
-    sections,
-    batch: items.length
-      ? {
-          count: t(lang, 'in_picked', items.length),
-          detail: lines.map(({ p, a }) => `${a.label} #${p.number}`).join(' · '),
-          prompt: (fresh.length ? fresh : lines).map(({ a }) => a.prompt).join('\n'),
-          urls: items.map(p => p.url),
-          // the team view sends one action for every pick, chosen from those valid for all
-          ...(isTeam ? teamBatch : { acts: [], act: '' }),
-        }
-      : null,
-    keep: ui.selected.filter(k => all.some(p => keyOf(p) === k)),
+    validate: { label: t(lang, 'in_validate_n', going.length), urls: going.map(x => x.url), count: going.length },
   }
 }
 export type ViewModel = ReturnType<typeof toViewModel>

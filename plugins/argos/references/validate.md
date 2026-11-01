@@ -39,11 +39,11 @@ node scripts/verdicts.mjs set <pr-url> --sha <headRefOid> --issues <n> --attenti
 
 ## 4. Report
 
-One short table in the user's language: PR, blocks, attention, top finding. Then the next step the pane offers: **Fix issues** on the user's PRs, **Draft review** on the others'. Nothing is posted without the user's yes.
+One short table in the user's language: PR, blocks, attention, top finding. Then the next step: fix what was found on the user's PRs, draft a review on the others'. Nothing is posted without the user's yes.
 
 ## Auto-validate
 
-`node scripts/verdicts.mjs auto <off|mine|all>` sets it; the pane's own picker does the same. When a round finds new commits on a PR whose verdict is now old (only the user's PRs with `mine`, every watched PR with `all`), the mod starts a background subagent with this job for them, at most ten at a time. It spends tokens without asking, so it is off until the user turns it on.
+`node scripts/verdicts.mjs auto <off|mine|all>` sets it. When a round finds new commits on a PR whose verdict is now old (only the user's PRs with `mine`, every watched PR with `all`), the mod starts a background subagent with this job for them, at most ten at a time. It spends tokens without asking, so it is off until the user turns it on.
 
 The subagent works under three rules, because nobody watches it:
 

@@ -13,10 +13,10 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 | The user wants | Read |
 |---|---|
 | what needs them now, across their PRs and their review queue | `references/mine.md`, "Job 1" |
-| to fix their own PR: review comments, a failing CI, a conflict (pane: Resolve, Fix CI, Reply, Find a reviewer, Nudge, "to fix with Argos") | `references/mine.md`, "Job 2", and `references/address.md` |
-| what reviewers keep asking them, or whether their PR is ready for review (pane: Ready? on a draft) | `references/lessons.md` |
-| to review, approve or merge a teammate's PR (pane: Review, Review again, Merge, "to review with Argos") | `references/review.md` |
-| to validate PRs in a batch and keep a verdict on each row (pane: Validate, Revalidate, auto-validate), or to fix what a validation found (pane: Fix issues, Draft review) | `references/validate.md`; then `references/address.md` to fix, `references/review.md` to draft a review |
+| to fix their own PR: review comments, a failing CI, a conflict | `references/mine.md`, "Job 2", and `references/address.md` |
+| what reviewers keep asking them, or whether their PR is ready for review | `references/lessons.md` |
+| to review, approve or merge a teammate's PR | `references/review.md` |
+| to validate PRs in a batch and keep a verdict on each row (pane: Validate N, auto-validate), or to fix what a validation found | `references/validate.md`; then `references/address.md` to fix, `references/review.md` to draft a review |
 | to connect, list or remove a repository, change the language, run a round, or have PRs watched on a schedule | `references/vigil.md` |
 
 ## For every job

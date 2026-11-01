@@ -51,24 +51,12 @@ declare module 'claude-code' {
       isRunning: boolean
       // showing the sample round from /argos demo
       isDemo: boolean
-      // PRs picked to send to the AI (owner/name#number)
-      selected: string[]
-      // the repo the list is narrowed to (owner/name); '' = every connected repo
-      filter: string
-      // '' the inbox of what needs me, 'team' the team's PRs by verdict
-      view: string
-      // the verdict groups of the team view shown in full
-      more: string[]
-      // the batch action picked in the team view
-      act: string
-      // sections opened or folded by hand, by view and section, with the PRs that needed me then
-      folds: Record<string, { open: boolean; needs: string[] }>
-      // the one author the lists are filtered to; '' = everyone
-      author: string
-      // authors hidden everywhere (kept in $.store across sessions)
+      // PRs left out of the validation by hand (owner/name#number)
+      out: string[]
+      // PRs the pane left out by itself that the person brought back
+      back: string[]
+      // authors left out everywhere (kept in $.store across sessions)
       ignored: string[]
-      // the last ignore, offered back until the next tap
-      undo: { author: string; hidden: number } | null
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null
     }
