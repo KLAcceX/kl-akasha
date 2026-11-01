@@ -28,7 +28,6 @@ const WORDS = {
     // batch AI validation (pane)
     in_validating: (x, y) => `Validando ${x} de ${y}`,
     vd_old: "velho",
-    vd_partial: "parcial",
     b_auto: "Valide estes PRs com o Argos (job validate) e registre o veredito de cada um com verdicts.mjs. Só leia: não comente, aprove nem faça push.",
     // PR inbox (pane)
     in_title: "Pull requests",
@@ -116,7 +115,6 @@ const WORDS = {
     // batch AI validation (pane)
     in_validating: (x, y) => `Validating ${x} of ${y}`,
     vd_old: "old",
-    vd_partial: "partial",
     b_auto: "Validate these PRs with Argos (the validate job) and record each verdict with verdicts.mjs. Read only: do not comment, approve or push.",
     // PR inbox (pane)
     in_title: "Pull requests",

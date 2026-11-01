@@ -33,7 +33,7 @@ export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   const more = v.attention ? `+${v.attention}` : ''
   if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: `✓${more}`, ...purple, text: `✦✓${more}`, tip: t(lang, 'tip_v_pass', v.attention) }
   if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, ...purple, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
-  if (v.state === 'partial') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_partial'), color: C.subtle, text: `☆${t(lang, 'vd_partial')}`, tip: t(lang, 'tip_v_partial', v.attention) }
+  if (v.state === 'partial') return { k: 'sig', svg: STARS.stale, w: 16, count: '½', color: C.subtle, text: '☆½', tip: t(lang, 'tip_v_partial', v.attention) }
   if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, count: '…', color: C.subtle, text: '◌…', tip: t(lang, 'tip_v_run') }
   if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_old'), color: C.subtle, text: `☆${t(lang, 'vd_old')}`, tip: t(lang, 'tip_v_stale') }
   return { k: 'sig', svg: STARS.none, w: 16, text: '✧', tip: t(lang, 'tip_v_none') }

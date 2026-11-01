@@ -339,10 +339,10 @@ export const register: Register = (on, options) => {
     }
     const authors = (
       <Box key="authors" flexDirection="column" gap="xs">
-        <Text size="caption" color={C.subtle}>
-          {t(lang, 'in_leave_out')}
-        </Text>
-        <Box flexDirection="row" flexWrap="wrap" gap="xs">
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap="xs">
+          <Text size="caption" color={C.subtle}>
+            {t(lang, 'in_leave_out')}
+          </Text>
           {vm.authors.map(a => (
             <Box key={`chip:${a.name}`} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" borderStyle="round" borderColor={a.isOut ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.14)'}>
               {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 18, 18, a.tip)}
@@ -390,6 +390,7 @@ export const register: Register = (on, options) => {
     )
     // One line per PR, in a fixed order: a box to leave it out (or bring back one the pane left
     // out), where it lives, its title, why it is out, its verdict and who opened it.
+    const VERDICT_W = hasSvg ? 40 : 6
     const BOX = hasSvg ? { on: '☑', off: '☐' } : { on: '[x]', off: '[ ]' }
     type Row = (typeof vm.rows)[number]
     const toggle = (x: Row) => {
@@ -397,8 +398,8 @@ export const register: Register = (on, options) => {
       if (x.isAuto) void update($, back, list => [...list, x.key])
       else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
     }
-    const line = (x: Row) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap="xs">
+    const line = (x: Row, i: number) => (
+      <Box key={x.key} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" backgroundColor={i % 2 ? 'rgba(255,255,255,0.025)' : undefined}>
         <Button key={`pick:${x.key}`} plain={true} dimColor={!x.canToggle} onPress={() => toggle(x)}>
           {x.isIn ? BOX.on : BOX.off}
         </Button>
@@ -419,16 +420,15 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        {x.verdict && (
-          <Box flexDirection="row" alignItems="center" flexShrink={0}>
-            {icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
-            {x.verdict.count && (
-              <Text size="caption" weight="semibold" color={x.verdict.color}>
-                {x.verdict.count}
-              </Text>
-            )}
-          </Box>
-        )}
+        {/* the verdict keeps one width, filled or not, so "why" and the avatars line up */}
+        <Box flexDirection="row" alignItems="center" justifyContent="flex-end" flexShrink={0} width={VERDICT_W}>
+          {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
+          {x.verdict?.count && (
+            <Text size="caption" weight="semibold" color={x.verdict.color}>
+              {x.verdict.count}
+            </Text>
+          )}
+        </Box>
         {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
       </Box>
     )
