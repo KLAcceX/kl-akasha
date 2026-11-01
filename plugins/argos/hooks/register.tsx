@@ -106,6 +106,22 @@ async function addRepo($: any) {
   if (!text.includes('/argos repos add')) await $.prompt.fill({ text: '/argos repos add ', mode: 'replace' })
 }
 
+// Puts one request in the prompt without sending it: appended on a new line when there is a
+// draft, never twice. Two quick presses meet one lock, and a request whose PRs are all in the
+// prompt already adds nothing.
+async function fill($: any, request: string, urls: string[]) {
+  if (busy.has(request)) return
+  busy.add(request)
+  try {
+    const { text } = await $.prompt.read()
+    if (!urls.length || !urls.every(u => mentions(text, u)))
+      await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
+    $.ui.invalidate('ui.render')
+  } finally {
+    busy.delete(request)
+  }
+}
+
 async function openPane($: any, options: PluginOptions) {
   await load($)
   await loadVerdicts($)
@@ -212,13 +228,59 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const [running, last, hidden, now] = await Promise.all([read($, isRunning), read($, round), read($, isHidden), $.clock.now()])
-    const vm = toViewModel(last, { now, lang, minutes, running })
+    const [running, last, hidden, now, picks, shownView, act, judged] = await Promise.all([
+      read($, isRunning),
+      read($, round),
+      read($, isHidden),
+      $.clock.now(),
+      read($, selected),
+      read($, view),
+      read($, batchAct),
+      read($, verdicts),
+    ])
+    const vm = toViewModel(last, { now, lang, minutes, running, ui: { selected: picks, view: shownView, act }, verdicts: judged })
     const band = vm.state === 'ok' ? vm.band : null
-    if (e.props.hasSurvey || hidden || (!running && !band && !vm.failed && !vm.isLate)) return next(e)
+    const batch = vm.state === 'ok' ? vm.batch : null
+    if (e.props.hasSurvey) return next(e)
 
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
+    const Select = (ui as { Select?: any }).Select
+    // The batch: the band is the one place that stays on screen, so picks made in the pane
+    // gather here, right above the prompt they go to, in the orange of "going to the prompt".
+    if (batch)
+      return (
+        <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingX="sm" borderStyle="round" borderColor={rgba(C.claude, 0.55)} backgroundColor={rgba(C.claude, 0.1)}>
+          {e.surface !== 'terminal' && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
+          <Box flexShrink={0}>
+            <Text weight="semibold" color={C.text}>
+              {batch.count}
+            </Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text color={C.subtle} wrap="truncate">
+              {`· ${batch.detail}`}
+            </Text>
+          </Box>
+          {batch.acts.length > 0 && Select && (
+            <Select key="act" value={batch.act} options={batch.acts.map(a => ({ value: a.id, label: a.name }))} onSelect={(v: string) => void update($, batchAct, () => v)} />
+          )}
+          <Button
+            key="send"
+            variant="primary"
+            onPress={async () => {
+              await fill($, batch.prompt, batch.urls)
+              await update($, selected, () => [])
+            }}
+          >
+            {t(lang, 'in_add')}
+          </Button>
+          <Button key="clear" plain={true} dimColor={true} onPress={() => void update($, selected, () => [])}>
+            {t(lang, 'ui_clear')}
+          </Button>
+        </Box>
+      )
+    if (hidden || (!running && !band && !vm.failed && !vm.isLate)) return next(e)
     // The band says "Argos" at a glance and gets out of the way: the 16px logo leading the
     // name, what needs me in body 600, the item in subtle, one secondary See and a quiet Hide,
     // in a quiet violet frame tied to the logo. Every state says what is true: checking, what
@@ -236,23 +298,19 @@ export const register: Register = (on, options) => {
         <Text weight="semibold" color={C.text}>
           Argos
         </Text>
-        <Box flexShrink={0} marginLeft="xs">
+        <Box flexShrink={0}>
           <Text weight="semibold" color={failed && !band && !running ? C.error : C.text}>
             {lead}
           </Text>
         </Box>
-        {/* the verb gives way first; the PR's ref is what makes the band worth a look */}
+        {/* the PR's ref first, then the verb, cut at its end: the ref is what makes the band
+            worth a look, and a cut at the end reads as a sentence that goes on */}
         <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} gap="xs">
           {!running && band && (
             <Box flexShrink={1} minWidth={0}>
               <Text color={C.subtle} wrap="truncate">
-                {`· ${band.verb}:`}
+                {`· ${band.ref} · ${band.verb}`}
               </Text>
-            </Box>
-          )}
-          {!running && band && (
-            <Box flexShrink={0}>
-              <Text color={C.subtle}>{band.ref}</Text>
             </Box>
           )}
           {!running && band?.failed && (
@@ -306,18 +364,7 @@ export const register: Register = (on, options) => {
     // Puts one request in the prompt without sending it: appended on a new line when there
     // is a draft, never twice. Two quick presses meet one lock, and a request whose PRs are
     // all in the prompt already adds nothing.
-    const fillPrompt = async (request: string, urls: string[]) => {
-      if (busy.has(request)) return
-      busy.add(request)
-      try {
-        const { text } = await $.prompt.read()
-        if (!urls.length || !urls.every(u => mentions(text, u)))
-          await $.prompt.fill(text.trim() ? { text: `\n${request}`, mode: 'append' } : { text: request, mode: 'replace' })
-        $.ui.invalidate('ui.render')
-      } finally {
-        busy.delete(request)
-      }
-    }
+    const fillPrompt = (request: string, urls: string[]) => fill($, request, urls)
 
     // The head: "Pull requests" and Check now; under it what needs me and when Argos last
     // looked (a failed check in red); then one Select to narrow to a repo.
@@ -605,38 +652,7 @@ export const register: Register = (on, options) => {
         </Box>
       )
     const clearBanner = vm.clear !== null && banner('clear', { bg: rgba(C.success, TINT + 0.01), border: rgba(C.success, 0.35) }, I.approved, t(lang, 'in_clear'), vm.clear)
-    // The batch: what is picked, each row's action, and the pane's one primary button.
-    const batch = vm.batch && (
-      <Box key="batch" flexDirection="column" gap="sm" padding="sm" borderStyle="round" borderColor={rgba(C.claude, 0.55)} backgroundColor={rgba(C.claude, 0.1)}>
-        <Box flexDirection="row" alignItems="center" gap="xs">
-          <Box flexGrow={1}>
-            <Text weight="semibold" color={C.text}>
-              {vm.batch.count}
-            </Text>
-          </Box>
-          <Button key="clear" plain={true} onPress={() => void update($, selected, () => [])}>
-            {t(lang, 'ui_clear')}
-          </Button>
-        </Box>
-        <Text size="caption" color={C.subtle} wrap="truncate">
-          {vm.batch.detail}
-        </Text>
-        <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="xs">
-          {vm.batch.acts.length > 0 && pick('act', vm.batch.act, vm.batch.acts, v => void update($, batchAct, () => v))}
-          <Button
-            key="send"
-            variant="primary"
-            onPress={async () => {
-              await fillPrompt(vm.batch!.prompt, vm.batch!.urls)
-              await update($, selected, () => [])
-            }}
-          >
-            {t(lang, 'in_add')}
-          </Button>
-        </Box>
-      </Box>
-    )
-    if (vm.view === 'team') return frame(head(true), failedBanner, ...vm.groups.map(group), batch)
-    return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section), batch)
+    if (vm.view === 'team') return frame(head(true), failedBanner, ...vm.groups.map(group))
+    return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section))
   })
 }
