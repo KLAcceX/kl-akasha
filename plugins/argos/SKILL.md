@@ -1,6 +1,6 @@
 ---
 name: argos
-description: Watch pull requests so none goes stale. Reports which of the user's PRs need them now (comments, change requests, failing CI, conflicts) and which PRs wait for their review; fixes the user's own PR after review (code changes and draft replies); reviews a teammate's PR with depth matched to how critical its task is, against the task's acceptance criteria and Gherkin scenarios and the project's own review rules, and approves or merges it only after that review; learns what reviewers keep asking the user in each repo and checks the next PR against those lessons before review; runs the vigil on a schedule and connects or disconnects the repositories it watches. Drafts first: nothing is pushed, posted, approved or merged without the user's yes. Use whenever the user mentions PRs, reviews, review comments, CI on a PR, approving or merging, watching repos, or picks anything in the Argos pane, even with just a PR link. Requests in any language count.
+description: Watch pull requests so none goes stale. Reports which of the user's PRs need them now (comments, change requests, failing CI, conflicts) and which PRs wait for their review; fixes the user's own PR after review (code changes and draft replies); reviews a teammate's PR with depth matched to how critical its task is, against the task's acceptance criteria and Gherkin scenarios and the project's own review rules, and approves or merges it only after that review; learns what reviewers keep asking the user in each repo and checks the next PR against those lessons before review; validates many PRs in one go and keeps a verdict on each; runs the vigil on a schedule and connects or disconnects the repositories it watches. Drafts first: nothing is pushed, posted, approved or merged without the user's yes. Use whenever the user mentions PRs, reviews, review comments, CI on a PR, approving or merging, watching repos, or picks anything in the Argos pane, even with just a PR link. Requests in any language count.
 compatibility: The bundled scripts and the Argos mod need the GitHub CLI and Node.js. Without the CLI, use a GitHub connector and compute the same signals.
 ---
 
@@ -16,6 +16,7 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 | to fix their own PR: review comments, a failing CI, a conflict (pane: Resolve, Fix CI, Reply, Find a reviewer, Nudge, "to fix with Argos") | `references/mine.md`, "Job 2", and `references/address.md` |
 | what reviewers keep asking them, or whether their PR is ready for review (pane: Ready? on a draft) | `references/lessons.md` |
 | to review, approve or merge a teammate's PR (pane: Review, Review again, Merge, "to review with Argos") | `references/review.md` |
+| to validate PRs in a batch and keep a verdict on each row (pane: Validate, Revalidate, auto-validate), or to fix what a validation found (pane: Fix issues, Draft review) | `references/validate.md`; then `references/address.md` to fix, `references/review.md` to draft a review |
 | to connect, list or remove a repository, change the language, run a round, or have PRs watched on a schedule | `references/vigil.md` |
 
 ## For every job
@@ -29,5 +30,5 @@ Argos Panoptes, the hundred-eyed giant, never closed all his eyes at once. Here 
 ## Self-check
 
 ```bash
-node scripts/queue.mjs --self-test && node scripts/round.mjs --self-test && node scripts/facts.mjs --self-test && node scripts/lessons.mjs --self-test
+node scripts/queue.mjs --self-test && node scripts/round.mjs --self-test && node scripts/facts.mjs --self-test && node scripts/lessons.mjs --self-test && node scripts/verdicts.mjs --self-test
 ```

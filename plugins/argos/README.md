@@ -53,6 +53,17 @@ The plugin ships a mod that runs the vigil on its own timer, at no token cost. I
 - **Batch:** picked rows turn orange and a bar at the end of the list says how many and what each will do; **Add to prompt** puts every pick's action in as one line each.
 - **States:** a green "Nothing needs you" banner when Your move is empty, placeholders on the first check, a red banner when a check fails (the last data stays, dimmed, and still acts; **Fix auth** asks for help with `gh`), and one button to set up a repo when none is connected.
 
+### Batch AI validation
+
+A validation is a quick AI pass over a PR that leaves a **verdict** on its row: a purple star with ✓ when it passed, the number of issues when it did not, … while it runs, and "old" once new commits land.
+
+- **Two views:** "Needs me" is the inbox above, each judged row led by its verdict and its top finding in one purple line. "Team" groups the team's PRs by verdict (issues found, validating, not validated, stale, passed) in one-line rows, a few per group until **Show N more**.
+- **Pick all** per group puts a whole group in the batch; the batch bar then offers one action valid for every pick: **Validate**, **Revalidate**, **Fix issues** (yours) or **Draft reviews** (others'). The prompt names every PR.
+- **Rows gain three actions** when a verdict calls for them: **Fix issues** on yours, **Draft review** on others', **Revalidate** on an old one.
+- **Auto-validate:** off, new commits on mine, or new commits on all. When a round finds an old verdict, Argos starts one background subagent to revalidate (ten PRs at most per round). It spends tokens without asking, so it starts off. While a batch runs, the line reads "Validating 9 of 22" with a progress bar.
+
+The AI records each verdict with `scripts/verdicts.mjs` (see `references/validate.md`); the pane follows as each one lands. Nothing is commented, approved or pushed by a validation.
+
 **Every action only puts a request in the prompt.** Two quick presses add it once, a PR already in the prompt is not added again, and nothing reaches GitHub until you send it and say yes to what the AI drafts. With several sessions open, only one runs each round.
 
 | Command | Does |
@@ -85,6 +96,7 @@ Everything personal stays outside your repos, in `~/.claude/kl-akasha/`:
 |---|---|
 | `argos/repos.json` | connected repositories |
 | `argos/state.json`, `argos/last-round.json` | what the last round saw, so only news is reported |
+| `argos/verdicts.json` | the last AI validation of each PR, the batch in flight, and the auto-validate setting |
 | `argos/lessons/<owner>/<repo>.md` | the lessons learned per repo |
 | `criticality.json` | your rubric: how critical each repo's tasks are |
 

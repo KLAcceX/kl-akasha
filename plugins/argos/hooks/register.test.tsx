@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { bars, fit, pill } from './look'
-import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb } from './register'
+import { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb, verdictOf } from './register'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -364,4 +364,115 @@ test('a failed round shows the reason round.mjs wrote, not the wrapper', async (
   expect((await ui.find({ type: 'Text', text: /gh auth login/ }))?.text).toContain('gh auth login')
   expect((await ui.find({ key: 'failed-btn' }))?.text).toBe('Fix auth')
   await ui.unmount()
+})
+
+// Batch AI validation: a verdict per PR, kept against the head commit it was made on.
+const V = (over: Record<string, unknown>) => ({ state: 'done', sha: 'abc1234', issues: 0, finding: '', at: round.at, ...over })
+const judged = {
+  auto: 'off',
+  batch: { urls: ['u8', 'u9'], at: round.at },
+  prs: {
+    u219: V({ issues: 2, finding: 'No backoff cap' }),
+    u7: V({ issues: 3, finding: 'Cursor lost' }),
+    u8: V({ state: 'running' }),
+    u9: V({ sha: 'old0000' }),
+  },
+}
+const shaOn = (p: never) => ({ ...(p as object), sha: 'abc1234def' }) as never
+const vround = { ...round, pending: [conflict, ready, lateReview].map(shaOn), mine: [conflict, ready, quiet, draft].map(shaOn), others: [changed, theirs].map(shaOn) }
+
+test('a verdict: none, running, passed, issues, or old once new commits land', () => {
+  const p = shaOn(item({}))
+  expect(verdictOf(p).state).toBe('none')
+  expect(verdictOf(p, V({ state: 'running' }) as never).state).toBe('run')
+  expect(verdictOf(p, V({}) as never).state).toBe('pass')
+  expect(verdictOf(p, V({ issues: 2, finding: 'x' }) as never)).toEqual({ state: 'issues', issues: 2, finding: 'x' })
+  expect(verdictOf(p, V({ sha: 'fff9999' }) as never).state).toBe('stale')
+  // a verdict adds Fix issues on mine, Draft review on another's, Revalidate when old
+  expect(action(conflict, 'en', verdictOf(p, V({ issues: 1 }) as never)).label).toBe('Fix conflict')
+  expect(action(quiet, 'en', { state: 'issues', issues: 1, finding: '' }).label).toBe('Fix issues')
+  expect(action(lateReview, 'en', { state: 'issues', issues: 3, finding: '' }).prompt).toBe('Turn the 3 findings on PR u7 into review comments')
+  expect(action(quiet, 'en', { state: 'stale', issues: 0, finding: '' }).label).toBe('Revalidate')
+  expect(action(changed, 'en', { state: 'stale', issues: 0, finding: '' }).label).toBe('Revalidate')
+})
+
+test('the inbox leads each judged row with its verdict and its top finding', () => {
+  const vm = ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: judged as never }))
+  const [review, blocked] = vm.sections[0]!.prs
+  expect([review?.tags[0]?.count, review?.finding, review?.act]).toEqual(['3', 'Cursor lost · +2', 'Draft review'])
+  expect([blocked?.tags[0]?.count, blocked?.finding, blocked?.act]).toEqual(['2', 'No backoff cap · +1', 'Fix conflict'])
+  // never validated: no star at all
+  expect(vm.sections[1]!.prs[0]?.tags[0]?.text).toBe('✓')
+  expect(vm.views.map(v => v.name)).toEqual(['Needs me (2)', 'Team (2)'])
+  expect(vm.progress).toEqual({ done: 1, total: 2, label: 'Validating 1 of 2', pct: '50%' })
+})
+
+test('the team view groups by verdict; Pick all, Show more, and one batch action for all picks', () => {
+  const at = (ui: object) => ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: judged as never, ui }))
+  const vm = at({ view: 'team' })
+  expect(vm.view).toBe('team')
+  expect(vm.groups.filter(g => g.count).map(g => [g.id, g.rows.map(r => r.ref), g.pickAll])).toEqual([
+    ['run', ['web#8'], null],
+    ['stale', ['api#9'], 'Pick all'],
+  ])
+  const picked = at({ view: 'team', selected: ['acme/api#9'] })
+  expect(picked.groups.find(g => g.id === 'stale')?.pickAll).toBe('Unpick all')
+  // old verdicts can be revalidated; a teammate's PR is never "Fix issues"
+  expect(picked.batch?.acts.map(a => a.id)).toEqual(['validate', 'revalidate'])
+  expect(picked.batch?.detail).toBe('Validate api#9')
+  expect(at({ view: 'team', selected: ['acme/api#9'], act: 'revalidate' }).batch?.prompt).toBe(
+    'Revalidate these PRs against their new commits with Argos and record each verdict:\n- u9',
+  )
+  // a team with nothing to show has no team view
+  expect(ok(vmOf({ ...round, others: [] }, { view: 'team' })).view).toBe('')
+})
+
+test('the team view draws compact rows, Pick all and the batch picker', async ($, on) => {
+  on('state.get', stored({ round: vround, verdicts: judged, view: 'team', selected: ['acme/api#9'] }))
+  on('clock.now', clock)
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'all:stale' }))?.text).toBe('Unpick all')
+  expect((await ui.find({ key: 'pick:acme/api#9' }))?.text).toBe('✓')
+  expect((await ui.find({ type: 'Text', text: 'Validating 1 of 2' }))?.text).toBe('Validating 1 of 2')
+  expect((await ui.find({ key: 'send' }))?.text).toBe('Add to prompt')
+  expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('auto-validate sends old verdicts on my PRs to one background subagent after a round', async ($, on) => {
+  const fresh = { ...vround, at: new Date(NOW + 1000).toISOString(), okAt: new Date(NOW + 1000).toISOString() }
+  const files: Record<string, string> = {
+    'last-round.json': JSON.stringify(fresh),
+    'verdicts.json': JSON.stringify({ ...judged, auto: 'mine', batch: { urls: [], at: null }, prs: { u219: V({ sha: 'old0000' }), u9: V({ sha: 'old0000' }) } }),
+  }
+  const runs: string[][] = []
+  const spawns: { prompt: string }[] = []
+  // the round runs after /argos returns: wait until it is over
+  let settle = () => {}
+  const over = new Promise<void>(r => (settle = r))
+  on('state.set', async ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+    const done = await next(e)
+    if (e.key === 'isRunning' && e.value === false) settle()
+    return done
+  })
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  // the engine hands the path in the system's own form
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: files[e.path.split(/[\\/]/).at(-1)!] }))
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('agent.spawn', (_: unknown, e: { prompt: string }) => {
+    spawns.push(e)
+    return { agentId: 'a1', model: 'm' }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'argos', args: '' })
+  await over
+  // only my PR: the teammate's old verdict waits for "all"
+  expect(runs.find(a => a.includes('start'))?.slice(2)).toEqual(['start', 'u219'])
+  expect(spawns).toHaveLength(1)
+  expect(spawns[0]?.prompt).toContain('references/validate.md')
+  expect(spawns[0]?.prompt).toContain('- u219')
 })

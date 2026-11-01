@@ -62,6 +62,16 @@ export const I = {
   error: S(16, `<circle cx="8" cy="8" r="7" fill="${C.error}"/><path d="M8 4.4v4.4" ${st(C.bg, 1.8)}/><circle cx="8" cy="11.4" r="1" fill="${C.bg}"/>`),
 }
 
+// The validator's star, in purple like the Argos mark: filled when validated, dashed while it
+// runs, a grey outline once new commits make it old, a dim solid star when never run.
+const STAR = 'M8 1.5 9.7 6.3 14.5 8 9.7 9.7 8 14.5 6.3 9.7 1.5 8 6.3 6.3Z'
+export const STARS = {
+  done: S(16, `<path d="${STAR}" fill="${C.merged}"/>`),
+  run: S(16, `<path d="${STAR}" fill="none" stroke="${C.merged}" stroke-width="1.3" stroke-linejoin="round" stroke-dasharray="2 1.6"/>`),
+  stale: S(16, `<path d="${STAR}" fill="none" stroke="${C.subtle}" stroke-width="1.3" stroke-linejoin="round"/>`),
+  none: S(16, `<path d="${STAR}" fill="${C.meter}"/>`),
+}
+
 // A label's ink: its GitHub colour lifted 55% toward white, so a dark label still reads.
 const mixW = (h: string, t: number) => '#' + RGB(h).map(v => Math.round(v + (255 - v) * t).toString(16).padStart(2, '0')).join('')
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -97,16 +107,22 @@ export const byPriority = (a: { name: string }, b: { name: string }) => {
   return r(a.name) - r(b.name) || a.name.localeCompare(b.name)
 }
 
-// Up to 5 tags in a 300px pane, left to right: signals (2, a third and on become "+N"), the
-// agent glyph, labels (2), the size meter. Over the cap they go in this order: size, the
-// second label, the agent glyph, the last label, then the second signal becomes "+1".
-export function fit(tags: Tag[], max = 5): Tag[] {
+// Up to 5 tags at 300px (4 at 260, 3 at 240), left to right: signals (2, a third and on
+// become "+N"), the agent glyph, labels (2), the size meter. Under 300px the size meter goes
+// and one label stays. Over the cap they go in this order: size, the second label, the agent
+// glyph, the last label, then the second signal becomes "+1".
+export function fit(tags: Tag[], w = 300): Tag[] {
+  const max = w >= 300 ? 5 : w >= 260 ? 4 : 3
   let s = tags.filter(t => t.k === 'sig')
   let extra = Math.max(0, s.length - 2)
   s = s.slice(0, 2)
   let labels = tags.filter(t => t.k === 'label').slice(0, 2)
   let size = tags.find(t => t.k === 'size')
   let ai = tags.find(t => t.k === 'ai')
+  if (w < 300) {
+    size = undefined
+    labels = labels.slice(0, 1)
+  }
   const out = () => [...s, ...(ai ? [ai] : []), ...labels, ...(size ? [size] : [])]
   const drop = [
     () => (size = undefined),

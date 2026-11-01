@@ -2,8 +2,8 @@
 // so the counts and the prompt sent to the AI always agree. No mod runtime, so Node can
 // import this file.
 import { t } from '../scripts/i18n.mjs'
-import type { Item, Round } from '../types'
-import { C, I, NEUTRAL, PICKED, bars, byPriority, fit, pill, sig, tint, type Tag, type Tone } from './look'
+import type { Item, Round, Verdict, Verdicts } from '../types'
+import { C, I, NEUTRAL, PICKED, STARS, bars, byPriority, fit, pill, sig, tint, type Tag, type Tone } from './look'
 
 const base = (code: string) => code.split(':')[0]
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
@@ -74,19 +74,45 @@ export function sectionOf(p: Item): Section {
   return 'waiting'
 }
 
+// A PR's verdict from the last validation: none, running, old (new commits since), passed,
+// or issues found.
+export type VerdictState = 'none' | 'run' | 'stale' | 'pass' | 'issues'
+export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: number; finding: string } {
+  if (!v) return { state: 'none', issues: 0, finding: '' }
+  if (v.state === 'running') return { state: 'run', issues: 0, finding: '' }
+  if (v.sha && p.sha && !p.sha.startsWith(v.sha) && !v.sha.startsWith(p.sha)) return { state: 'stale', issues: v.issues ?? 0, finding: '' }
+  return v.issues ? { state: 'issues', issues: v.issues, finding: v.finding ?? '' } : { state: 'pass', issues: 0, finding: '' }
+}
+// The verdict as the first tag: the star and ✓, the issue count, … or "old".
+export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
+  const purple = { color: C.merged }
+  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: '✓', ...purple, text: '✦✓' }
+  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: String(v.issues), ...purple, text: `✦${v.issues}` }
+  if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, count: '…', color: C.subtle, text: '◌…' }
+  if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_old'), color: C.subtle, text: `☆${t(lang, 'vd_old')}` }
+  return { k: 'sig', svg: STARS.none, w: 16, text: '✧' }
+}
+
 // The one action a PR offers, highest rank first: blockers before feedback (CI reruns after a
 // rebase, so the conflict comes before CI), then my review, a reviewer, merging, drafts,
 // nudges; a teammate's PR nobody asked me about is read, not acted on.
-export function action(p: Item, lang: string): { label: string; prompt: string } {
+// A verdict adds three: Fix issues on mine after CI, Draft review on another's before my review,
+// Revalidate on an old verdict before the quiet actions.
+export function action(p: Item, lang: string, v = verdictOf(p)): { label: string; prompt: string } {
   const go = (k: string, ...args: unknown[]) => ({ label: t(lang, `x_${k}`), prompt: t(lang, `p_${k}`, p.url, ...args) })
   const threads = Number(p.signals.find(s => base(s) === 'threads')?.split(':')[1] ?? 0)
-  if (p.kind === 'other') return go('summary')
-  if (p.kind === 'review') return has(p, 'changed') ? go('rereview') : go('review', (p.author || '?').replace(/\[bot\]$/, ''))
+  if (p.kind !== 'mine') {
+    if (v.state === 'issues') return go('draft', v.issues)
+    if (p.kind === 'review') return has(p, 'changed') ? go('rereview') : go('review', (p.author || '?').replace(/\[bot\]$/, ''))
+    return v.state === 'stale' ? go('revalidate') : go('summary')
+  }
   if (p.isDraft) return go('finish')
   if (has(p, 'conflict')) return go('conflict')
   if (has(p, 'ci_failed')) return go('ci')
+  if (v.state === 'issues') return go('fix')
   if (has(p, 'changes_requested')) return go('changes')
   if (has(p, 'threads', 'unanswered', 'new_reviews')) return go('threads', threads)
+  if (v.state === 'stale') return go('revalidate')
   if (has(p, 'no_owner')) return go('owner')
   if (has(p, 'ready')) return go('merge')
   return go('nudge')
@@ -105,7 +131,7 @@ export function tone(p: Item): Tone | null {
 
 // A row's tags, before they are fitted: why it is here (signals), then the agent glyph, its
 // labels and its size. State, draft and kind are not tags: the glyph and section say them.
-export function tags(p: Item): Tag[] {
+export function tags(p: Item, w = 300): Tag[] {
   const out: Tag[] = []
   for (const s of p.signals) {
     const [k, n] = s.split(':')
@@ -122,7 +148,7 @@ export function tags(p: Item): Tag[] {
   if (p.isAI) out.push({ k: 'ai', svg: I.ai, w: 16, text: '¤' })
   for (const l of [...(p.labels ?? [])].sort(byPriority)) out.push({ k: 'label', ...pill(l.name, l.color), text: `(${l.name})` })
   if (p.size !== undefined) out.push({ k: 'size', svg: I.size(bars(p.size)), w: 16, text: '▂▄▆█'.slice(0, bars(p.size)) })
-  return fit(out)
+  return fit(out, w)
 }
 
 // The row's state glyph: the PR icon in the winning colour, dashed for a draft.
@@ -136,11 +162,19 @@ export function reason(error: string, lang: string) {
 
 // The pane's own state: the PRs picked for the AI (repo#number), the folded section opened,
 // and the repo the list is narrowed to ('' = all).
-export type Ui = { selected: string[]; open: string; filter: string }
-export const UI: Ui = { selected: [], open: '', filter: '' }
+// view: '' the inbox of what needs me, 'team' the team's PRs grouped by verdict; more: the
+// verdict groups shown in full; act: the batch action picked in the team view.
+export type Ui = { selected: string[]; open: string; filter: string; view: string; more: string[]; act: string }
+export const UI: Ui = { selected: [], open: '', filter: '', view: '', more: [], act: '' }
+
+// The team view: the team's PRs by verdict, a few rows each until "Show N more".
+export const GROUPS = ['issues', 'run', 'none', 'stale', 'pass'] as const
+const SHOWN: Record<(typeof GROUPS)[number], number> = { issues: 3, run: 3, none: 4, stale: 2, pass: 99 }
+// The batch actions, offered only when valid for every pick.
+export const BATCH_ACTS = ['validate', 'revalidate', 'fix', 'draft'] as const
 
 // prompt: what the prompt holds now, so a request already there is never added twice.
-type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string }
+type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string; verdicts?: Verdicts | null }
 
 // How long ago, in the row's units: minutes under an hour, then ageShort's.
 export const ago = (iso: string, now: number, lang: string) => {
@@ -186,8 +220,10 @@ export function toViewModel(r: Round | null, o: Opts) {
   const showRepo = names.length > 1 && !scope
   const asked = (url: string) => mentions(o.prompt, url)
 
+  const vOf = (p: Item) => verdictOf(p, o.verdicts?.prs?.[p.url])
   const row = (p: Item, section: Section) => {
-    const a = action(p, lang)
+    const v = vOf(p)
+    const a = action(p, lang, v)
     const isPicked = picks.has(keyOf(p))
     // tint only where I act; a pick overrides it, the glyph keeps the signal colour
     const tn = section === 'move' || section === 'ready' ? tone(p) : null
@@ -201,7 +237,9 @@ export function toViewModel(r: Round | null, o: Opts) {
       wait: ageShort(since(p), now, lang),
       // two days and more: white and bold; age is weight, so colours stay free
       isOld: now - Date.parse(since(p)) >= 2 * 864e5,
-      tags: tags(p),
+      // a verdict leads the tags and takes a narrower fit; its top finding gets a line of its own
+      tags: v.state === 'none' ? tags(p) : [verdictTag(v, lang), ...tags(p, 260)],
+      finding: v.state === 'issues' && v.finding ? `${v.finding}${v.issues > 1 ? ` · +${v.issues - 1}` : ''}` : '',
       act: a.label,
       prompt: a.prompt,
       isPicked,
@@ -218,6 +256,7 @@ export function toViewModel(r: Round | null, o: Opts) {
   })
   const n = (id: Section) => sections.find(s => s.id === id)!.count
   const need = n('move') ? t(lang, 'in_need', n('move')) : ''
+  const team = inScope.filter(p => p.kind === 'other')
   // Nothing needs me: a green banner takes Your move's place and says what else there is.
   const clear = n('move')
     ? null
@@ -233,14 +272,67 @@ export function toViewModel(r: Round | null, o: Opts) {
   // The batch: every pick, each row's winning action as one line of the prompt; a pick that
   // left the list (merged, closed) is dropped by the next press.
   const items = all.filter(p => picks.has(keyOf(p)))
-  const lines = items.map(p => ({ p, a: action(p, lang) }))
+  const lines = items.map(p => ({ p, a: action(p, lang, vOf(p)) }))
   const fresh = lines.filter(({ p }) => !asked(p.url))
+  const isTeam = ui.view === 'team' && team.length > 0
+  const valid = {
+    validate: true,
+    revalidate: items.every(p => ['stale', 'pass', 'issues'].includes(vOf(p).state)),
+    fix: items.every(p => p.kind === 'mine' && vOf(p).state === 'issues'),
+    draft: items.every(p => p.kind !== 'mine' && vOf(p).state === 'issues'),
+  }
+  const acts = BATCH_ACTS.filter(k => valid[k])
+  const chosen = acts.find(k => k === ui.act) ?? acts[0]!
+  const refOf = (p: Item) => `${short(p.repo)}#${p.number}`
+  const teamBatch = {
+    detail: `${t(lang, `bo_${chosen}`)} ${items.slice(0, 4).map(refOf).join(', ')}${items.length > 4 ? ` +${items.length - 4}` : ''}`,
+    prompt: [t(lang, `b_${chosen}`), ...items.map(p => `- ${p.url}`)].join('\n'),
+    acts: acts.map(k => ({ id: k, name: t(lang, `bo_${k}`) })),
+    act: chosen,
+  }
+
+  // The team view: verdict groups, the running one first after issues; Passed is folded.
+  const groups = GROUPS.map(id => {
+    const prs = team.filter(p => vOf(p).state === id).sort(byRank)
+    const isOpen = ui.more.includes(id)
+    const isFolded = id === 'pass' && !isOpen
+    const shown = isFolded ? [] : isOpen ? prs : prs.slice(0, SHOWN[id])
+    const hidden = prs.slice(shown.length)
+    const allPicked = prs.length > 0 && prs.every(p => picks.has(keyOf(p)))
+    return {
+      id,
+      title: t(lang, `g_${id}`),
+      count: prs.length,
+      keys: prs.map(keyOf),
+      // picking a whole group is the point of the view; a running one is busy, a passed one done
+      pickAll: id === 'run' || id === 'pass' ? null : t(lang, allPicked ? 'in_unpick_all' : 'in_pick_all'),
+      allPicked,
+      isFolded,
+      more: !isFolded && hidden.length ? t(lang, hidden.every(p => picks.has(keyOf(p))) ? 'in_more_picked' : 'in_more', hidden.length) : '',
+      rows: shown.map(p => {
+        const isPicked = picks.has(keyOf(p))
+        return { key: keyOf(p), url: p.url, glyph: I.pr(C.subtle), ref: showRepo ? refOf(p) : `#${p.number}`, title: p.title, verdict: verdictTag(vOf(p), lang), isPicked, box: isPicked ? PICKED : { bg: undefined, border: undefined } }
+      }),
+    }
+  })
+
+  // Auto-validate and the batch in flight: "Validating 9 of 22" while any of it runs.
+  const vb = o.verdicts?.batch?.urls ?? []
+  const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
+  const progress = vrun ? { done: vb.length - vrun, total: vb.length, label: t(lang, 'in_validating', vb.length - vrun, vb.length), pct: `${Math.round(((vb.length - vrun) / vb.length) * 100)}%` } : null
 
   return {
     ...head,
     state: 'ok' as const,
     need,
+    teamCount: team.length,
     clear,
+    // the two views, when the team has PRs to look at
+    views: team.length ? [{ id: '', name: t(lang, 'in_view_needs', n('move')) }, { id: 'team', name: t(lang, 'in_view_team', team.length) }] : [],
+    view: isTeam ? 'team' : '',
+    groups,
+    auto: { value: o.verdicts?.auto ?? 'off', options: ['off', 'mine', 'all'].map(id => ({ id, name: t(lang, `au_${id}`) })) },
+    progress,
     counts: Object.fromEntries(SECTIONS.map(id => [id, n(id)])) as Record<Section, number>,
     repos,
     filter: scope,
@@ -251,6 +343,8 @@ export function toViewModel(r: Round | null, o: Opts) {
           detail: lines.map(({ p, a }) => `${a.label} #${p.number}`).join(' · '),
           prompt: (fresh.length ? fresh : lines).map(({ a }) => a.prompt).join('\n'),
           urls: items.map(p => p.url),
+          // the team view sends one action for every pick, chosen from those valid for all
+          ...(isTeam ? teamBatch : { acts: [], act: '' }),
         }
       : null,
     keep: ui.selected.filter(k => all.some(p => keyOf(p) === k)),

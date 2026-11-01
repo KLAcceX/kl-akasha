@@ -17,11 +17,16 @@ export type Item = {
   isAI?: boolean
   // GitHub labels, colour as GitHub's hex without #
   labels?: { name: string; color: string }[]
+  // the head commit's SHA
+  sha?: string
   // the last commit's checks
   ci?: 'pass' | 'fail' | 'pending'
   signals: string[]
 }
 
+// What verdicts.mjs writes to verdicts.json: the last AI validation of each PR.
+export type Verdict = { state: 'running' | 'done'; sha?: string; issues?: number; finding?: string; at: string }
+export type Verdicts = { auto: 'off' | 'mine' | 'all'; batch: { urls: string[]; at: string | null }; prs: Record<string, Verdict> }
 // What round.mjs writes to last-round.json.
 export type Round = {
   at: string
@@ -50,6 +55,14 @@ declare module 'claude-code' {
       open: string
       // the repo the list is narrowed to (owner/name); '' = every connected repo
       filter: string
+      // '' the inbox of what needs me, 'team' the team's PRs by verdict
+      view: string
+      // the verdict groups of the team view shown in full
+      more: string[]
+      // the batch action picked in the team view
+      act: string
+      // what verdicts.mjs last wrote
+      verdicts: Verdicts | null
     }
   }
 }

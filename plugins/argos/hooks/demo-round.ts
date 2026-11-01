@@ -1,6 +1,6 @@
 // A sample round with several repos and every section, signal and mark, for /argos demo
 // and the preview. at and okAt are set when it is shown.
-import type { Round } from '../types'
+import type { Round, Verdicts } from '../types'
 
 export const DEMO_ROUND: Omit<Round, 'at'> = {
   "me": "you",
@@ -36,7 +36,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "0e8a16"
         }
       ],
-      "ci": "fail"
+      "ci": "fail",
+      "sha": "0219a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -56,7 +57,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "a2eeef"
         }
       ],
-      "ci": "pass"
+      "ci": "pass",
+      "sha": "0224a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "review",
@@ -77,7 +79,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "a2eeef"
         }
       ],
-      "ci": "pass"
+      "ci": "pass",
+      "sha": "0007a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -98,7 +101,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "b60205"
         }
       ],
-      "ci": "fail"
+      "ci": "fail",
+      "sha": "0041a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "review",
@@ -123,7 +127,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "5319e7"
         }
       ],
-      "ci": "pass"
+      "ci": "pass",
+      "sha": "0012a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "review",
@@ -136,7 +141,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "since": "2026-10-30T20:00:00Z",
       "size": 1890,
       "isAI": true,
-      "signals": []
+      "signals": [],
+      "sha": "0031a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -156,7 +162,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "a2eeef"
         }
       ],
-      "ci": "pass"
+      "ci": "pass",
+      "sha": "0090a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -175,7 +182,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "name": "docs",
           "color": "0075ca"
         }
-      ]
+      ],
+      "sha": "0005a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     }
   ],
   "mine": [
@@ -202,7 +210,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "0e8a16"
         }
       ],
-      "ci": "fail"
+      "ci": "fail",
+      "sha": "0219a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -222,7 +231,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "a2eeef"
         }
       ],
-      "ci": "pass"
+      "ci": "pass",
+      "sha": "0224a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -243,7 +253,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "b60205"
         }
       ],
-      "ci": "fail"
+      "ci": "fail",
+      "sha": "0041a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -263,7 +274,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "color": "a2eeef"
         }
       ],
-      "ci": "pass"
+      "ci": "pass",
+      "sha": "0090a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -282,7 +294,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
           "name": "docs",
           "color": "0075ca"
         }
-      ]
+      ],
+      "sha": "0005a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -296,7 +309,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "signals": [
         "no_review"
       ],
-      "ci": "pending"
+      "ci": "pending",
+      "sha": "0029a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -308,7 +322,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "createdAt": "2026-10-30T12:00:00Z",
       "size": 90,
       "signals": [],
-      "ci": "pending"
+      "ci": "pending",
+      "sha": "0093a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "mine",
@@ -320,7 +335,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "createdAt": "2026-10-29T10:00:00Z",
       "size": 410,
       "isDraft": true,
-      "signals": []
+      "signals": [],
+      "sha": "0014a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     }
   ],
   "others": [
@@ -336,7 +352,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "signals": [
         "changed"
       ],
-      "reviewed": true
+      "reviewed": true,
+      "sha": "0008a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "other",
@@ -349,7 +366,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 120,
       "signals": [
         "no_owner"
-      ]
+      ],
+      "sha": "0088a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "other",
@@ -360,7 +378,8 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "author": "dani",
       "createdAt": "2026-10-30T09:00:00Z",
       "size": 2,
-      "signals": []
+      "signals": [],
+      "sha": "0003a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     },
     {
       "kind": "other",
@@ -374,7 +393,215 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "isAI": true,
       "signals": [
         "no_owner"
-      ]
+      ],
+      "sha": "0044a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 52,
+      "title": "Fix focus trap in modals",
+      "url": "https://github.com/acme/web/pull/52",
+      "author": "lia",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 120,
+      "signals": [],
+      "sha": "0052a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/billing",
+      "number": 95,
+      "title": "Add audit log export",
+      "url": "https://github.com/acme/billing/pull/95",
+      "author": "caio",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 480,
+      "signals": [],
+      "sha": "0095a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/infra-tf",
+      "number": 33,
+      "title": "Bump terraform providers",
+      "url": "https://github.com/acme/infra-tf/pull/33",
+      "author": "rafa",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 30,
+      "signals": [],
+      "sha": "0033a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/checkout",
+      "number": 71,
+      "title": "Retry policy for queue workers",
+      "url": "https://github.com/acme/checkout/pull/71",
+      "author": "bia",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 260,
+      "signals": [],
+      "sha": "0071a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 60,
+      "title": "Table virtualization",
+      "url": "https://github.com/acme/web/pull/60",
+      "author": "lia",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 900,
+      "signals": [],
+      "sha": "0060a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/docs",
+      "number": 9,
+      "title": "Plugin manifest schema",
+      "url": "https://github.com/acme/docs/pull/9",
+      "author": "rafa",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 140,
+      "signals": [],
+      "sha": "0009a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/mobile-app",
+      "number": 50,
+      "title": "Lazy-load chart bundles",
+      "url": "https://github.com/acme/mobile-app/pull/50",
+      "author": "caio",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 210,
+      "signals": [],
+      "sha": "0050a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 61,
+      "title": "Onboarding checklist v2",
+      "url": "https://github.com/acme/web/pull/61",
+      "author": "bia",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 330,
+      "signals": [],
+      "sha": "0061a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/billing",
+      "number": 96,
+      "title": "Cache invalidation for org settings",
+      "url": "https://github.com/acme/billing/pull/96",
+      "author": "rafa",
+      "createdAt": "2026-10-29T10:00:00Z",
+      "size": 150,
+      "signals": [],
+      "sha": "0096a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     }
   ]
+}
+
+// Sample verdicts for the demo: issues, passed, old, running and never validated.
+export const DEMO_VERDICTS: Verdicts = {
+  "auto": "mine",
+  "batch": {
+    "urls": [],
+    "at": null
+  },
+  "prs": {
+    "https://github.com/acme/checkout/pull/219": {
+      "state": "done",
+      "sha": "0219a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 1,
+      "finding": "Retry loop has no backoff cap (rules.ts:42)",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/web/pull/7": {
+      "state": "done",
+      "sha": "0007a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 3,
+      "finding": "Cursor is lost when the filter changes",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/checkout/pull/224": {
+      "state": "done",
+      "sha": "0224a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 0,
+      "finding": "",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/infra-tf/pull/12": {
+      "state": "done",
+      "sha": "ffff000000000000000000000000000000000000",
+      "issues": 1,
+      "finding": "",
+      "at": "2026-10-28T10:00:00Z"
+    },
+    "https://github.com/acme/web/pull/8": {
+      "state": "done",
+      "sha": "0008a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 2,
+      "finding": "Migration drops the index before copying",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/billing/pull/88": {
+      "state": "done",
+      "sha": "0088a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 1,
+      "finding": "Rounding differs from the invoice total",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/mobile-app/pull/50": {
+      "state": "done",
+      "sha": "0050a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 1,
+      "finding": "Chart bundle still loads on the first screen",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/mobile-app/pull/44": {
+      "state": "done",
+      "sha": "ffff000000000000000000000000000000000000",
+      "issues": 0,
+      "finding": "",
+      "at": "2026-10-28T10:00:00Z"
+    },
+    "https://github.com/acme/checkout/pull/71": {
+      "state": "done",
+      "sha": "ffff000000000000000000000000000000000000",
+      "issues": 2,
+      "finding": "",
+      "at": "2026-10-28T10:00:00Z"
+    },
+    "https://github.com/acme/docs/pull/9": {
+      "state": "running",
+      "at": "2026-10-31T11:50:00Z"
+    },
+    "https://github.com/acme/web/pull/60": {
+      "state": "done",
+      "sha": "0060a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 0,
+      "finding": "",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/web/pull/61": {
+      "state": "done",
+      "sha": "0061a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 0,
+      "finding": "",
+      "at": "2026-10-31T10:00:00Z"
+    },
+    "https://github.com/acme/billing/pull/96": {
+      "state": "done",
+      "sha": "0096a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
+      "issues": 0,
+      "finding": "",
+      "at": "2026-10-31T10:00:00Z"
+    }
+  }
 }

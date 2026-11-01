@@ -8,12 +8,12 @@ import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
-import { DEMO_ROUND } from './demo-round'
-import { C, I, TINT, rgba } from './look'
-import { UI, mentions, toViewModel } from './view'
-import type { Round } from '../types'
+import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
+import { C, I, STARS, TINT, rgba } from './look'
+import { UI, mentions, toViewModel, verdictOf } from './view'
+import type { Round, Verdicts } from '../types'
 
-export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb } from './view'
+export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verb, verdictOf } from './view'
 
 const PANE = 'argos'
 const ROUND = { plugin: 'argos', key: 'round' } as const
@@ -21,6 +21,7 @@ const HIDDEN = { plugin: 'argos', key: 'isHidden' } as const
 const RUNNING = { plugin: 'argos', key: 'isRunning' } as const
 // /argos demo shows a sample round; rounds and loads wait until a plain /argos
 const DEMO = { plugin: 'argos', key: 'isDemo' } as const
+const VERDICTS = { plugin: 'argos', key: 'verdicts' } as const
 const round = atom(ROUND, null)
 const isHidden = atom(HIDDEN, false)
 const isRunning = atom(RUNNING, false)
@@ -29,6 +30,11 @@ const open = atom({ plugin: 'argos', key: 'open' } as const, UI.open)
 // prompt requests being filled right now: a second press of the same one waits for nothing
 const busy = new Set<string>()
 const filter = atom({ plugin: 'argos', key: 'filter' } as const, UI.filter)
+const view = atom({ plugin: 'argos', key: 'view' } as const, UI.view)
+const more = atom({ plugin: 'argos', key: 'more' } as const, UI.more)
+const batchAct = atom({ plugin: 'argos', key: 'act' } as const, UI.act)
+// what verdicts.mjs last wrote: the AI's validations, read by the rows
+const verdicts = atom({ plugin: 'argos', key: 'verdicts' } as const, null)
 
 // The KL · Akasha mark (brand/kl/final): the face centred in a full L-coloured frame,
 // on its own dark ground so it reads in both themes.
@@ -48,9 +54,45 @@ const config = (options: PluginOptions) => ({
   lang: String(options.language ?? 'en'),
 })
 
-async function roundFile($: any) {
+async function stateDir($: any) {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
-  return `${home}/.claude/kl-akasha/argos/last-round.json`
+  return `${home}/.claude/kl-akasha/argos`
+}
+const roundFile = async ($: any) => `${await stateDir($)}/last-round.json`
+
+// The verdicts the AI wrote with verdicts.mjs; none yet is an empty file.
+async function loadVerdicts($: any): Promise<Verdicts | null> {
+  if ((await $.state.get(DEMO)).value) return (await $.state.get(VERDICTS)).value ?? null
+  try {
+    const v: Verdicts = JSON.parse(await $.fs.read(`${await stateDir($)}/verdicts.json`))
+    if (!v?.prs) throw new Error('not a verdicts file')
+    await $.state.set(VERDICTS, v)
+    return v
+  } catch {
+    return (await $.state.get(VERDICTS)).value ?? null
+  }
+}
+
+// Auto-validate: after a round, PRs whose verdict is old (new commits since) go to one
+// background subagent with the validate job: the user's own with "mine", every watched PR
+// with "all". It is marked running first, so the next round does not start it twice.
+// ponytail: ten per round, so one burst of commits never spends a fortune at once.
+async function autoValidate($: any, r: Round | null, lang: string) {
+  const v = await loadVerdicts($)
+  if (!r || !v || v.auto === 'off') return
+  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])]
+  const urls = [
+    ...new Set(
+      all.filter(p => (v.auto === 'all' || p.kind === 'mine') && verdictOf(p, v.prs[p.url]).state === 'stale').map(p => p.url),
+    ),
+  ].slice(0, 10)
+  if (!urls.length) return
+  await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'start', ...urls])
+  await loadVerdicts($)
+  await $.agent.spawn({
+    prompt: [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`, `Scripts: ${$.plugin.root}/scripts`, ...urls.map(u => `- ${u}`)].join('\n'),
+    description: 'Argos auto-validate',
+  })
 }
 
 // Shows what the last round (from any session) wrote, unless what is on screen is newer
@@ -77,6 +119,7 @@ async function addRepo($: any) {
 
 async function openPane($: any, options: PluginOptions) {
   await load($)
+  await loadVerdicts($)
   await $.ui.open({ id: PANE, title: 'Argos' })
 }
 
@@ -98,6 +141,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
       $.ui.toast(fresh.notify)
       await $.state.set(HIDDEN, false)
     }
+    await autoValidate($, fresh, lang).catch(() => {})
   } catch (err) {
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
     // this attempt's. Only a run that died before writing (killed at the time limit) gets the
@@ -118,12 +162,20 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await load($)
+    await loadVerdicts($)
     // The plugin's skill already owns /argos (argos:argos); the hook below answers it. Registering
     // only matters where no skill holds the name, so a refusal is expected and harmless.
     await $.command.register({ name: 'argos', description: t(lang, 'ui_command') }).catch(() => {})
     $.clock.every(minutes * 6e4, () => void tick($, options, false))
     $.clock.after(5_000, () => void tick($, options, false))
     return started
+  })
+
+  // The AI records verdicts with verdicts.mjs from Bash; the rows follow as each one lands.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const result = await next(e)
+    if (e.command.includes('verdicts.mjs')) await loadVerdicts($)
+    return result
   })
 
   // /argos opens the pane; /argos repos [add <folder | owner/name> | remove <repo>] goes
@@ -153,12 +205,14 @@ export const register: Register = (on, options) => {
       const at = new Date(await $.clock.now()).toISOString()
       await $.state.set(DEMO, true)
       await $.state.set(ROUND, { ...DEMO_ROUND, at, okAt: at })
+      await $.state.set(VERDICTS, DEMO_VERDICTS)
       await $.ui.open({ id: PANE, title: 'Argos' })
       return { text: t(lang, 'ui_demo') }
     }
     // leaving the demo drops its sample, so the next load shows the real round
     if ((await $.state.get(DEMO)).value) {
       await $.state.set(ROUND, null)
+      await $.state.set(VERDICTS, null)
       await update($, selected, () => [])
     }
     await $.state.set(DEMO, false)
@@ -201,15 +255,27 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = ui
     // the terminal is the one surface without Svg: icons fall back to their text marks
     const hasSvg = e.surface !== 'terminal'
-    const [running, last, picks, opened, narrowed, box] = await Promise.all([
+    const [running, last, picks, opened, narrowed, shownView, shownMore, act, judged, box] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, selected),
       read($, open),
       read($, filter),
+      read($, view),
+      read($, more),
+      read($, batchAct),
+      read($, verdicts),
       $.prompt.read().catch(() => ({ text: '' })),
     ])
-    const vm = toViewModel(last, { now: await $.clock.now(), lang, minutes, running, ui: { selected: picks, open: opened, filter: narrowed }, prompt: box.text })
+    const vm = toViewModel(last, {
+      now: await $.clock.now(),
+      lang,
+      minutes,
+      running,
+      ui: { selected: picks, open: opened, filter: narrowed, view: shownView, more: shownMore, act },
+      prompt: box.text,
+      verdicts: judged,
+    })
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
     // a picker where the surface has one
@@ -234,7 +300,13 @@ export const register: Register = (on, options) => {
     // The head: "Pull requests" and Check now; under it what needs me and when Argos last
     // looked (a failed check in red); then one Select to narrow to a repo.
     const needLine = vm.failed ? t(lang, 'in_failed') : vm.state === 'ok' ? vm.need : ''
-    const checked = vm.state === 'noRepos' ? '' : vm.checked
+    const checked = vm.state === 'noRepos' ? '' : vm.state === 'ok' && vm.teamCount ? [t(lang, 'in_team_n', vm.teamCount), vm.checked].filter(Boolean).join(' · ') : vm.checked
+    const pick = (key: string, value: string, options: { id: string; name: string }[], onSelect: (v: string) => void) =>
+      Select && (
+        <Box key={`${key}-box`} flexGrow={1} flexShrink={1} minWidth={0}>
+          <Select key={key} value={value || 'all'} options={options.map(o => ({ value: o.id || 'all', label: o.name }))} onSelect={(v: string) => onSelect(v === 'all' ? '' : v)} />
+        </Box>
+      )
     const head = (withCheck: boolean) => (
       <Box key="head" flexDirection="column" gap="xs">
         <Box flexDirection="row" alignItems="center" gap="sm">
@@ -263,14 +335,31 @@ export const register: Register = (on, options) => {
             )}
           </Box>
         )}
-        {vm.state === 'ok' && vm.repos.length > 0 && Select && (
-          <Select
-            key="repo"
-            label={t(lang, 'in_all_repos')}
-            value={vm.filter || 'all'}
-            options={vm.repos.map(r => ({ value: r.id || 'all', label: r.name }))}
-            onSelect={(v: string) => void update($, filter, () => (v === 'all' ? '' : v))}
-          />
+        {vm.state === 'ok' && (vm.views.length > 0 || vm.repos.length > 0) && (
+          <Box flexDirection="row" gap="xs">
+            {vm.views.length > 0 && pick('view', vm.view, vm.views, v => void update($, view, () => v))}
+            {vm.repos.length > 0 && pick('repo', vm.filter, vm.repos, v => void update($, filter, () => v))}
+          </Box>
+        )}
+        {vm.state === 'ok' && (
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            {icon(vm.progress ? STARS.run : STARS.done, '✦')}
+            <Box flexShrink={0}>
+              <Text size="caption" weight="semibold" color={vm.progress ? C.merged : C.text}>
+                {vm.progress ? vm.progress.label : t(lang, 'in_auto')}
+              </Text>
+            </Box>
+            {vm.progress ? (
+              // static progress: done of the batch, in purple
+              <Box flexGrow={1} height={4} backgroundColor="#2E2E2C">
+                <Box height={4} width={vm.progress.pct} backgroundColor={C.merged} />
+              </Box>
+            ) : (
+              pick('auto', vm.auto.value === 'off' ? 'off' : vm.auto.value, vm.auto.options, v =>
+                void $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', v || 'off']).then(() => loadVerdicts($)),
+              )
+            )}
+          </Box>
         )}
       </Box>
     )
@@ -371,6 +460,13 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         </Box>
+        {p.finding && (
+          <Box flexDirection="row" gap="xs" minWidth={0} paddingLeft="lg">
+            <Text size="caption" color={C.merged} wrap="truncate" dimColor={dim}>
+              {p.finding}
+            </Text>
+          </Box>
+        )}
         <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
           <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
             {p.tags.map((tg, i) => (
@@ -418,6 +514,71 @@ export const register: Register = (on, options) => {
           {!s.isFolded && s.prs.map(row)}
         </Box>
       )
+    // The team view: verdict groups of compact one-line rows, "Pick all" per group.
+    type Group = (typeof vm.groups)[number]
+    const crow = (r: Group['rows'][number]) => (
+      <Box key={r.key} flexDirection="row" alignItems="center" gap="xs" paddingLeft="sm" borderStyle={r.isPicked ? 'round' : undefined} borderColor={r.box.border} backgroundColor={r.box.bg}>
+        {icon(r.glyph, '⑂')}
+        <Box flexShrink={0}>
+          <Text size="caption" color={C.subtle}>
+            {r.ref}
+          </Text>
+        </Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text size="caption" color={C.text} wrap="truncate">
+            {r.title}
+          </Text>
+        </Box>
+        <Box flexDirection="row" alignItems="center" flexShrink={0}>
+          {r.verdict.svg ? icon(r.verdict.svg, r.verdict.text) : null}
+          {r.verdict.count && (
+            <Text size="caption" weight="semibold" color={r.verdict.color}>
+              {r.verdict.count}
+            </Text>
+          )}
+        </Box>
+        <Button key={`pick:${r.key}`} plain={true} onPress={() => toggle(r.key)}>
+          {r.isPicked ? '✓' : '+'}
+        </Button>
+      </Box>
+    )
+    const group = (g: Group) =>
+      g.count > 0 && (
+        <Box key={`grp:${g.id}`} flexDirection="column" gap="xs">
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            <Text size="caption" weight="semibold" color={C.subtle}>
+              {g.title}
+            </Text>
+            <Box flexGrow={1}>
+              <Text size="caption" weight="semibold" color={C.text}>
+                {String(g.count)}
+              </Text>
+            </Box>
+            {g.pickAll && (
+              <Button
+                key={`all:${g.id}`}
+                plain={true}
+                onPress={() => void update($, selected, () => (g.allPicked ? vm.keep.filter(k => !g.keys.includes(k)) : [...new Set([...vm.keep, ...g.keys])]))}
+              >
+                {g.pickAll}
+              </Button>
+            )}
+            {g.id === 'pass' && (
+              <Button key="fold:pass" plain={true} onPress={() => void update($, more, m => (m.includes('pass') ? m.filter(x => x !== 'pass') : [...m, 'pass']))}>
+                {t(lang, g.isFolded ? 'in_show' : 'in_hide')}
+              </Button>
+            )}
+          </Box>
+          {g.rows.map(crow)}
+          {g.more && (
+            <Box flexDirection="row">
+              <Button key={`more:${g.id}`} plain={true} onPress={() => void update($, more, m => [...m, g.id])}>
+                {g.more}
+              </Button>
+            </Box>
+          )}
+        </Box>
+      )
     const clearBanner = vm.clear !== null && banner('clear', { bg: rgba(C.success, TINT + 0.01), border: rgba(C.success, 0.35) }, I.approved, t(lang, 'in_clear'), vm.clear)
     // The batch: what is picked, each row's action, and the pane's one primary button.
     const batch = vm.batch && (
@@ -435,7 +596,8 @@ export const register: Register = (on, options) => {
         <Text size="caption" color={C.subtle} wrap="truncate">
           {vm.batch.detail}
         </Text>
-        <Box flexDirection="row" justifyContent="flex-end">
+        <Box flexDirection="row" alignItems="center" justifyContent="flex-end" gap="xs">
+          {vm.batch.acts.length > 0 && pick('act', vm.batch.act, vm.batch.acts, v => void update($, batchAct, () => v))}
           <Button
             key="send"
             variant="primary"
@@ -449,6 +611,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+    if (vm.view === 'team') return frame(head(true), failedBanner, ...vm.groups.map(group), batch)
     return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section), batch)
   })
 }

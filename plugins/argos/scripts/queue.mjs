@@ -17,7 +17,7 @@ query($q: String!, $after: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt reviewDecision mergeable additions deletions
+        number title url isDraft createdAt updatedAt reviewDecision mergeable additions deletions headRefOid
         repository { nameWithOwner }
         author { login __typename }
         reviewRequests { totalCount }
@@ -166,6 +166,8 @@ function main(args) {
     // lines changed: review quality drops past about 400
     size: (pr.additions ?? 0) + (pr.deletions ?? 0),
     isAI: isAI(pr.author),
+    // the head commit: a verdict made on another one is out of date
+    sha: pr.headRefOid,
     labels: (pr.labels?.nodes ?? []).map((l) => ({ name: l.name, color: l.color })),
     ci: ci(pr.commits.nodes[0]?.commit?.statusCheckRollup?.state),
     author: pr.author?.login ?? "",
