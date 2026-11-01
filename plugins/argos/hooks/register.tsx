@@ -399,31 +399,44 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // One line per PR, in a fixed order: a box to leave it out (or bring back one the pane left
-    // out), its title first so every title starts at the same place, its number, why it is out,
-    // its verdict and who opened it. With more than one repo the lines sit under their repo.
+    // out), its title first so every title starts at the same place with its number beside it,
+    // why it is out, its verdict and who opened it. With more than one repo the lines sit under
+    // a heading per repo: a rule, the name, how many go, and one action for the whole repo.
     const VERDICT_W = hasSvg ? 40 : 6
-    const NUM_W = hasSvg ? 40 : 5
-    const BOX = hasSvg ? { on: '☑', off: '☐', some: '⊟' } : { on: '[x]', off: '[ ]', some: '[-]' }
+    const BOX = hasSvg ? { on: '☑', off: '☐' } : { on: '[x]', off: '[ ]' }
     type Group = (typeof vm.groups)[number]
-    const pickRepo = (g: Group) => {
-      if (!g.pick) return
+    // Select all brings back what the pane left out too; Deselect all hands those back to the
+    // pane (they keep their reason) and leaves the rest out by hand.
+    const pickRepo = async (g: Group) => {
       const keys = new Set(g.keys)
-      void update($, out, list => (g.pick === 'all' ? [...new Set([...list, ...g.keys])] : list.filter(k => !keys.has(k))))
+      const reasons = new Set(g.reasonKeys)
+      if (g.isAll) {
+        await update($, out, list => [...new Set([...list, ...g.keys.filter(k => !reasons.has(k))])])
+        await update($, back, list => list.filter(k => !reasons.has(k)))
+      } else {
+        await update($, out, list => list.filter(k => !keys.has(k)))
+        await update($, back, list => [...new Set([...list, ...g.reasonKeys])])
+      }
     }
     const header = (g: Group) => (
-      <Box key={`group:${g.repo}`} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" marginTop="sm">
-        <Button key={`repo:${g.repo}`} plain={true} dimColor={!g.pick} onPress={() => pickRepo(g)}>
-          {g.pick === 'all' ? BOX.on : g.pick === 'some' ? BOX.some : BOX.off}
-        </Button>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text weight="semibold" color={C.text} wrap="truncate">
-            {g.name}
-          </Text>
-        </Box>
-        <Box flexShrink={0}>
-          <Text size="caption" color={C.subtle}>
-            {g.count}
-          </Text>
+      <Box key={`group:${g.repo}`} flexDirection="column" gap="xs" marginTop="md">
+        {hasSvg && <Box height={1} backgroundColor="rgba(255,255,255,0.10)" />}
+        <Box flexDirection="row" alignItems="center" gap="sm" paddingX="xs">
+          <Box flexShrink={1} minWidth={0}>
+            <Text weight="semibold" color={C.text} wrap="truncate">
+              {g.name}
+            </Text>
+          </Box>
+          <Box flexShrink={0} flexGrow={1}>
+            <Text size="caption" color={C.subtle}>
+              {g.count}
+            </Text>
+          </Box>
+          {g.action && (
+            <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
+              {g.action}
+            </Button>
+          )}
         </Box>
       </Box>
     )
@@ -438,15 +451,17 @@ export const register: Register = (on, options) => {
         <Button key={`pick:${x.key}`} plain={true} dimColor={!x.canToggle} onPress={() => toggle(x)}>
           {x.isIn ? BOX.on : BOX.off}
         </Button>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text size="caption" color={C.text} dimColor={!x.isIn} wrap="truncate">
-            {x.title}
-          </Text>
-        </Box>
-        <Box flexShrink={0} minWidth={NUM_W} flexDirection="row" justifyContent="flex-end">
-          <Text size="caption" color={C.subtle} dimColor={!x.isIn}>
-            {x.num}
-          </Text>
+        <Box flexDirection="row" alignItems="center" gap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box flexShrink={1} minWidth={0}>
+            <Text size="caption" color={C.text} dimColor={!x.isIn} wrap="truncate">
+              {x.title}
+            </Text>
+          </Box>
+          <Box flexShrink={0}>
+            <Text size="caption" color={C.subtle} dimColor={!x.isIn}>
+              {x.num}
+            </Text>
+          </Box>
         </Box>
         {x.why && (
           <Box flexShrink={0}>

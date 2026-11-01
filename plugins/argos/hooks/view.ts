@@ -123,6 +123,8 @@ export function toViewModel(r: Round | null, o: Opts) {
       why: leftBy === null || leftBy === 'hand' || leftBy === 'author' ? '' : t(lang, `why_${leftBy}`),
       // a running validation and an author left out are not toggled from the line
       canToggle: leftBy !== 'running' && leftBy !== 'author',
+      // the pane would leave it out by itself (a draft, changes asked, already validated)
+      hasReason: Boolean(auto) && auto !== 'running',
       // the pane left it out by itself: a tap brings it back rather than leaving it out
       isAuto: leftBy !== null && leftBy !== 'hand' && leftBy !== 'author' && leftBy !== 'running',
     }
@@ -149,13 +151,23 @@ export function toViewModel(r: Round | null, o: Opts) {
     .map(([why, n]) => t(lang, `out_${why}`, n))
     .join(' · ')
 
-  // Lines under their repo: the repo's box takes or leaves every line it can in one tap (all
-  // in → all out; some or none → all in). Lines the pane or an author left out stay out.
+  // Lines under their repo, whose heading says how many go ("5 of 7") and takes every line that
+  // can be picked in one tap, drafts and validated ones too, or leaves them all out once all go.
+  // A running line and an author left out are not picked from here.
   const groups = names.map(repo => {
     const lines = rows.filter(x => x.repo === repo)
-    const free = lines.filter(x => x.canToggle && !x.isAuto)
-    const pick = !free.length ? null : free.every(x => x.isIn) ? ('all' as const) : free.some(x => x.isIn) ? ('some' as const) : ('none' as const)
-    return { repo, name: short(repo), rows: lines, keys: free.map(x => x.key), pick, count: `${lines.filter(x => x.isIn).length}/${lines.length}` }
+    const free = lines.filter(x => x.canToggle)
+    const isAll = free.length > 0 && free.every(x => x.isIn)
+    return {
+      repo,
+      name: short(repo),
+      rows: lines,
+      keys: free.map(x => x.key),
+      reasonKeys: free.filter(x => x.hasReason).map(x => x.key),
+      isAll,
+      action: free.length ? t(lang, isAll ? 'in_none' : 'in_all') : '',
+      count: t(lang, 'in_of', lines.filter(x => x.isIn).length, lines.length),
+    }
   })
 
   const going = rows.filter(x => x.isIn)

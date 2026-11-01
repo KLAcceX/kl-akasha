@@ -53,10 +53,11 @@ test('one list: every open PR in a fixed order, all going to validation but what
     ['#7', true, ''],
     ['#8', true, ''],
   ])
-  expect(vm.groups.map(g => [g.name, g.rows.length, g.pick, g.count])).toEqual([
-    ['api', 1, 'all', '1/1'],
-    ['portal', 4, 'all', '2/4'],
-    ['web', 2, 'all', '2/2'],
+  // a repo with a draft or a change request left out is not "all": its heading offers Select all
+  expect(vm.groups.map(g => [g.name, g.rows.length, g.count, g.action])).toEqual([
+    ['api', 1, '1 of 1', 'Deselect all'],
+    ['portal', 4, '2 of 4', 'Select all'],
+    ['web', 2, '2 of 2', 'Deselect all'],
   ])
   expect(vm.summary).toBe('5 to validate · 3 repos')
   expect(vm.autoLine).toBe('Left out by itself: 1 change request · 1 draft')
@@ -184,7 +185,7 @@ test('Validate N marks them running and hands them to background subagents, ten 
   await ui.unmount()
 })
 
-test('a repo box takes or leaves its whole repo; Clear leaves everything out, Restore brings the default back', async ($, on) => {
+test('a repo heading takes or leaves its whole repo; Clear leaves everything out, Restore brings the default back', async ($, on) => {
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
   )
@@ -192,14 +193,17 @@ test('a repo box takes or leaves its whole repo; Clear leaves everything out, Re
   on('store.set', () => ({ value: undefined }))
   const ui = await $.ui.mount(PANE)
   const text =async (key: string) => (await ui.find({ key }))?.text
-  expect(await text('repo:acme/portal')).toBe('☑')
+  // portal goes 2 of 4 (a draft and a change request left out): Select all takes those too
+  expect(await text('repo:acme/portal')).toBe('Select all')
   await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☐', 'Validate 3'])
-  // the pane's own picks (a draft, a change request) stay out when the repo comes back
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['Deselect all', 'Validate 7'])
+  // Deselect all: the draft and the change request go back to the pane, the rest out by hand
+  await ui.press({ key: 'repo:acme/portal' })
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['Select all', 'Validate 3'])
+  expect((await ui.find({ type: 'Text', text: /^Left out by itself/ }))?.text).toBe('Left out by itself: 1 change request · 1 draft')
   await ui.press({ key: 'pick:acme/portal#220' })
-  expect(await text('repo:acme/portal')).toBe('⊟')
-  await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑', 'Validate 5'])
+  await ui.press({ key: 'pick:acme/portal#221' })
+  expect(await text('validate')).toBe('Validate 5')
   await ui.press({ key: 'clear' })
   expect([await text('validate'), await text('clear')]).toEqual(['Validate 0', 'Restore default'])
   await ui.press({ key: 'clear' })
