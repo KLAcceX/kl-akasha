@@ -463,10 +463,15 @@ export const register: Register = (on, options) => {
             <Text size="caption" weight="semibold" color={C.subtle}>
               {s.title}
             </Text>
-            <Box flexGrow={1}>
+            <Box flexDirection="row" flexGrow={1} gap="xs">
               <Text size="caption" weight="semibold" color={C.text}>
                 {String(s.count)}
               </Text>
+              {s.note && (
+                <Text size="caption" color={C.subtle}>
+                  {`· ${s.note}`}
+                </Text>
+              )}
             </Box>
             {s.canFold && (
               <Button key={`fold:${s.id}`} plain={true} onPress={() => void update($, open, o => (o === s.id ? '' : s.id))}>
@@ -574,6 +579,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+    if (vm.view === 'repos') return frame(head(true), failedBanner, ...vm.repoSections.map(section), batch)
     if (vm.view === 'team') return frame(head(true), failedBanner, ...vm.groups.map(group), batch)
     return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section), batch)
   })

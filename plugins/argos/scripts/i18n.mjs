@@ -34,6 +34,7 @@ const WORDS = {
     // batch AI validation (pane)
     in_view_needs: (n) => `Precisam de mim (${n})`,
     in_view_team: (n) => `Time (${n})`,
+    in_view_repos: (n) => `Por repo (${n})`,
     in_team_n: (n) => `${n} do time`,
     au_off: "Autovalidar: desligado",
     au_mine: "Autovalidar: commits novos nos meus",
@@ -195,6 +196,7 @@ const WORDS = {
     // batch AI validation (pane)
     in_view_needs: (n) => `Needs me (${n})`,
     in_view_team: (n) => `Team (${n})`,
+    in_view_repos: (n) => `By repo (${n})`,
     in_team_n: (n) => `${n} team`,
     au_off: "Auto-validate: off",
     au_mine: "Auto-validate: new commits on mine",

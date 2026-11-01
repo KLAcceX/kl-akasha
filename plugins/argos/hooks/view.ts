@@ -217,7 +217,8 @@ export function toViewModel(r: Round | null, o: Opts) {
   const asked = (url: string) => mentions(o.prompt, url)
 
   const vOf = (p: Item) => verdictOf(p, o.verdicts?.prs?.[p.url])
-  const row = (p: Item, section: Section) => {
+  // bare: under a repo's own header, the ref drops the repo it would repeat
+  const row = (p: Item, section: Section, bare = false) => {
     const v = vOf(p)
     const a = action(p, lang, v)
     const isPicked = picks.has(keyOf(p))
@@ -229,7 +230,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       number: p.number,
       glyph: glyph(p),
       glyphTip: glyphTip(p, lang),
-      ref: showRepo ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
+      ref: showRepo && !bare ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
       title: p.title,
       wait: ageShort(since(p), now, lang),
       // two days and more: white and bold; age is weight, so colours stay free
@@ -250,7 +251,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     const picked = prs.filter(p => picks.has(keyOf(p))).length
     // a folded section never hides a pick: it stays open while it holds one
     const isFolded = FOLDED.includes(id) && ui.open !== id && picked === 0
-    return { id, title: t(lang, `s_${id}`), count: prs.length, isFolded, canFold: FOLDED.includes(id) && picked === 0, prs: prs.map(p => row(p, id)) }
+    return { id: id as string, title: t(lang, `s_${id}`), note: '', count: prs.length, isFolded, canFold: FOLDED.includes(id) && picked === 0, prs: prs.map(p => row(p, id)) }
   })
   const n = (id: Section) => sections.find(s => s.id === id)!.count
   const need = n('move') ? t(lang, 'in_need', n('move')) : ''
@@ -264,8 +265,23 @@ export function toViewModel(r: Round | null, o: Opts) {
         ...(n('drafts') ? [t(lang, 'in_clear_drafts', n('drafts'))] : []),
       ].join(' · ')
 
-  // One Select narrows the list to a repo, when there is more than one.
-  const repos = names.length > 1 ? [{ id: '', name: t(lang, 'in_all_repos') }, ...names.map(repo => ({ id: repo, name: short(repo) }))] : []
+  // One Select narrows the list to a repo, when there is more than one; each says how many
+  // open PRs it holds.
+  const countIn = (repo: string) => all.filter(p => p.repo === repo).length
+  const repos =
+    names.length > 1
+      ? [{ id: '', name: `${t(lang, 'in_all_repos')} · ${all.length}` }, ...names.map(repo => ({ id: repo, name: `${short(repo)} · ${countIn(repo)}` }))]
+      : []
+  // By repo: one section per repo with open PRs, what needs me first, then the busiest; each
+  // header says how many PRs and how many need me, and its rows drop the repo from their ref.
+  const repoSections = names
+    .map(repo => {
+      const prs = inScope.filter(p => p.repo === repo).sort(byRank)
+      const needs = prs.filter(p => sectionOf(p) === 'move').length
+      return { id: `repo:${repo}`, title: short(repo), note: needs ? t(lang, 'in_need', needs) : '', needs, count: prs.length, isFolded: false, canFold: false, prs: prs.map(p => row(p, sectionOf(p), true)) }
+    })
+    .filter(s => s.count > 0)
+    .sort((a, b) => b.needs - a.needs || b.count - a.count || a.title.localeCompare(b.title))
 
   // The batch: every pick, each row's winning action as one line of the prompt; a pick that
   // left the list (merged, closed) is dropped by the next press.
@@ -325,9 +341,17 @@ export function toViewModel(r: Round | null, o: Opts) {
     need,
     teamCount: team.length,
     clear,
-    // the two views, when the team has PRs to look at
-    views: team.length ? [{ id: '', name: t(lang, 'in_view_needs', n('move')) }, { id: 'team', name: t(lang, 'in_view_team', team.length) }] : [],
-    view: isTeam ? 'team' : '',
+    // the views: what needs me, by repo when there is more than one, the team when it has PRs
+    views:
+      team.length || names.length > 1
+        ? [
+            { id: '', name: t(lang, 'in_view_needs', n('move')) },
+            ...(names.length > 1 ? [{ id: 'repos', name: t(lang, 'in_view_repos', repoSections.length) }] : []),
+            ...(team.length ? [{ id: 'team', name: t(lang, 'in_view_team', team.length) }] : []),
+          ]
+        : [],
+    view: isTeam ? 'team' : ui.view === 'repos' && names.length > 1 ? 'repos' : '',
+    repoSections,
     groups,
     auto: { tip: t(lang, 'tip_auto'), value: o.verdicts?.auto ?? 'off', options: ['off', 'mine', 'all'].map(id => ({ id, name: t(lang, `au_${id}`) })) },
     progress,

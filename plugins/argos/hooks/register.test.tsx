@@ -119,19 +119,19 @@ test('the inbox: sections in order, what needs me, tinted rows where I act', () 
   expect(ok(vmOf(calm, {}, 'pt-BR')).need).toBe('')
 })
 
-test('one Select narrows to a repo; twin short names show their owner', () => {
+test('one Select narrows to a repo, each with its open PRs; twin short names show their owner', () => {
   const vm = ok(vmOf(round))
   expect(vm.repos.map(r => [r.id, r.name])).toEqual([
-    ['', 'All repos'],
-    ['acme/portal', 'portal'],
-    ['acme/web', 'web'],
-    ['acme/api', 'api'],
-    ['acme/docs', 'docs'],
+    ['', 'All repos · 7'],
+    ['acme/portal', 'portal · 4'],
+    ['acme/web', 'web · 2'],
+    ['acme/api', 'api · 1'],
+    ['acme/docs', 'docs · 0'],
   ])
   expect(ok(vmOf(round, { filter: 'help' })).filter).toBe('')
   expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] })).repos).toEqual([])
   const twins = ok(vmOf({ ...round, repos: ['acme/api', 'beta/api'], pending: [], mine: [], others: [item({ repo: 'beta/api', kind: 'other' })] }))
-  expect(twins.repos.map(r => r.name)).toEqual(['All repos', 'acme/api', 'beta/api'])
+  expect(twins.repos.map(r => r.name)).toEqual(['All repos · 1', 'acme/api · 0', 'beta/api · 1'])
 })
 
 test('the batch: each pick sends its winning action as one line; gone picks drop', () => {
@@ -404,7 +404,7 @@ test('the inbox leads each judged row with its verdict and its top finding', () 
   expect([blocked?.tags[0]?.count, blocked?.finding, blocked?.act]).toEqual(['2', 'No backoff cap · +1', 'Fix conflict'])
   // never validated: no star at all
   expect(vm.sections[1]!.prs[0]?.tags[0]?.text).toBe('✓')
-  expect(vm.views.map(v => v.name)).toEqual(['Needs me (2)', 'Team (2)'])
+  expect(vm.views.map(v => v.name)).toEqual(['Needs me (2)', 'By repo (3)', 'Team (2)'])
   expect(vm.progress).toEqual({ done: 1, total: 2, label: 'Validating 1 of 2', pct: '50%' })
 })
 
@@ -478,3 +478,26 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
   expect(spawns[0]?.prompt).toContain('- u219')
 })
 
+
+test('by repo: one section per repo, what needs me first, its PRs without the repo in their ref', () => {
+  const vm = ok(vmOf(round, { view: 'repos' }))
+  expect(vm.view).toBe('repos')
+  expect(vm.repoSections.map(s => [s.title, s.count, s.note])).toEqual([
+    ['portal', 4, '1 needs you'],
+    ['web', 2, '1 needs you'],
+    ['api', 1, ''],
+  ])
+  expect(vm.repoSections[0]?.prs.map(p => p.ref)).toEqual(['#220', '#219', '#222', '#221'])
+  // one repo: nothing to group, so no such view
+  expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] }, { view: 'repos' })).view).toBe('')
+})
+
+test('the by-repo view draws a header per repo with its count', async ($, on) => {
+  on('state.get', stored({ round, view: 'repos' }))
+  on('clock.now', clock)
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: 'portal' }))?.text).toBe('portal')
+  expect((await ui.find({ type: 'Text', text: '· 1 needs you' }))?.text).toBe('· 1 needs you')
+  expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
+  await ui.unmount()
+})
