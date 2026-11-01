@@ -239,10 +239,14 @@ export const register: Register = (on, options) => {
     // With a round and nothing for me, a quiet line instead of nothing: the band says Argos is
     // watching and what else there is. Before the first round, or with no repo, it stays away.
     const calm = vm.state === 'ok' && !running && !band && !vm.failed && !vm.isLate
-    if (e.props.hasSurvey || hidden || (!running && !band && !vm.failed && !vm.isLate && !calm)) return next(e)
-
+    // A survey holds the band: yield to it. Otherwise never pass the band on, even with nothing
+    // to show: once passed, the app stops asking this plugin until the band's own props change
+    // (the person typing), so later state (a round loaded, a check running) never showed. An
+    // empty Box keeps the band ours, and its state writes draw it again.
+    if (e.props.hasSurvey) return next(e)
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
+    if (hidden || (!running && !band && !vm.failed && !vm.isLate && !calm)) return <Box />
     // The band says "Argos" at a glance and gets out of the way: the 16px logo leading the
     // name, what needs me in body 600, the item in subtle, one secondary See and a quiet Hide,
     // in a quiet violet frame tied to the logo. Every state says what is true: checking, what

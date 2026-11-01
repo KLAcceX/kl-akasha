@@ -196,15 +196,13 @@ test('with nothing for me the band is a quiet line of what else there is', async
   ])
 })
 
-test('the band stays away before the first round', async ($, on) => {
+test('before the first round the band draws nothing, but stays ours', async ($, on) => {
   on('state.get', stored({}))
   on('clock.now', clock)
-  on('ui.render', ($: any, e: any) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>engine</Text>
-  })
+  // passing it on would leave the band to the engine, which stops asking until the prompt changes
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+  expect(await ui.find({ type: 'Text' })).toBeUndefined()
+  expect((await ui.find({ type: 'Box' }))?.type).toBe('Box')
   await ui.unmount()
 })
 
@@ -553,11 +551,6 @@ test('Hide is a quiet word: it hides the band and says how to get it back', asyn
     toasts.push(String(e.text ?? e.message ?? ''))
     return { value: undefined }
   })
-  // once hidden the band passes on: this stands for the engine's own drawing
-  on('ui.render', ($: any, e: any) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>engine</Text>
-  })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const hide = await ui.find({ key: 'hide' })
   expect([hide?.text, hide?.props?.plain, hide?.props?.variant]).toEqual(['Hide', true, undefined])
@@ -565,6 +558,6 @@ test('Hide is a quiet word: it hides the band and says how to get it back', asyn
   await ui.press({ key: 'hide' })
   expect(toasts).toEqual(['Hidden until something new · /argos brings it back'])
   expect(await ui.find({ key: 'hide' })).toBeUndefined()
-  expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+  expect(await ui.find({ type: 'Text' })).toBeUndefined()
   await ui.unmount()
 })
