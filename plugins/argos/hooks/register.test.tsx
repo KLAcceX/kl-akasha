@@ -479,25 +479,46 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
 })
 
 
-test('by repo: one section per repo, what needs me first, its PRs without the repo in their ref', () => {
-  const vm = ok(vmOf(round, { view: 'repos' }))
+test('by repo: the header decides; open only where something needs me, four rows, picks shown folded', () => {
+  const many = [1, 2, 3, 4, 5].map(n => item({ number: 300 + n, url: `u3${n}`, title: `P${n}`, createdAt: ago(n), signals: [] }))
+  const r2 = { ...round, mine: [conflict, ready, quiet, draft, ...many] }
+  const vm = ok(vmOf(r2, { view: 'repos' }))
   expect(vm.view).toBe('repos')
-  expect(vm.repoSections.map(s => [s.title, s.count, s.note])).toEqual([
-    ['portal', 4, '1 needs you'],
-    ['web', 2, '1 needs you'],
-    ['api', 1, ''],
+  // what needs me first, then the worst glyph, then the busiest
+  expect(vm.repoSections.map(s => [s.name, s.count, s.need, s.isOpen])).toEqual([
+    ['portal', 9, '· 1 needs you', true],
+    ['web', 2, '· 1 needs you', true],
+    ['api', 1, '', false],
   ])
-  expect(vm.repoSections[0]?.prs.map(p => p.ref)).toEqual(['#220', '#219', '#222', '#221'])
+  const portal = vm.repoSections[0]!
+  // the blocked PR leads, four rows shown, the rest behind Show N more; refs drop the repo
+  expect([portal.prs.map(p => p.ref)[0], portal.prs.length, portal.more, portal.glyphTip]).toEqual(['#219', 4, 'Show 5 more', 'Blocked: conflict or failing CI'])
+  // a hand fold sticks until a new PR needs me there
+  const folded = ok(vmOf(r2, { view: 'repos', folds: { 'acme/portal': { open: false, needs: ['acme/portal#219'] } } }))
+  expect([folded.repoSections[0]?.isOpen, folded.repoSections[0]?.prs.length]).toEqual([false, 0])
+  const fresh = ok(vmOf(r2, { view: 'repos', folds: { 'acme/portal': { open: false, needs: [] } } }))
+  expect(fresh.repoSections[0]?.isOpen).toBe(true)
+  // Pick all works folded; the header keeps the hidden picks visible
+  const picked = ok(vmOf(r2, { view: 'repos', selected: ['acme/api#9'] }))
+  expect(picked.repoSections.find(s => s.name === 'api')?.picked).toBe('· 1 picked')
+  expect(picked.repoSections.find(s => s.name === 'api')?.allPicked).toBe(true)
   // one repo: nothing to group, so no such view
   expect(ok(vmOf({ ...round, repos: ['acme/portal'], pending: [conflict], mine: [conflict], others: [] }, { view: 'repos' })).view).toBe('')
 })
 
-test('the by-repo view draws a header per repo with its count', async ($, on) => {
-  on('state.get', stored({ round, view: 'repos' }))
+test('the by-repo view draws a header per repo, folds it, and hides the repo picker', async ($, on) => {
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: round, version: 1 } } : e.key === 'view' ? { value: { value: 'repos', version: 1 } } : next(e),
+  )
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: 'portal' }))?.text).toBe('portal')
   expect((await ui.find({ type: 'Text', text: '· 1 needs you' }))?.text).toBe('· 1 needs you')
   expect((await ui.find({ key: 'act:acme/portal#219' }))?.text).toBe('Fix conflict')
+  expect(await ui.find({ key: 'repo' })).toBeUndefined()
+  expect((await ui.find({ key: 'fold:repo:acme/portal' }))?.text).toBe('Hide')
+  await ui.press({ key: 'fold:repo:acme/portal' })
+  expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
+  expect((await ui.find({ key: 'fold:repo:acme/portal' }))?.text).toBe('Show')
   await ui.unmount()
 })

@@ -61,6 +61,8 @@ declare module 'claude-code' {
       more: string[]
       // the batch action picked in the team view
       act: string
+      // repos opened or folded by hand in the By repo view, with the PRs that needed me then
+      folds: Record<string, { open: boolean; needs: string[] }>
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null
     }

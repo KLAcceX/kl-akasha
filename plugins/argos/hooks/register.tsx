@@ -31,6 +31,7 @@ const filter = atom({ plugin: 'argos', key: 'filter' } as const, UI.filter)
 const view = atom({ plugin: 'argos', key: 'view' } as const, UI.view)
 const more = atom({ plugin: 'argos', key: 'more' } as const, UI.more)
 const batchAct = atom({ plugin: 'argos', key: 'act' } as const, UI.act)
+const folds = atom({ plugin: 'argos', key: 'folds' } as const, UI.folds)
 // what verdicts.mjs last wrote: the AI's validations, read by the rows
 const verdicts = atom({ plugin: 'argos', key: 'verdicts' } as const, null)
 
@@ -212,7 +213,7 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = ui
     // the terminal is the one surface without Svg: icons fall back to their text marks
     const hasSvg = e.surface !== 'terminal'
-    const [running, last, picks, opened, narrowed, shownView, shownMore, act, judged, box] = await Promise.all([
+    const [running, last, picks, opened, narrowed, shownView, shownMore, act, judged, folded, box] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, selected),
@@ -222,6 +223,7 @@ export const register: Register = (on, options) => {
       read($, more),
       read($, batchAct),
       read($, verdicts),
+      read($, folds),
       $.prompt.read().catch(() => ({ text: '' })),
     ])
     const vm = toViewModel(last, {
@@ -229,7 +231,7 @@ export const register: Register = (on, options) => {
       lang,
       minutes,
       running,
-      ui: { selected: picks, open: opened, filter: narrowed, view: shownView, more: shownMore, act },
+      ui: { selected: picks, open: opened, filter: narrowed, view: shownView, more: shownMore, act, folds: folded },
       prompt: box.text,
       verdicts: judged,
     })
@@ -299,7 +301,7 @@ export const register: Register = (on, options) => {
         {vm.state === 'ok' && (vm.views.length > 0 || vm.repos.length > 0) && (
           <Box flexDirection="row" gap="xs">
             {vm.views.length > 0 && pick('view', vm.view, vm.views, v => void update($, view, () => v), 3)}
-            {vm.repos.length > 0 && pick('repo', vm.filter, vm.repos, v => void update($, filter, () => v), 2)}
+            {vm.repos.length > 0 && vm.view !== 'repos' && pick('repo', vm.filter, vm.repos, v => void update($, filter, () => v), 2)}
           </Box>
         )}
         {vm.state === 'ok' && (
@@ -579,7 +581,55 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-    if (vm.view === 'repos') return frame(head(true), failedBanner, ...vm.repoSections.map(section), batch)
+    // By repo: a header per repo that is the same box folded or open, with the worst signal's glyph,
+    // the count, what needs me and what is picked; Pick all works folded too.
+    type RepoSection = (typeof vm.repoSections)[number]
+    const repoSection = (g: RepoSection) => (
+      <Box key={`repo:${g.repo}`} flexDirection="column" gap="xs">
+        <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingX="sm" borderStyle="round" borderColor="rgba(255,255,255,0.08)" backgroundColor="rgba(255,255,255,0.025)">
+          {icon(g.glyph, '⑂', 16, 16, g.glyphTip)}
+          <Box flexShrink={1} minWidth={0}>
+            <Text weight="semibold" color={C.text} wrap="truncate">
+              {g.name}
+            </Text>
+          </Box>
+          <Box flexDirection="row" flexShrink={0} gap="xs" flexGrow={1}>
+            <Text size="caption" color={C.subtle}>
+              {String(g.count)}
+            </Text>
+            {g.need && (
+              <Text size="caption" weight="semibold" color={C.text}>
+                {g.need}
+              </Text>
+            )}
+            {g.picked && (
+              <Text size="caption" weight="semibold" color={C.claude}>
+                {g.picked}
+              </Text>
+            )}
+          </Box>
+          <Button
+            key={`all:repo:${g.repo}`}
+            plain={true}
+            onPress={() => void update($, selected, () => (g.allPicked ? vm.keep.filter(k => !g.keys.includes(k)) : [...new Set([...vm.keep, ...g.keys])]))}
+          >
+            {t(lang, g.allPicked ? 'in_unpick_all' : 'in_pick_all')}
+          </Button>
+          <Button key={`fold:repo:${g.repo}`} plain={true} onPress={() => void update($, folds, f => ({ ...f, [g.repo]: { open: !g.isOpen, needs: g.needKeys } }))}>
+            {t(lang, g.isOpen ? 'in_hide' : 'in_show')}
+          </Button>
+        </Box>
+        {g.prs.map(row)}
+        {g.more && (
+          <Box flexDirection="row">
+            <Button key={`more:repo:${g.repo}`} plain={true} onPress={() => void update($, more, m => [...m, `repo:${g.repo}`])}>
+              {g.more}
+            </Button>
+          </Box>
+        )}
+      </Box>
+    )
+    if (vm.view === 'repos') return frame(head(true), failedBanner, ...vm.repoSections.map(repoSection), batch)
     if (vm.view === 'team') return frame(head(true), failedBanner, ...vm.groups.map(group), batch)
     return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section), batch)
   })

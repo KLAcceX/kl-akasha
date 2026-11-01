@@ -160,8 +160,11 @@ export function reason(error: string, lang: string) {
 // and the repo the list is narrowed to ('' = all).
 // view: '' the inbox of what needs me, 'team' the team's PRs grouped by verdict; more: the
 // verdict groups shown in full; act: the batch action picked in the team view.
-export type Ui = { selected: string[]; open: string; filter: string; view: string; more: string[]; act: string }
-export const UI: Ui = { selected: [], open: '', filter: '', view: '', more: [], act: '' }
+// folds: a repo the person opened or folded by hand in the By repo view, with the PRs that needed
+// them then; a new one that needs them reopens a folded repo.
+export type Fold = { open: boolean; needs: string[] }
+export type Ui = { selected: string[]; open: string; filter: string; view: string; more: string[]; act: string; folds: Record<string, Fold> }
+export const UI: Ui = { selected: [], open: '', filter: '', view: '', more: [], act: '', folds: {} }
 
 // The team view: the team's PRs by verdict, a few rows each until "Show N more".
 export const GROUPS = ['issues', 'partial', 'run', 'none', 'stale', 'pass'] as const
@@ -267,21 +270,68 @@ export function toViewModel(r: Round | null, o: Opts) {
 
   // One Select narrows the list to a repo, when there is more than one; each says how many
   // open PRs it holds.
-  const countIn = (repo: string) => all.filter(p => p.repo === repo).length
+  // the count follows the view: the rows that view shows for the repo
+  const viewed = ui.view === 'team' ? all.filter(p => p.kind === 'other') : all
+  const countIn = (repo: string) => viewed.filter(p => p.repo === repo).length
   const repos =
     names.length > 1
-      ? [{ id: '', name: `${t(lang, 'in_all_repos')} · ${all.length}` }, ...names.map(repo => ({ id: repo, name: `${short(repo)} · ${countIn(repo)}` }))]
+      ? [{ id: '', name: `${t(lang, 'in_all_repos')} · ${viewed.length}` }, ...names.map(repo => ({ id: repo, name: `${short(repo)} · ${countIn(repo)}` }))]
       : []
-  // By repo: one section per repo with open PRs, what needs me first, then the busiest; each
-  // header says how many PRs and how many need me, and its rows drop the repo from their ref.
-  const repoSections = names
+  // By repo: one section per repo with open PRs. Its header is enough to decide whether to open
+  // it: the worst signal's glyph (blocked › feedback › asked of me › validator issues › ready ›
+  // waiting), the name, the count, how many need me and how many are picked. A repo opens only
+  // when something in it needs me; a fold by hand sticks until a new PR needs me there. Inside,
+  // what needs me first, four rows, then "Show N more"; refs drop the repo the header names.
+  const worst = (p: Item) => {
+    const tn = sectionOf(p) === 'team' ? null : tone(p)
+    if (tn === 'error') return 0
+    if (tn === 'warning') return 1
+    if (tn === 'suggestion') return 2
+    if (vOf(p).state === 'issues') return 3
+    if (tn === 'success') return 4
+    return 5
+  }
+  const WORST = [
+    { svg: I.pr(C.error), tip: 'tip_g_error' },
+    { svg: I.pr(C.warning), tip: 'tip_g_warning' },
+    { svg: I.pr(C.suggestion), tip: 'tip_g_suggestion' },
+    { svg: STARS.done, tip: 'tip_g_issues' },
+    { svg: I.pr(C.success), tip: 'tip_g_success' },
+    { svg: I.pr(C.subtle), tip: 'tip_g_waiting' },
+  ]
+  const needsMe = (p: Item) => sectionOf(p) === 'move'
+  const repoSections = (ui.view === 'repos' ? names : [])
     .map(repo => {
-      const prs = inScope.filter(p => p.repo === repo).sort(byRank)
-      const needs = prs.filter(p => sectionOf(p) === 'move').length
-      return { id: `repo:${repo}`, title: short(repo), note: needs ? t(lang, 'in_need', needs) : '', needs, count: prs.length, isFolded: false, canFold: false, prs: prs.map(p => row(p, sectionOf(p), true)) }
+      const prs = all.filter(p => p.repo === repo).sort((a, b) => Number(needsMe(b)) - Number(needsMe(a)) || byRank(a, b))
+      const needKeys = prs.filter(needsMe).map(keyOf)
+      const rank = Math.min(5, ...prs.map(worst))
+      const fold = ui.folds[repo]
+      // a hand fold stands until a PR that was not there then needs me
+      const isOpen = fold && !(fold.open === false && needKeys.some(k => !fold.needs.includes(k))) ? fold.open : needKeys.length > 0
+      const keys = prs.map(keyOf)
+      const picked = keys.filter(k => picks.has(k)).length
+      const shownAll = ui.more.includes(`repo:${repo}`)
+      const shown = isOpen ? (shownAll ? prs : prs.slice(0, 4)) : []
+      return {
+        repo,
+        name: short(repo),
+        glyph: WORST[rank]!.svg,
+        glyphTip: t(lang, WORST[rank]!.tip),
+        count: prs.length,
+        needs: needKeys.length,
+        need: needKeys.length ? `· ${t(lang, 'in_need', needKeys.length)}` : '',
+        needKeys,
+        rank,
+        picked: picked ? `· ${t(lang, 'in_picked', picked)}` : '',
+        allPicked: keys.length > 0 && picked === keys.length,
+        keys,
+        isOpen,
+        prs: shown.map(p => row(p, sectionOf(p), true)),
+        more: isOpen && prs.length > shown.length ? t(lang, 'in_more', prs.length - shown.length) : '',
+      }
     })
     .filter(s => s.count > 0)
-    .sort((a, b) => b.needs - a.needs || b.count - a.count || a.title.localeCompare(b.title))
+    .sort((a, b) => b.needs - a.needs || a.rank - b.rank || b.count - a.count || a.name.localeCompare(b.name))
 
   // The batch: every pick, each row's winning action as one line of the prompt; a pick that
   // left the list (merged, closed) is dropped by the next press.
@@ -346,7 +396,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       team.length || names.length > 1
         ? [
             { id: '', name: t(lang, 'in_view_needs', n('move')) },
-            ...(names.length > 1 ? [{ id: 'repos', name: t(lang, 'in_view_repos', repoSections.length) }] : []),
+            ...(names.length > 1 ? [{ id: 'repos', name: t(lang, 'in_view_repos', names.filter(r => all.some(p => p.repo === r)).length) }] : []),
             ...(team.length ? [{ id: 'team', name: t(lang, 'in_view_team', team.length) }] : []),
           ]
         : [],
