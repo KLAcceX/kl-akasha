@@ -351,7 +351,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     // the band names what needs me first, the same count as Your move
     band: (() => {
       const move = all.filter(p => sectionOf(p) === 'move').sort(byRank)
-      return move[0] ? { count: move.length, verb: verb(move[0], lang), ref: `${shortRepo(move[0].repo)}#${move[0].number}` } : null
+      return move[0] ? { count: move.length, verb: verb(move[0], lang), ref: `${shortRepo(move[0].repo)}#${move[0].number}`, failed: Boolean(r.error) } : null
     })(),
   }
 }

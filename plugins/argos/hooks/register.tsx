@@ -132,6 +132,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     }
     await autoValidate($, fresh, lang).catch(() => {})
   } catch (err) {
+    await $.state.set(HIDDEN, false)
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
     // this attempt's. Only a run that died before writing (killed at the time limit) gets the
     // wrapper's message. Either way okAt stays the last round that worked.
@@ -219,30 +220,52 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
     // The band says "Argos" at a glance and gets out of the way: the 16px logo leading the
-    // name, the count in body 600, the item in subtle, one secondary See and a plain ×, in a
-    // quiet violet frame tied to the logo (never red or amber, so it never reads as an error).
-    const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : t(lang, 'in_failed')
-    const item = !running && band ? `· ${band.verb}: ${band.ref}` : ''
+    // name, what needs me in body 600, the item in subtle, one secondary See and a quiet Hide,
+    // in a quiet violet frame tied to the logo. Every state says what is true: checking, what
+    // needs me (and "check failed" beside it when the data is old), a failure in words, or how
+    // long ago a late check ran. Red only marks a failure, always with its word.
+    const failed = vm.failed
+    const lead = running ? t(lang, 'ui_checking') : band ? t(lang, 'in_need', band.count) : failed ? t(lang, 'in_failed') : vm.checked
+    const hide = async () => {
+      await update($, isHidden, () => true)
+      $.ui.toast(t(lang, 'in_hidden'))
+    }
     return (
-      <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingLeft="sm" paddingRight="xs" borderStyle="round" borderColor={BAND.border} backgroundColor={BAND.bg}>
+      <Box flexDirection="row" alignItems="center" gap="sm" paddingY="xs" paddingX="sm" borderStyle="round" borderColor={BAND.border} backgroundColor={BAND.bg}>
         {e.surface !== 'terminal' && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
         <Text weight="semibold" color={C.text}>
           Argos
         </Text>
         <Box flexShrink={0} marginLeft="xs">
-          <Text weight="semibold" color={vm.failed && !band ? C.error : C.text}>
+          <Text weight="semibold" color={failed && !band && !running ? C.error : C.text}>
             {lead}
           </Text>
         </Box>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={C.subtle} wrap="truncate">
-            {item}
-          </Text>
+        {/* the verb gives way first; the PR's ref is what makes the band worth a look */}
+        <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} gap="xs">
+          {!running && band && (
+            <Box flexShrink={1} minWidth={0}>
+              <Text color={C.subtle} wrap="truncate">
+                {`· ${band.verb}:`}
+              </Text>
+            </Box>
+          )}
+          {!running && band && (
+            <Box flexShrink={0}>
+              <Text color={C.subtle}>{band.ref}</Text>
+            </Box>
+          )}
+          {!running && band?.failed && (
+            <Box flexShrink={0}>
+              <Text color={C.error}>{`· ${t(lang, 'in_failed')}`}</Text>
+            </Box>
+          )}
         </Box>
         <Button key="open" variant="secondary" onPress={() => void openPane($, options)}>
           {t(lang, 'ui_see')}
         </Button>
-        <Button key="hide" role="dismiss" onPress={() => void update($, isHidden, () => true)}>
+        {/* a word, not "×" (read aloud as "times"), and no fill, so See is the band's one action */}
+        <Button key="hide" plain={true} dimColor={true} onPress={() => void hide()}>
           {t(lang, 'ui_hide')}
         </Button>
       </Box>

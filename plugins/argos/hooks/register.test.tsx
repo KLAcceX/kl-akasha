@@ -183,7 +183,8 @@ test('the band shows the most urgent PR with its verb', async ($, on) => {
   expect((await ui.find({ type: 'Svg' }))?.props?.width).toBe(16)
   expect((await ui.find({ type: 'Text', text: 'Argos' }))?.text).toBe('Argos')
   expect((await ui.find({ type: 'Text', text: /need you/ }))?.text).toBe('2 need you')
-  expect((await ui.find({ type: 'Text', text: /^·/ }))?.text).toBe("· Review bia's PR: web#7")
+  expect((await ui.find({ type: 'Text', text: /^·/ }))?.text).toBe("· Review bia's PR:")
+  expect((await ui.find({ type: 'Text', text: 'web#7' }))?.text).toBe('web#7')
   await ui.unmount()
 })
 
@@ -365,7 +366,23 @@ test('a failed round shows the reason round.mjs wrote, not the wrapper', async (
     throw new Error('exit code 1')
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  // hidden before the check: a failure brings the band back
+  let hidden = true
+  // the round runs after /argos returns: wait until it is over
+  let settle = () => {}
+  const over = new Promise<void>(r => (settle = r))
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'isHidden' ? { value: { value: hidden, version: 1 } } : next(e),
+  )
+  on('state.set', async ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+    if (e.key === 'isHidden') hidden = Boolean(e.value)
+    const done = await next(e)
+    if (e.key === 'isRunning' && e.value === false) settle()
+    return done
+  })
   await $.command.run({ command: 'argos', args: '' })
+  await over
+  expect(hidden).toBe(false)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /gh auth login/ }))?.text).toContain('gh auth login')
   expect((await ui.find({ key: 'failed-btn' }))?.text).toBe('Fix auth')
@@ -481,4 +498,65 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
   expect(spawns).toHaveLength(1)
   expect(spawns[0]?.prompt).toContain('references/validate.md')
   expect(spawns[0]?.prompt).toContain('- u219')
+})
+
+// The band in every state: never a false one, a failure always in words.
+const bandText = async ($: any, on: any, values: Record<string, unknown>) => {
+  on('state.get', stored(values))
+  on('clock.now', clock)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const texts: string[] = []
+  const walk = (n: any) => {
+    if (!n || typeof n !== 'object') return
+    if (n.type === 'Text') texts.push((n.children ?? []).join(''))
+    for (const c of n.children ?? []) walk(c)
+  }
+  walk(await ui.drawn())
+  await ui.unmount()
+  return texts
+}
+
+test('the band while a check runs says so, with no item', async ($, on) => {
+  expect(await bandText($, on, { round, isRunning: true })).toEqual(['Argos', 'Checking…'])
+})
+
+test('a failed check with old data keeps what needs me and says it failed', async ($, on) => {
+  const texts = await bandText($, on, { round: { ...round, at: new Date(NOW).toISOString(), error: 'Error: timed out' } })
+  expect(texts).toEqual(['Argos', '2 need you', "· Review bia's PR:", 'web#7', '· Check failed'])
+})
+
+test('a failed check with nothing to show says it failed, in words', async ($, on) => {
+  const texts = await bandText($, on, { round: { ...round, pending: [], mine: [quiet], others: [], at: new Date(NOW).toISOString(), error: 'Error: timed out' } })
+  expect(texts).toEqual(['Argos', 'Check failed'])
+})
+
+test('a late check is not a failed one: it says when Argos last looked', async ($, on) => {
+  const late = { ...round, pending: [], mine: [quiet], others: [], okAt: ago(0.2), at: ago(0.2) }
+  expect(await bandText($, on, { round: late })).toEqual(['Argos', 'checked 4h ago'])
+})
+
+test('Hide is a quiet word: it hides the band and says how to get it back', async ($, on) => {
+  const toasts: string[] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('ui.toast', (_: unknown, e: { text?: string; message?: string }) => {
+    toasts.push(String(e.text ?? e.message ?? ''))
+    return { value: undefined }
+  })
+  // once hidden the band passes on: this stands for the engine's own drawing
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const hide = await ui.find({ key: 'hide' })
+  expect([hide?.text, hide?.props?.plain, hide?.props?.variant]).toEqual(['Hide', true, undefined])
+  expect((await ui.find({ key: 'open' }))?.props?.variant).toBe('secondary')
+  await ui.press({ key: 'hide' })
+  expect(toasts).toEqual(['Hidden until something new · /argos opens the pane'])
+  expect(await ui.find({ key: 'hide' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+  await ui.unmount()
 })
