@@ -15,6 +15,8 @@ export type Item = {
   size?: number
   // opened by a coding agent (Copilot, Devin...)
   isAI?: boolean
+  // opened by a bot account (Dependabot, Snyk, Renovate)
+  isBot?: boolean
   // GitHub labels, colour as GitHub's hex without #
   labels?: { name: string; color: string }[]
   // the head commit's SHA
@@ -61,6 +63,12 @@ declare module 'claude-code' {
       act: string
       // sections opened or folded by hand, by view and section, with the PRs that needed me then
       folds: Record<string, { open: boolean; needs: string[] }>
+      // the one author the lists are filtered to; '' = everyone
+      author: string
+      // authors hidden everywhere (kept in $.store across sessions)
+      ignored: string[]
+      // the last ignore, offered back until the next tap
+      undo: { author: string; hidden: number } | null
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null
     }

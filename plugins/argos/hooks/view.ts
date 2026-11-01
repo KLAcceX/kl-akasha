@@ -3,7 +3,7 @@
 // import this file.
 import { t } from '../scripts/i18n.mjs'
 import type { Item, Round, Verdict, Verdicts } from '../types'
-import { C, I, NEUTRAL, PICKED, STARS, bars, byPriority, fit, pill, sig, tint, type Tag, type Tone } from './look'
+import { AVATAR, C, I, NEUTRAL, PICKED, STARS, bars, byPriority, fit, pill, sig, tint, type Tag, type Tone } from './look'
 
 const base = (code: string) => code.split(':')[0]
 const has = (p: Item, ...codes: string[]) => p.signals.some(s => codes.includes(base(s)))
@@ -161,17 +161,23 @@ export function reason(error: string, lang: string) {
 // folds: sections the person opened or folded by hand, by view and section ("needs:team",
 // "repos:acme/web"), with the PRs that needed them then; a new one that needs them reopens it.
 export type Fold = { open: boolean; needs: string[] }
-export type Ui = { selected: string[]; filter: string; view: string; more: string[]; act: string; folds: Record<string, Fold> }
-export const UI: Ui = { selected: [], filter: '', view: '', more: [], act: '', folds: {} }
+// author: the one author the lists are filtered to ('' = everyone).
+export type Ui = { selected: string[]; filter: string; view: string; more: string[]; act: string; folds: Record<string, Fold>; author: string }
+export const UI: Ui = { selected: [], filter: '', view: '', more: [], act: '', folds: {}, author: '' }
 
 // The team view: the team's PRs by verdict, a few rows each until "Show N more".
 export const GROUPS = ['issues', 'partial', 'run', 'none', 'stale', 'pass'] as const
 const SHOWN: Record<(typeof GROUPS)[number], number> = { issues: 3, partial: 2, run: 3, none: 4, stale: 2, pass: 99 }
 // The batch actions, offered only when valid for every pick.
-export const BATCH_ACTS = ['validate', 'revalidate', 'fix', 'draft'] as const
+export const BATCH_ACTS = ['validate', 'revalidate', 'fix', 'draft', 'merge'] as const
 
 // prompt: what the prompt holds now, so a request already there is never added twice.
-type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string; verdicts?: Verdicts | null }
+// ignored: authors the person hid everywhere; undo: the last ignore, offered back until the next tap.
+type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; prompt?: string; verdicts?: Verdicts | null; ignored?: string[]; undo?: { author: string; hidden: number } | null }
+
+// Who opened a PR, as the pane names them, and what kind of author they are.
+export const authorOf = (p: Item) => (p.author || '?').replace(/\[bot\]$/, '')
+const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[bot\]$/.test(p.author ?? '') ? ('bot' as const) : ('human' as const))
 
 // How long ago, in the row's units: minutes under an hour, then ageShort's.
 export const ago = (iso: string, now: number, lang: string) => {
@@ -205,7 +211,14 @@ export function toViewModel(r: Round | null, o: Opts) {
 
   const pending = [...(r.pending ?? [])].sort(byRank)
   const seenUrl = new Set<string>()
-  const all = [...pending, ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !seenUrl.has(p.url) && Boolean(seenUrl.add(p.url)))
+  const allRaw = [...pending, ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !seenUrl.has(p.url) && Boolean(seenUrl.add(p.url)))
+  // An ignored author is gone from every view, count and need-you; a review asked of me always shows.
+  const ignored = new Set(o.ignored ?? [])
+  const isIgnored = (p: Item) => ignored.has(authorOf(p)) && p.kind !== 'review'
+  const all = allRaw.filter(p => !isIgnored(p))
+  // the one author the lists are filtered to, when the person tapped a chip
+  const author = all.some(p => authorOf(p) === ui.author) ? ui.author : ''
+  const byAuthor = (p: Item) => !author || authorOf(p) === author
 
   // Repos by short name, unless two share it: then owner/name, so they never look alike.
   const names = [...new Set([...connected, ...all.map(p => p.repo)])]
@@ -247,6 +260,21 @@ export function toViewModel(r: Round | null, o: Opts) {
       box: isPicked ? PICKED : tn ? tint(tn) : NEUTRAL,
     }
   }
+  // Who opened these PRs: one chip per author, the busiest first, people before bots at a tie.
+  const authorsIn = (prs: Item[]) => {
+    const by = new Map<string, { name: string; kind: 'human' | 'bot' | 'agent'; count: number }>()
+    for (const p of prs) {
+      const name = authorOf(p)
+      const a = by.get(name) ?? { name, kind: kindOf(p), count: 0 }
+      a.count++
+      by.set(name, a)
+    }
+    const order = { human: 0, agent: 1, bot: 2 }
+    return [...by.values()]
+      .sort((a, b) => b.count - a.count || order[a.kind] - order[b.kind] || a.name.localeCompare(b.name))
+      .map(a => ({ ...a, svg: a.kind === 'agent' ? AVATAR.agent : AVATAR[a.kind](a.name), tip: t(lang, `tip_who_${a.kind}`, a.name), isActive: a.name === author }))
+  }
+
   // The collapse system, one for every view. A section's header keeps what must not hide when it
   // is folded: the count merged with what needs me ("3 need you", "7 · 2 need you", "7"), what is
   // picked, and the glyph of its worst signal (blocked › feedback › asked of me › validator issues
@@ -270,20 +298,22 @@ export function toViewModel(r: Round | null, o: Opts) {
     { svg: I.pr(C.subtle), tip: 'tip_g_waiting' },
   ]
   const needsMe = (p: Item) => sectionOf(p) === 'move'
-  const fold = (view: string, id: string, label: string, prs: Item[], openByDefault: boolean) => {
+  // total: the section's PRs before an author filter, so a filtered header reads "8 of 17"
+  const fold = (view: string, id: string, label: string, prs: Item[], openByDefault: boolean, total = prs.length) => {
     const foldKey = `${view}:${id}`
     const needKeys = prs.filter(needsMe).map(keyOf)
     const keys = prs.map(keyOf)
     const picked = keys.filter(k => picks.has(k)).length
     const hand = ui.folds[foldKey]
-    const isOpen = hand && !(hand.open === false && needKeys.some(k => !hand.needs.includes(k))) ? hand.open : openByDefault
+    // a filter opens what it shows; clearing it brings back each section's own fold
+    const isOpen = author ? true : hand && !(hand.open === false && needKeys.some(k => !hand.needs.includes(k))) ? hand.open : openByDefault
     const rank = Math.min(5, ...prs.map(worst))
     const need = needKeys.length
     return {
       foldKey,
       label,
       count: prs.length,
-      tally: need && need === prs.length ? t(lang, 'in_need', need) : need ? `${prs.length} · ${t(lang, 'in_need', need)}` : String(prs.length),
+      tally: author ? t(lang, 'in_of', prs.length, total) : need && need === prs.length ? t(lang, 'in_need', need) : need ? `${prs.length} · ${t(lang, 'in_need', need)}` : String(prs.length),
       isUrgent: need > 0,
       picked: picked ? t(lang, 'in_picked', picked) : '',
       allPicked: keys.length > 0 && picked === keys.length,
@@ -299,10 +329,12 @@ export function toViewModel(r: Round | null, o: Opts) {
   // Needs me: Your move and Ready to merge start open; Waiting, Drafts and Team start folded.
   const OPEN_NEEDS: Section[] = ['move', 'ready']
   const sections = SECTIONS.map(id => {
-    const prs = inScope.filter(p => sectionOf(p) === id).sort(byRank)
-    return { id: id as string, ...fold('needs', id, t(lang, `s_${id}`), prs, OPEN_NEEDS.includes(id)), prs: prs.map(p => row(p, id)) }
+    const scoped = inScope.filter(p => sectionOf(p) === id).sort(byRank)
+    const prs = scoped.filter(byAuthor)
+    return { id: id as string, total: scoped.length, ...fold('needs', id, t(lang, `s_${id}`), prs, OPEN_NEEDS.includes(id), scoped.length), prs: prs.map(p => row(p, id)) }
   })
-  const n = (id: Section) => sections.find(s => s.id === id)!.count
+  // the head counts what is there, whatever the author filter shows
+  const n = (id: Section) => sections.find(s => s.id === id)!.total
   const need = n('move') ? t(lang, 'in_need', n('move')) : ''
   const team = inScope.filter(p => p.kind === 'other')
   // Nothing needs me: a green banner takes Your move's place and says what else there is.
@@ -328,12 +360,15 @@ export function toViewModel(r: Round | null, o: Opts) {
   // needs me, then the worst signal, then the busiest.
   const repoSections = (ui.view === 'repos' ? names : [])
     .map(repo => {
-      const prs = all.filter(p => p.repo === repo).sort((a, b) => Number(needsMe(b)) - Number(needsMe(a)) || byRank(a, b))
-      const f = fold('repos', repo, short(repo), prs, prs.some(needsMe))
+      const inRepo = all.filter(p => p.repo === repo).sort((a, b) => Number(needsMe(b)) - Number(needsMe(a)) || byRank(a, b))
+      const prs = inRepo.filter(byAuthor)
+      const f = fold('repos', repo, short(repo), prs, prs.some(needsMe), inRepo.length)
       const shown = f.isOpen ? (ui.more.includes(`repo:${repo}`) ? prs : prs.slice(0, 4)) : []
       return {
         repo,
         ...f,
+        // who opened this repo's PRs, under its header while it is open
+        authors: authorsIn(inRepo),
         prs: shown.map(p => row(p, sectionOf(p), true)),
         more: f.isOpen && prs.length > shown.length ? t(lang, 'in_more', prs.length - shown.length) : '',
       }
@@ -347,11 +382,14 @@ export function toViewModel(r: Round | null, o: Opts) {
   const lines = items.map(p => ({ p, a: action(p, lang, vOf(p)) }))
   const fresh = lines.filter(({ p }) => !asked(p.url))
   const isTeam = ui.view === 'team' && team.length > 0
+  const view = isTeam ? 'team' : ui.view === 'repos' && names.length > 1 ? 'repos' : ''
   const valid = {
     validate: true,
     revalidate: items.every(p => ['stale', 'pass', 'issues'].includes(vOf(p).state)),
     fix: items.every(p => p.kind === 'mine' && vOf(p).state === 'issues'),
     draft: items.every(p => p.kind !== 'mine' && vOf(p).state === 'issues'),
+    // a bot's bumps are merged in bulk; Argos still checks each and merges only on a yes
+    merge: items.every(p => kindOf(p) === 'bot'),
   }
   const acts = BATCH_ACTS.filter(k => valid[k])
   const chosen = acts.find(k => k === ui.act) ?? acts[0]!
@@ -370,8 +408,9 @@ export function toViewModel(r: Round | null, o: Opts) {
 
   // The team view: verdict groups. Issues found starts open, and Validating while a run is active.
   const groups = GROUPS.map(id => {
-    const prs = team.filter(p => vOf(p).state === id).sort(byRank)
-    const f = fold('team', id, t(lang, `g_${id}`), prs, id === 'issues' || (id === 'run' && Boolean(progress)))
+    const scoped = team.filter(p => vOf(p).state === id).sort(byRank)
+    const prs = scoped.filter(byAuthor)
+    const f = fold('team', id, t(lang, `g_${id}`), prs, id === 'issues' || (id === 'run' && Boolean(progress)), scoped.length)
     const shown = f.isOpen ? (ui.more.includes(id) ? prs : prs.slice(0, SHOWN[id])) : []
     const hidden = prs.slice(shown.length)
     return {
@@ -386,8 +425,75 @@ export function toViewModel(r: Round | null, o: Opts) {
       }),
     }
   })
+  // Authors (design 00d). Each one's chip: the avatar by kind, the name and the count; people
+  // before bots at the same count. Needs me and Team get an Authors section at the top, scoped like
+  // the list, open by itself when one author floods it (a third or more of the PRs, or five);
+  // folded, its header names the top two.
+  const viewKey = view === 'team' ? 'team' : 'needs'
+  const scopeForAuthors = view === 'team' ? team : inScope
+  const authorsSection = view === 'repos' || !scopeForAuthors.length ? null : (() => {
+    const chips = authorsIn(scopeForAuthors)
+    const top = chips[0]!
+    const flood = top.count >= 5 || top.count / scopeForAuthors.length >= 0.3
+    const hand = ui.folds[`${viewKey}:authors`]
+    return {
+      foldKey: `${viewKey}:authors`,
+      label: t(lang, 'in_authors'),
+      count: chips.length,
+      tally: chips.slice(0, 2).map(a => `${a.name} ${a.count}`).join(' · '),
+      isUrgent: false,
+      picked: '',
+      glyph: top.svg,
+      glyphTip: top.tip,
+      isOpen: author ? true : hand ? hand.open : flood,
+      keys: [],
+      needKeys: [],
+      allPicked: false,
+      chips,
+    }
+  })()
+  // Tapping a chip filters to that author: one line offers to pick them all, validate them all in
+  // one prompt line, or ignore the author everywhere.
+  const theirs = author ? (view === 'team' ? team : view === 'repos' ? all : inScope).filter(byAuthor) : []
+  const authorLine = author
+    ? {
+        name: author,
+        count: theirs.length,
+        keys: theirs.map(keyOf),
+        // what an ignore would hide, in every repo and view
+        hidden: all.filter(p => authorOf(p) === author && p.kind !== 'review').length,
+        pick: t(lang, 'in_pick_n', theirs.length),
+        validate: t(lang, 'in_validate_n', theirs.length),
+        prompt: [t(lang, 'b_validate'), ...theirs.map(p => `- ${p.url}`)].join('\n'),
+        urls: theirs.map(p => p.url),
+      }
+    : null
+  // Nothing an ignore hides is lost: the head counts it, and a folded Ignored section ends every
+  // view with Unignore per author.
+  const hiddenPrs = allRaw.filter(isIgnored)
+  const ignoredSection = ignored.size
+    ? (() => {
+        const chips = authorsIn(hiddenPrs).concat([...ignored].filter(a => !hiddenPrs.some(p => authorOf(p) === a)).map(a => ({ name: a, kind: 'human' as const, count: 0, svg: AVATAR.human(a), tip: a, isActive: false })))
+        const hand = ui.folds[`${viewKey}:ignored`]
+        return {
+          foldKey: `${viewKey}:ignored`,
+          label: t(lang, 'in_ignored'),
+          count: hiddenPrs.length,
+          tally: String(hiddenPrs.length),
+          isUrgent: false,
+          picked: '',
+          glyph: chips[0]?.svg ?? AVATAR.human('?'),
+          glyphTip: t(lang, 'in_ignored'),
+          isOpen: hand ? hand.open : false,
+          keys: [],
+          needKeys: [],
+          allPicked: false,
+          chips,
+        }
+      })()
+    : null
+
   // Fold all / Open all, for the sections the current view shows: "Fold all" while any is open.
-  const view = isTeam ? 'team' : ui.view === 'repos' && names.length > 1 ? 'repos' : ''
   const shownSections = (view === 'team' ? groups : view === 'repos' ? repoSections : sections).filter(x => x.count > 0)
   const anyOpen = shownSections.some(x => x.isOpen)
   const foldAll = shownSections.length
@@ -398,6 +504,11 @@ export function toViewModel(r: Round | null, o: Opts) {
     ...head,
     state: 'ok' as const,
     foldAll,
+    authorsSection,
+    authorLine,
+    ignoredSection,
+    ignoredCount: hiddenPrs.length,
+    undo: o.undo && ignored.has(o.undo.author) ? { label: t(lang, 'in_ignored_line', o.undo.author, o.undo.hidden), author: o.undo.author } : null,
     need,
     teamCount: team.length,
     clear,

@@ -2,6 +2,23 @@
 // language switch never looks like news; only what people read changes here.
 const WORDS = {
   "pt-BR": {
+    // authors (pane)
+    in_authors: "Autores",
+    in_of: (a, b) => `${a} de ${b}`,
+    in_pick_n: (n) => `Marcar ${n}`,
+    in_validate_n: (n) => `Validar ${n}`,
+    in_ignore: "Ignorar",
+    in_unignore: "Mostrar",
+    in_ignored: "Ignorados",
+    in_ignored_n: (n) => `${n} ignorados`,
+    in_ignored_line: (who, n) => `${who} ignorado · ${n} escondidos`,
+    in_undo: "Desfazer",
+    in_all_authors: "Todos",
+    tip_who_human: (n) => `${n}`,
+    tip_who_bot: (n) => `${n} (bot)`,
+    tip_who_agent: (n) => `${n} (agente de IA)`,
+    bo_merge: "Fazer merge",
+    b_merge: "Faça merge destes PRs com o Argos quando os checks passarem, cada um só com o meu sim:",
     // what each icon means, on hover
     tip_conflict: "Conflito de merge",
     tip_ci_fail: "CI falhando",
@@ -167,6 +184,23 @@ const WORDS = {
     err_generic: "não deu para ler seus PRs",
   },
   en: {
+    // authors (pane)
+    in_authors: "Authors",
+    in_of: (a, b) => `${a} of ${b}`,
+    in_pick_n: (n) => `Pick ${n}`,
+    in_validate_n: (n) => `Validate ${n}`,
+    in_ignore: "Ignore",
+    in_unignore: "Unignore",
+    in_ignored: "Ignored",
+    in_ignored_n: (n) => `${n} ignored`,
+    in_ignored_line: (who, n) => `${who} ignored · ${n} hidden`,
+    in_undo: "Undo",
+    in_all_authors: "Everyone",
+    tip_who_human: (n) => `${n}`,
+    tip_who_bot: (n) => `${n} (bot)`,
+    tip_who_agent: (n) => `${n} (coding agent)`,
+    bo_merge: "Merge",
+    b_merge: "Merge these PRs with Argos once their checks pass, each only on my yes:",
     // what each icon means, on hover
     tip_conflict: "Merge conflict",
     tip_ci_fail: "CI failing",

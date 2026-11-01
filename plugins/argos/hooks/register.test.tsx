@@ -549,3 +549,65 @@ test('Fold all folds every section of the view, then reads Open all', async ($, 
   expect((await ui.find({ key: 'fold-all' }))?.text).toBe('Open all')
   await ui.unmount()
 })
+
+// PRs by author (design 00d): chips, a filter, and ignoring a bot everywhere.
+const bot = (n: number, who = 'dependabot[bot]') =>
+  item({ kind: 'other', repo: 'acme/web', number: n, url: `ub${n}`, title: `Bump ${n}`, author: who, isBot: true, createdAt: ago(1), signals: [] })
+const flood = { ...round, others: [changed, theirs, bot(101), bot(102), bot(103), bot(104), bot(105, 'snyk-bot')] }
+
+test('authors: chips by count, a flood opens the section, a filter reads "N of M"', () => {
+  const vm = ok(vmOf(flood))
+  const a = vm.authorsSection!
+  expect(a.chips.map(c => [c.name, c.kind, c.count])).toEqual([
+    ['me', 'human', 4],
+    ['dependabot', 'bot', 4],
+    ['bia', 'human', 1],
+    ['caio', 'human', 1],
+    ['Copilot', 'agent', 1],
+    ['snyk-bot', 'bot', 1],
+  ])
+  // people before bots at the same count; four of eleven is a flood (a third or more)
+  expect(a.chips[0]?.name).toBe('me')
+  expect(a.isOpen).toBe(true)
+  const only = ok(vmOf(flood, { author: 'dependabot' }))
+  expect(only.authorLine?.count).toBe(4)
+  expect(only.authorLine?.prompt.split('\n')).toEqual(['Validate these PRs with Argos and record each verdict:', '- ub101', '- ub102', '- ub103', '- ub104'])
+  expect(only.sections.find(s => s.id === 'team')?.tally).toBe('4 of 7')
+  expect(only.sections.find(s => s.id === 'move')?.count).toBe(0)
+  // the head still counts what is there
+  expect(only.need).toBe('2 need you')
+})
+
+test('ignoring an author hides it everywhere but in the Ignored section; a review asked of me breaks through', () => {
+  const asked = item({ kind: 'review', repo: 'acme/web', number: 120, url: 'u120', author: 'dependabot[bot]', isBot: true, signals: [] })
+  const vm = ok(toViewModel({ ...flood, pending: [...flood.pending, asked] } as never, { now: NOW, lang: 'en', minutes: 60, running: false, ignored: ['dependabot'], undo: { author: 'dependabot', hidden: 4 } }))
+  expect(vm.ignoredCount).toBe(4)
+  expect(vm.sections.find(s => s.id === 'team')?.count).toBe(3)
+  expect(vm.sections.find(s => s.id === 'move')?.prs.map(p => p.number)).toContain(120)
+  expect([vm.ignoredSection?.isOpen, vm.ignoredSection?.chips.map(c => [c.name, c.count])]).toEqual([false, [['dependabot', 4]]])
+  expect(vm.undo?.label).toBe('dependabot ignored · 4 hidden')
+  // bots' bumps can be merged in a batch; a person's PR in the picks takes Merge away
+  const bots = ok(vmOf(flood, { view: 'team', selected: ['acme/web#101', 'acme/web#102'] }))
+  expect(bots.batch?.acts.map(x => x.id)).toContain('merge')
+  expect(ok(vmOf(flood, { view: 'team', selected: ['acme/web#101', 'acme/web#8'] })).batch?.acts.map(x => x.id)).not.toContain('merge')
+})
+
+test('a chip filters the pane; Ignore hides the author with an Undo', async ($, on) => {
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: flood, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('store.set', () => ({ value: undefined }))
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'who:dependabot' }))?.text).toBe('dependabot 4')
+  await ui.press({ key: 'who:dependabot' })
+  expect((await ui.find({ key: 'author-validate' }))?.text).toBe('Validate 4')
+  expect(await ui.find({ key: 'act:acme/portal#219' })).toBeUndefined()
+  await ui.press({ key: 'author-ignore' })
+  expect((await ui.find({ key: 'undo-ignore' }))?.text).toBe('Undo')
+  expect(await ui.find({ key: 'who:dependabot' })).toBeUndefined()
+  expect((await ui.find({ key: 'fold:needs:ignored' }))?.text).toBe('▸ Ignored')
+  await ui.press({ key: 'undo-ignore' })
+  expect((await ui.find({ key: 'who:dependabot' }))?.text).toBe('dependabot 4')
+  await ui.unmount()
+})

@@ -9,8 +9,8 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { C, I, LOGO, STARS, TINT, rgba, titled } from './look'
-import { UI, mentions, toViewModel, verdictOf } from './view'
+import { BOTMARK, C, I, LOGO, STARS, TINT, rgba, titled } from './look'
+import { UI, authorOf, mentions, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
 export { action, byRank, rank, reason, sectionOf, tags, toViewModel, tone, verdictOf, verdictTag } from './view'
@@ -31,6 +31,12 @@ const view = atom({ plugin: 'argos', key: 'view' } as const, UI.view)
 const more = atom({ plugin: 'argos', key: 'more' } as const, UI.more)
 const batchAct = atom({ plugin: 'argos', key: 'act' } as const, UI.act)
 const FOLDS = { plugin: 'argos', key: 'folds' } as const
+// the author the lists are filtered to; the authors ignored everywhere (kept across sessions);
+// the last ignore, offered back until the next tap
+const author = atom({ plugin: 'argos', key: 'author' } as const, UI.author)
+const IGNORED = { plugin: 'argos', key: 'ignored' } as const
+const ignored = atom(IGNORED, [] as string[])
+const undo = atom({ plugin: 'argos', key: 'undo' } as const, null as { author: string; hidden: number } | null)
 const folds = atom(FOLDS, UI.folds)
 // what verdicts.mjs last wrote: the AI's validations, read by the rows
 const verdicts = atom({ plugin: 'argos', key: 'verdicts' } as const, null)
@@ -68,7 +74,8 @@ async function loadVerdicts($: any): Promise<Verdicts | null> {
 async function autoValidate($: any, r: Round | null, lang: string) {
   const v = await loadVerdicts($)
   if (!r || !v || v.auto === 'off') return
-  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])]
+  const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? [])
+  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)) || p.kind === 'review')
   const urls = [
     ...new Set(
       all.filter(p => (v.auto === 'all' || p.kind === 'mine') && verdictOf(p, v.prs[p.url]).state === 'stale').map(p => p.url),
@@ -153,6 +160,8 @@ export const register: Register = (on, options) => {
     // the person's folds, by view and section, outlive the session
     const saved = await $.store.get('folds').catch(() => undefined)
     if (saved && typeof saved === 'object') await $.state.set(FOLDS, saved as Record<string, { open: boolean; needs: string[] }>)
+    const hidden = await $.store.get('ignored').catch(() => undefined)
+    if (Array.isArray(hidden)) await $.state.set(IGNORED, hidden.filter((x): x is string => typeof x === 'string'))
     // The plugin's skill already owns /argos (argos:argos); the hook below answers it. Registering
     // only matters where no skill holds the name, so a refusal is expected and harmless.
     await $.command.register({ name: 'argos', description: t(lang, 'ui_command') }).catch(() => {})
@@ -220,7 +229,7 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = ui
     // the terminal is the one surface without Svg: icons fall back to their text marks
     const hasSvg = e.surface !== 'terminal'
-    const [running, last, picks, narrowed, shownView, shownMore, act, judged, folded, box] = await Promise.all([
+    const [running, last, picks, narrowed, shownView, shownMore, act, judged, folded, who, hiddenAuthors, lastIgnore, box] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, selected),
@@ -230,6 +239,9 @@ export const register: Register = (on, options) => {
       read($, batchAct),
       read($, verdicts),
       read($, folds),
+      read($, author),
+      read($, ignored),
+      read($, undo),
       $.prompt.read().catch(() => ({ text: '' })),
     ])
     const vm = toViewModel(last, {
@@ -237,7 +249,9 @@ export const register: Register = (on, options) => {
       lang,
       minutes,
       running,
-      ui: { selected: picks, filter: narrowed, view: shownView, more: shownMore, act, folds: folded },
+      ui: { selected: picks, filter: narrowed, view: shownView, more: shownMore, act, folds: folded, author: who },
+      ignored: hiddenAuthors,
+      undo: lastIgnore,
       prompt: box.text,
       verdicts: judged,
     })
@@ -268,6 +282,7 @@ export const register: Register = (on, options) => {
     // A fold by hand (or Fold all / Open all) is the person's choice for those sections: kept in the
     // session's state for the pane and in $.store across sessions, with what needed them then.
     const setFolds = async (targets: { foldKey: string; needKeys: string[] }[], isOpen: boolean) => {
+      await update($, undo, () => null)
       let next: Record<string, { open: boolean; needs: string[] }> = {}
       await update($, folds, f => (next = { ...f, ...Object.fromEntries(targets.map(x => [x.foldKey, { open: isOpen, needs: x.needKeys }])) }))
       await $.store.set('folds', next).catch(() => {})
@@ -276,7 +291,12 @@ export const register: Register = (on, options) => {
     // The head: "Pull requests" and Check now; under it what needs me and when Argos last
     // looked (a failed check in red); then one Select to narrow to a repo.
     const needLine = vm.failed ? t(lang, 'in_failed') : vm.state === 'ok' ? vm.need : ''
-    const checked = vm.state === 'noRepos' ? '' : vm.state === 'ok' && vm.teamCount ? [t(lang, 'in_team_n', vm.teamCount), vm.checked].filter(Boolean).join(' · ') : vm.checked
+    const checked =
+      vm.state === 'noRepos'
+        ? ''
+        : vm.state === 'ok'
+          ? [vm.teamCount ? t(lang, 'in_team_n', vm.teamCount) : '', vm.ignoredCount ? t(lang, 'in_ignored_n', vm.ignoredCount) : '', vm.checked].filter(Boolean).join(' · ')
+          : vm.checked
     const pick = (key: string, value: string, options: { id: string; name: string }[], onSelect: (v: string) => void, grow = 1) =>
       Select && (
         <Box key={`${key}-box`} flexGrow={grow} flexShrink={1} minWidth={0}>
@@ -593,11 +613,118 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+    // Authors (design 00d). A chip: the avatar (its shape says person, bot or coding agent), a bot
+    // mark, and a plain button "name N" (a button holds only text, so the avatar sits beside it);
+    // a tap filters every list to that author, a second tap clears it.
+    type Chip = (typeof vm.repoSections)[number]['authors'][number]
+    const setAuthor = async (name: string) => {
+      await update($, undo, () => null)
+      await update($, author, () => name)
+    }
+    const chips = (list: Chip[], prefix = '') => (
+      <Box flexDirection="row" flexWrap="wrap" gap="xs">
+        {list.map(a => (
+          <Box
+            key={`chip:${prefix}${a.name}`}
+            flexDirection="row"
+            alignItems="center"
+            gap="xs"
+            paddingX="xs"
+            borderStyle="round"
+            borderColor={a.isActive ? C.text : 'rgba(255,255,255,0.12)'}
+            backgroundColor="rgba(255,255,255,0.04)"
+          >
+            {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 18, 18, a.tip)}
+            {a.kind === 'bot' && icon(BOTMARK, '⚙', 12, 12, a.tip)}
+            <Button key={`who:${prefix}${a.name}`} plain={true} onPress={() => void setAuthor(a.isActive ? '' : a.name)}>
+              {`${a.name} ${a.count}`}
+            </Button>
+          </Box>
+        ))}
+      </Box>
+    )
+    const authorsSection = vm.authorsSection && (
+      <Box key="authors" flexDirection="column" gap="xs">
+        {sectionHead(vm.authorsSection, null)}
+        {vm.authorsSection.isOpen && chips(vm.authorsSection.chips)}
+      </Box>
+    )
+    // Filtered to one author: pick them all, validate them all in one prompt line, or ignore the
+    // author everywhere (Undo stays until the next tap).
+    const ignore = async (name: string, hidden: number) => {
+      let next: string[] = []
+      await update($, ignored, list => (next = [...new Set([...list, name])]))
+      await $.store.set('ignored', next).catch(() => {})
+      await update($, author, () => '')
+      await update($, undo, () => ({ author: name, hidden }))
+    }
+    const unignore = async (name: string) => {
+      let next: string[] = []
+      await update($, ignored, list => (next = list.filter(x => x !== name)))
+      await $.store.set('ignored', next).catch(() => {})
+      await update($, undo, () => null)
+    }
+    const line = vm.authorLine
+    const authorLine = line && (
+      <Box key="author-line" flexDirection="row" alignItems="center" flexWrap="wrap" gap="xs">
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text weight="semibold" color={C.text} wrap="truncate">
+            {`${line.name} · ${line.count}`}
+          </Text>
+        </Box>
+        <Button key="author-pick" variant="secondary" onPress={() => void update($, selected, () => [...new Set([...vm.keep, ...line.keys])])}>
+          {line.pick}
+        </Button>
+        <Button key="author-validate" variant="secondary" onPress={() => void fillPrompt(line.prompt, line.urls)}>
+          {line.validate}
+        </Button>
+        <Button key="author-ignore" plain={true} dimColor={true} onPress={() => void ignore(line.name, line.hidden)}>
+          {t(lang, 'in_ignore')}
+        </Button>
+        <Button key="author-clear" plain={true} onPress={() => void setAuthor('')}>
+          {t(lang, 'in_all_authors')}
+        </Button>
+      </Box>
+    )
+    const undoLine = vm.undo && (
+      <Box key="undo" flexDirection="row" alignItems="center" gap="xs">
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text size="caption" color={C.subtle} wrap="truncate">
+            {vm.undo.label}
+          </Text>
+        </Box>
+        <Button key="undo-ignore" plain={true} onPress={() => void unignore(vm.undo!.author)}>
+          {t(lang, 'in_undo')}
+        </Button>
+      </Box>
+    )
+    // Ignored: last in every view, folded, with Unignore per author; nothing is lost.
+    const ignoredSection = vm.ignoredSection && (
+      <Box key="ignored" flexDirection="column" gap="xs">
+        {sectionHead(vm.ignoredSection, null)}
+        {vm.ignoredSection.isOpen &&
+          vm.ignoredSection.chips.map(a => (
+            <Box key={`ign:${a.name}`} flexDirection="row" alignItems="center" gap="xs" paddingLeft="sm">
+              {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 18, 18, a.tip)}
+              <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                <Text color={C.subtle} wrap="truncate">
+                  {`${a.name} · ${a.count}`}
+                </Text>
+              </Box>
+              <Button key={`unignore:${a.name}`} plain={true} onPress={() => void unignore(a.name)}>
+                {t(lang, 'in_unignore')}
+              </Button>
+            </Box>
+          ))}
+      </Box>
+    )
+
     // By repo: the same header per repo; four rows, then Show N more.
     type RepoSection = (typeof vm.repoSections)[number]
     const repoSection = (g: RepoSection) => (
       <Box key={`repo:${g.repo}`} flexDirection="column" gap="xs">
         {sectionHead(g, pickAllOf(g))}
+        {g.isOpen && g.authors.length > 0 && chips(g.authors, `${g.repo}:`)}
         {g.prs.map(row)}
         {g.more && (
           <Box flexDirection="row">
@@ -608,8 +735,8 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
-    if (vm.view === 'repos') return frame(head(true), failedBanner, ...vm.repoSections.map(repoSection), batch)
-    if (vm.view === 'team') return frame(head(true), failedBanner, ...vm.groups.map(group), batch)
-    return frame(head(true), failedBanner, clearBanner, ...vm.sections.map(section), batch)
+    if (vm.view === 'repos') return frame(head(true), failedBanner, authorLine, undoLine, ...vm.repoSections.map(repoSection), ignoredSection, batch)
+    if (vm.view === 'team') return frame(head(true), failedBanner, authorLine, undoLine, authorsSection, ...vm.groups.map(group), ignoredSection, batch)
+    return frame(head(true), failedBanner, authorLine, undoLine, clearBanner, authorsSection, ...vm.sections.map(section), ignoredSection, batch)
   })
 }

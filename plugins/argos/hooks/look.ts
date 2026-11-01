@@ -41,6 +41,22 @@ export const LOGO =
   '<path d="M7.6 3 4.2 8 7.6 13A5 5 0 0 0 7.6 3Z" fill="#7E5CC0"/>' +
   '<path d="M8.6 5 9.5 7.1 11.6 8 9.5 8.9 8.6 11 7.7 8.9 5.6 8 7.7 7.1Z" fill="#F3EEFB"/></svg>'
 
+// An author's avatar, drawn as Svg (the kit loads no remote picture): the shape says who, in
+// greys only so every colour keeps its one meaning. A circle is a person, a rounded square a bot,
+// a square with a face a coding agent.
+const initial = (name: string) => escText((name.match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase())
+const escText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+const AV_TEXT = (ch: string) => `<text x="9" y="12.7" font-family="-apple-system,system-ui,sans-serif" font-size="10" font-weight="600" text-anchor="middle" fill="#ECEAE4">${ch}</text>`
+export const AVATAR = {
+  human: (name: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="#45443F"/>${AV_TEXT(initial(name))}</svg>`,
+  bot: (name: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x=".75" y=".75" width="16.5" height="16.5" rx="4" fill="#2A2A28" stroke="#9C9A93" stroke-width="1.5"/>${AV_TEXT(initial(name))}</svg>`,
+  agent:
+    '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x=".75" y=".75" width="16.5" height="16.5" rx="4" fill="#2A2A28" stroke="#C9C7C0" stroke-width="1.5"/><rect x="4.5" y="6" width="9" height="7" rx="2" fill="none" stroke="#C9C7C0" stroke-width="1.3"/><circle cx="7.3" cy="9.5" r="1" fill="#C9C7C0"/><circle cx="10.7" cy="9.5" r="1" fill="#C9C7C0"/><path d="M9 6V4" stroke="#C9C7C0" stroke-width="1.3" stroke-linecap="round"/></svg>',
+}
+export const BOTMARK =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="3.5" width="9" height="7" rx="2" fill="none" stroke="#9C9A93" stroke-width="1.2"/><circle cx="4.5" cy="7" r=".9" fill="#9C9A93"/><circle cx="7.5" cy="7" r=".9" fill="#9C9A93"/><path d="M6 3.5V1.5" stroke="#9C9A93" stroke-width="1.2" stroke-linecap="round"/></svg>'
+
 const RGB = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
 export const rgba = (h: string, a: number) => `rgba(${RGB(h).join(',')},${a})`
 // a tone's row: fill at 7%, border at 35%

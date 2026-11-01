@@ -503,10 +503,139 @@ export const DEMO_ROUND: Omit<Round, 'at'> = {
       "size": 150,
       "signals": [],
       "sha": "0096a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 101,
+      "title": "Bump vite from 5.4.2 to 5.4.8",
+      "url": "https://github.com/acme/web/pull/101",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0101a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 102,
+      "title": "Bump eslint from 9.9.0 to 9.12.0",
+      "url": "https://github.com/acme/web/pull/102",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0102a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 103,
+      "title": "Bump @types/node from 22.5.0 to 22.7.4",
+      "url": "https://github.com/acme/web/pull/103",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0103a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 104,
+      "title": "Bump react-router from 6.26.1 to 6.26.2",
+      "url": "https://github.com/acme/web/pull/104",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0104a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/web",
+      "number": 105,
+      "title": "Bump zod from 3.23.6 to 3.23.8",
+      "url": "https://github.com/acme/web/pull/105",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0105a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/checkout",
+      "number": 106,
+      "title": "Bump stripe from 16.2.0 to 16.12.0",
+      "url": "https://github.com/acme/checkout/pull/106",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0106a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/checkout",
+      "number": 107,
+      "title": "Bump axios from 1.7.2 to 1.7.7",
+      "url": "https://github.com/acme/checkout/pull/107",
+      "author": "dependabot[bot]",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0107a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/billing",
+      "number": 108,
+      "title": "[Snyk] Security upgrade express from 4.19.2 to 4.21.0",
+      "url": "https://github.com/acme/billing/pull/108",
+      "author": "snyk-bot",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0108a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/billing",
+      "number": 109,
+      "title": "[Snyk] Security upgrade jsonwebtoken from 8.5.1 to 9.0.0",
+      "url": "https://github.com/acme/billing/pull/109",
+      "author": "snyk-bot",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0109a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "kind": "other",
+      "repo": "acme/checkout",
+      "number": 110,
+      "title": "[Snyk] Fix for 2 vulnerabilities",
+      "url": "https://github.com/acme/checkout/pull/110",
+      "author": "snyk-bot",
+      "createdAt": "2026-10-30T08:00:00Z",
+      "size": 24,
+      "isBot": true,
+      "signals": [],
+      "sha": "0110a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"
     }
   ]
 }
-
 // Sample verdicts for the demo: issues, passed, old, running and never validated.
 export const DEMO_VERDICTS: Verdicts = {
   "auto": "mine",

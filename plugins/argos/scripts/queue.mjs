@@ -166,6 +166,8 @@ function main(args) {
     // lines changed: review quality drops past about 400
     size: (pr.additions ?? 0) + (pr.deletions ?? 0),
     isAI: isAI(pr.author),
+    // a bot account (Dependabot, Snyk, Renovate): what the pane lets the person ignore in bulk
+    isBot: Boolean(pr.author) && isBot(pr.author) && !isAI(pr.author),
     // the head commit: a verdict made on another one is out of date
     sha: pr.headRefOid,
     labels: (pr.labels?.nodes ?? []).map((l) => ({ name: l.name, color: l.color })),
