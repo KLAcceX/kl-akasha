@@ -15,6 +15,8 @@ const WORDS = {
     why_running: "validando",
     // authors (pane)
     in_validate_n: (n) => `Validar ${n}`,
+    in_clear: "Limpar seleção",
+    in_restore: "Restaurar padrão",
     tip_who_human: (n) => `${n}`,
     tip_who_bot: (n) => `${n} (bot)`,
     tip_who_agent: (n) => `${n} (agente de IA)`,
@@ -102,6 +104,8 @@ const WORDS = {
     why_running: "validating",
     // authors (pane)
     in_validate_n: (n) => `Validate ${n}`,
+    in_clear: "Clear selection",
+    in_restore: "Restore default",
     tip_who_human: (n) => `${n}`,
     tip_who_bot: (n) => `${n} (bot)`,
     tip_who_agent: (n) => `${n} (coding agent)`,

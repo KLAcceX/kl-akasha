@@ -36,10 +36,12 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 The plugin ships a mod that runs the vigil on its own timer, at no token cost, and toasts what is new. `/argos` opens a pane with one job: send the open PRs to AI validation in one tap, minus the ones you leave out. Keep it open: it refreshes with every round. Hover any icon to see what it means.
 
-- **One list.** Every open PR in the connected repos is one line, in a fixed order (repo, then number): a box (☑ goes, ☐ stays out), `repo#number`, the title, the verdict if there is one, and the author's avatar. Nothing ever reorders: leaving something out only dims it in place.
+- **One list.** Every open PR in the connected repos is one line, in a fixed order (repo, then number): a box (☑ goes, ☐ stays out), the title, `#number`, the verdict if there is one, and the author's avatar. With more than one repo the lines sit under their repo's name. Nothing ever reorders: leaving something out only dims it in place.
 - **All in by default.** The head says "12 to validate · 3 repos", and one button at the top, **Validate 12**, sends all of them.
 - **Leave out authors.** A row of switches, one per author with a count ("dependabot 4"), busiest first: a circle for a person, a rounded square for a bot, a face for a coding agent. One tap leaves that author out everywhere ("dependabot ✕"), across sessions; another tap brings them back.
 - **Leave out one PR.** Tap its box.
+- **A whole repo.** Tap the box by the repo's name: all in → all out, some or none → all in (what the pane or an author switch left out stays out).
+- **Clear selection** leaves every line out, to pick only a few; **Restore default** brings back the pane's own pick.
 - **Left out by itself:** a PR someone asked to change (changes requested, open threads, an unanswered comment), a draft, or one validated with no commit since. The line says why at its end, and the head sums it up ("Left out by itself: 1 change request · 1 draft"). Tap the box to send it anyway. A PR being validated right now cannot be picked.
 - **Validate N** marks the PRs as running and hands them to background subagents, ten per subagent, with no chat in between. Each verdict lands on its line as it comes: a purple star with ✓ when it passed, the number of **blockers** when it did not, `+N` for risks that need **attention** without blocking, ½ (**partial**) when not all of it was read (never shown as passed), and "old" once new commits land. While it runs, "Validating 9 of 22" with a progress bar.
 - **States:** placeholders on the first check, a red banner when a check fails (the list stays; **Fix auth** asks for help with `gh`, otherwise **Retry**), and one button to set up a repo when none is connected.

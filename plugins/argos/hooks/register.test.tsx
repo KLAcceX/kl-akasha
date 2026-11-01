@@ -44,14 +44,19 @@ const clock = () => ({ value: NOW })
 
 test('one list: every open PR in a fixed order, all going to validation but what is not ready', () => {
   const vm = ok(vmOf(round))
-  expect(vm.rows.map(x => [x.ref, x.isIn, x.why])).toEqual([
-    ['api#9', true, ''],
-    ['portal#219', false, 'changes asked'],
-    ['portal#220', true, ''],
-    ['portal#221', true, ''],
-    ['portal#222', false, 'draft'],
-    ['web#7', true, ''],
-    ['web#8', true, ''],
+  expect(vm.rows.map(x => [x.num, x.isIn, x.why])).toEqual([
+    ['#9', true, ''],
+    ['#219', false, 'changes asked'],
+    ['#220', true, ''],
+    ['#221', true, ''],
+    ['#222', false, 'draft'],
+    ['#7', true, ''],
+    ['#8', true, ''],
+  ])
+  expect(vm.groups.map(g => [g.name, g.rows.length, g.pick, g.count])).toEqual([
+    ['api', 1, 'all', '1/1'],
+    ['portal', 4, 'all', '2/4'],
+    ['web', 2, 'all', '2/2'],
   ])
   expect(vm.summary).toBe('5 to validate · 3 repos')
   expect(vm.autoLine).toBe('Left out by itself: 1 change request · 1 draft')
@@ -176,6 +181,29 @@ test('Validate N marks them running and hands them to background subagents, ten 
   await ui.press({ key: 'validate' })
   expect(runs.find(a => a.includes('start'))?.length).toBe(3 + 12)
   expect(spawns.map(s => s.prompt.split('\n').filter(l => l.startsWith('- ')).length)).toEqual([10, 2])
+  await ui.unmount()
+})
+
+test('a repo box takes or leaves its whole repo; Clear leaves everything out, Restore brings the default back', async ($, on) => {
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('store.set', () => ({ value: undefined }))
+  const ui = await $.ui.mount(PANE)
+  const text =async (key: string) => (await ui.find({ key }))?.text
+  expect(await text('repo:acme/portal')).toBe('☑')
+  await ui.press({ key: 'repo:acme/portal' })
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☐', 'Validate 3'])
+  // the pane's own picks (a draft, a change request) stay out when the repo comes back
+  await ui.press({ key: 'pick:acme/portal#220' })
+  expect(await text('repo:acme/portal')).toBe('⊟')
+  await ui.press({ key: 'repo:acme/portal' })
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑', 'Validate 5'])
+  await ui.press({ key: 'clear' })
+  expect([await text('validate'), await text('clear')]).toEqual(['Validate 0', 'Restore default'])
+  await ui.press({ key: 'clear' })
+  expect([await text('validate'), await text('clear')]).toEqual(['Validate 5', 'Clear selection'])
   await ui.unmount()
 })
 

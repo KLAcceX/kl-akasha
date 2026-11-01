@@ -360,6 +360,11 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
+    // Clear leaves out every line in; Restore (keys null) drops the person's picks.
+    const clearAll = async (keys: string[] | null) => {
+      await update($, out, list => (keys ? [...new Set([...list, ...keys])] : []))
+      await update($, back, () => [])
+    }
     // One button validates everything left in, in the background; the stars fill in on the lines.
     const go = (
       <Box key="go" flexDirection="column" gap="xs">
@@ -376,7 +381,7 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         )}
-        <Box flexDirection="row">
+        <Box flexDirection="row" alignItems="center" gap="sm">
           <Button
             key="validate"
             variant={vm.validate.count ? 'primary' : 'secondary'}
@@ -385,13 +390,43 @@ export const register: Register = (on, options) => {
           >
             {vm.validate.label}
           </Button>
+          {vm.clear && (
+            <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
+              {vm.clear.label}
+            </Button>
+          )}
         </Box>
       </Box>
     )
     // One line per PR, in a fixed order: a box to leave it out (or bring back one the pane left
-    // out), where it lives, its title, why it is out, its verdict and who opened it.
+    // out), its title first so every title starts at the same place, its number, why it is out,
+    // its verdict and who opened it. With more than one repo the lines sit under their repo.
     const VERDICT_W = hasSvg ? 40 : 6
-    const BOX = hasSvg ? { on: '☑', off: '☐' } : { on: '[x]', off: '[ ]' }
+    const NUM_W = hasSvg ? 40 : 5
+    const BOX = hasSvg ? { on: '☑', off: '☐', some: '⊟' } : { on: '[x]', off: '[ ]', some: '[-]' }
+    type Group = (typeof vm.groups)[number]
+    const pickRepo = (g: Group) => {
+      if (!g.pick) return
+      const keys = new Set(g.keys)
+      void update($, out, list => (g.pick === 'all' ? [...new Set([...list, ...g.keys])] : list.filter(k => !keys.has(k))))
+    }
+    const header = (g: Group) => (
+      <Box key={`group:${g.repo}`} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" marginTop="sm">
+        <Button key={`repo:${g.repo}`} plain={true} dimColor={!g.pick} onPress={() => pickRepo(g)}>
+          {g.pick === 'all' ? BOX.on : g.pick === 'some' ? BOX.some : BOX.off}
+        </Button>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text weight="semibold" color={C.text} wrap="truncate">
+            {g.name}
+          </Text>
+        </Box>
+        <Box flexShrink={0}>
+          <Text size="caption" color={C.subtle}>
+            {g.count}
+          </Text>
+        </Box>
+      </Box>
+    )
     type Row = (typeof vm.rows)[number]
     const toggle = (x: Row) => {
       if (!x.canToggle) return
@@ -403,14 +438,14 @@ export const register: Register = (on, options) => {
         <Button key={`pick:${x.key}`} plain={true} dimColor={!x.canToggle} onPress={() => toggle(x)}>
           {x.isIn ? BOX.on : BOX.off}
         </Button>
-        <Box flexShrink={0}>
-          <Text size="caption" color={C.subtle} dimColor={!x.isIn}>
-            {x.ref}
-          </Text>
-        </Box>
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
           <Text size="caption" color={C.text} dimColor={!x.isIn} wrap="truncate">
             {x.title}
+          </Text>
+        </Box>
+        <Box flexShrink={0} minWidth={NUM_W} flexDirection="row" justifyContent="flex-end">
+          <Text size="caption" color={C.subtle} dimColor={!x.isIn}>
+            {x.num}
           </Text>
         </Box>
         {x.why && (
@@ -438,7 +473,7 @@ export const register: Register = (on, options) => {
       authors,
       go,
       <Box key="lines" flexDirection="column">
-        {vm.rows.map(line)}
+        {vm.groups.length > 1 ? vm.groups.flatMap(g => [header(g), ...g.rows.map(line)]) : vm.rows.map(line)}
       </Box>,
     )
   })

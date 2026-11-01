@@ -112,7 +112,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       key,
       url: p.url,
       repo: p.repo,
-      ref: names.length > 1 ? `${short(p.repo)}#${p.number}` : `#${p.number}`,
+      num: `#${p.number}`,
       title: p.title,
       author: name,
       avatar: kind === 'agent' ? AVATAR.agent : AVATAR[kind](name),
@@ -149,7 +149,22 @@ export function toViewModel(r: Round | null, o: Opts) {
     .map(([why, n]) => t(lang, `out_${why}`, n))
     .join(' · ')
 
+  // Lines under their repo: the repo's box takes or leaves every line it can in one tap (all
+  // in → all out; some or none → all in). Lines the pane or an author left out stay out.
+  const groups = names.map(repo => {
+    const lines = rows.filter(x => x.repo === repo)
+    const free = lines.filter(x => x.canToggle && !x.isAuto)
+    const pick = !free.length ? null : free.every(x => x.isIn) ? ('all' as const) : free.some(x => x.isIn) ? ('some' as const) : ('none' as const)
+    return { repo, name: short(repo), rows: lines, keys: free.map(x => x.key), pick, count: `${lines.filter(x => x.isIn).length}/${lines.length}` }
+  })
+
   const going = rows.filter(x => x.isIn)
+  // Clear leaves every line out; once nothing is left, Restore goes back to the pane's own pick.
+  const clear = going.length
+    ? { label: t(lang, 'in_clear'), keys: going.map(x => x.key) }
+    : ui.out.length || ui.back.length
+      ? { label: t(lang, 'in_restore'), keys: null }
+      : null
   // Validation in flight: "Validating 9 of 22" while any of it runs.
   const vb = o.verdicts?.batch?.urls ?? []
   const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
@@ -162,6 +177,8 @@ export function toViewModel(r: Round | null, o: Opts) {
     autoLine: autoOut ? t(lang, 'in_auto_out', autoOut) : '',
     authors,
     rows,
+    groups,
+    clear,
     progress,
     validate: { label: t(lang, 'in_validate_n', going.length), urls: going.map(x => x.url), count: going.length },
   }
