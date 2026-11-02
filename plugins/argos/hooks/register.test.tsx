@@ -161,8 +161,10 @@ test('the pane: the count, who goes, one Validate button and one line per PR', a
   await ui.press({ key: 'who:me' })
   expect([(await ui.find({ key: 'who:me' }))?.text, (await ui.find({ key: 'who' }))?.text]).toEqual(['☐ me 4', 'Who: Everyone · me out ▾'])
   expect((await ui.find({ key: 'validate' }))?.text).toBe('Validate 3')
-  // the line of an author left out has no box to press
-  expect(await ui.find({ key: 'pick:acme/portal#220' })).toBeUndefined()
+  // the box of an author left out opens Who, where they come back, and leaves the line as it was
+  await ui.press({ key: 'who' })
+  await ui.press({ key: 'pick:acme/portal#220' })
+  expect([(await ui.find({ key: 'who' }))?.text, (await ui.find({ key: 'validate' }))?.text]).toEqual(['Who: Everyone · me out ▾', 'Validate 3'])
   await ui.press({ key: 'pick:acme/web#7' })
   expect((await ui.find({ key: 'validate' }))?.text).toBe('Validate 2')
   await ui.press({ key: 'who:me' })
