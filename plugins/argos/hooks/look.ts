@@ -44,6 +44,10 @@ export const PANEL = {
   borderColor: 'rgba(128,128,128,0.25)',
   backgroundColor: 'rgba(128,128,128,0.05)',
 } as const
+// a placeholder line while the first check runs
+// a warning or error banner's border, over its tint
+export const EDGE = 0.35
+export const SKELETON = 'rgba(128,128,128,0.18)'
 // a row under the pointer: a faint brand tint, readable under text in both themes
 export const HOVER = 'rgba(126,92,192,0.10)'
 

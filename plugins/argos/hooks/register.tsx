@@ -8,7 +8,7 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { C, HEX, HOVER, I, LOGO, PANEL, SPACE, STARS, TINT, rgba, titled } from './look'
+import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, STARS, TINT, rgba, titled } from './look'
 import { UI, authorOf, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
 import type { RepoCfg, Round, Verdicts } from '../types'
 
@@ -55,6 +55,7 @@ const promptDrafts = new Map<string, string>()
 // failed, by repo; shown until the next edit or try
 const promptSaved = new Map<string, boolean>()
 const mergeErrors = new Map<string, string>()
+const promptErrors = new Map<string, string>()
 // A press runs once: a second press while the first is still at work is dropped.
 const inflight = new Set<string>()
 const once = (key: string, fn: () => Promise<unknown>) => () => {
@@ -467,42 +468,46 @@ export const register: Register = (on, options) => {
     // The head: the mark, "Pull requests" and Check now; under it how many go to validation and
     // when Argos last looked.
     const head = (withCheck: boolean) => (
-      <Box key="head" flexDirection="column" gap={SPACE.line}>
+      <Box key="head" flexDirection="column" gap={SPACE.row}>
         <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
-          {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box flexDirection="row" alignItems="center" gap={SPACE.inline} flexGrow={1} flexShrink={1} minWidth={0}>
+            {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
             <Text size="heading" weight="semibold" color={C.text}>
               {t(lang, 'in_title')}
             </Text>
           </Box>
-          {withCheck && (
-            <Button key="check" variant="secondary" dimColor={running} onPress={running ? () => undefined : checkNow}>
-              {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
-            </Button>
-          )}
-          {vm.state === 'ok' && (
-            <Button key="settings-page" variant="secondary" onPress={() => void update($, page, () => 'settings')}>
-              {t(lang, 'settings')}
-            </Button>
-          )}
+          <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+            {withCheck && (
+              <Button key="check" variant="secondary" dimColor={running} onPress={running ? () => undefined : checkNow}>
+                {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
+              </Button>
+            )}
+            {vm.state === 'ok' && (
+              <Button key="settings-page" variant="secondary" onPress={() => void update($, page, () => 'settings')}>
+                {t(lang, 'open_settings')}
+              </Button>
+            )}
+          </Box>
         </Box>
-        <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={SPACE.row}>
-          {vm.state === 'ok' && (
-            <Text weight="semibold" color={vm.failed ? C.error : C.text}>
-              {vm.failed ? t(lang, 'in_failed') : vm.summary}
-            </Text>
-          )}
-          {vm.checked && (
+        <Box flexDirection="column" gap={SPACE.line}>
+          <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={SPACE.row}>
+            {vm.state === 'ok' && (
+              <Text weight="semibold" color={vm.failed ? C.error : C.text}>
+                {vm.failed ? t(lang, 'in_failed') : vm.summary}
+              </Text>
+            )}
+            {vm.checked && (
+              <Text size="caption" color={C.subtle}>
+                {vm.state === 'ok' ? `· ${vm.checked}` : vm.checked}
+              </Text>
+            )}
+          </Box>
+          {vm.state === 'ok' && vm.mergeLine && (
             <Text size="caption" color={C.subtle}>
-              {vm.state === 'ok' ? `· ${vm.checked}` : vm.checked}
+              {vm.mergeLine}
             </Text>
           )}
         </Box>
-        {vm.state === 'ok' && vm.mergeLine && (
-          <Text size="caption" color={C.subtle}>
-            {vm.mergeLine}
-          </Text>
-        )}
       </Box>
     )
     // A banner: check failed (red), no repo (neutral).
@@ -544,7 +549,7 @@ export const register: Register = (on, options) => {
       vm.error &&
       banner(
         'failed',
-        { bg: rgba(HEX.error, TINT + 0.01), border: rgba(HEX.error, 0.35) },
+        { bg: rgba(HEX.error, TINT), border: rgba(HEX.error, EDGE) },
         I.error,
         t(lang, 'in_err_title'),
         vm.error.why,
@@ -557,7 +562,7 @@ export const register: Register = (on, options) => {
         head(vm.state === 'never'),
         <Box key="skeleton" flexDirection="column" gap={SPACE.row}>
           {['78%', '64%', '72%'].map((w, i) => (
-            <Box key={`sk${i}`} height={1} width={w} backgroundColor="rgba(128,128,128,0.18)" />
+            <Box key={`sk${i}`} height={1} width={w} backgroundColor={SKELETON} />
           ))}
           <Text size="caption" color={C.subtle}>
             {t(lang, 'in_first')}
@@ -568,7 +573,7 @@ export const register: Register = (on, options) => {
     if (vm.state === 'noRepos')
       return frame(
         head(false),
-        banner('norepo', { bg: 'rgba(128,128,128,0.05)', border: 'rgba(128,128,128,0.25)' }, I.pr(HEX.grey), t(lang, 'in_norepo_title'), t(lang, 'in_norepo_body'), {
+        banner('norepo', { bg: PANEL.backgroundColor, border: PANEL.borderColor }, I.pr(HEX.grey), t(lang, 'in_norepo_title'), t(lang, 'in_norepo_body'), {
           label: t(lang, 'in_setup'),
           onPress: () => void addRepo($),
         }),
@@ -608,15 +613,14 @@ export const register: Register = (on, options) => {
     // what the run holds: a Validate whose PRs are in it says Validating…, the rest only dim
     const inRun = new Set(vm.run?.isRunning ? vm.run.urls : [])
     const runs = (urls: string[]) => urls.some(u => inRun.has(u))
-    // a page's path: "Pull requests / billing", the first part the way back to the dashboard
+    // a sub-page's top: Back, a verb with where it goes, then the page's name as its heading
     const bar = (title: string) => (
-      <Box key="bar" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
-        <Button key="back" variant="secondary" onPress={() => void (goTo('home'), update($, confirmMerge, () => null))}>
-          {t(lang, 'in_title')}
-        </Button>
-        <Text size="heading" color={C.subtle}>
-          /
-        </Text>
+      <Box key="bar" flexDirection="column" gap={SPACE.block}>
+        <Box flexDirection="row">
+          <Button key="back" variant="secondary" onPress={() => void (goTo('home'), update($, confirmMerge, () => null))}>
+            {t(lang, 'back_home')}
+          </Button>
+        </Box>
         <Text size="heading" weight="semibold" color={C.text}>
           {clip(title)}
         </Text>
@@ -678,8 +682,13 @@ export const register: Register = (on, options) => {
         </Box>
         {vm.run.retry.length > 0 && (
           <Box flexDirection="row">
-            <Button key="retry" variant="secondary" onPress={once('retry', () => validate($, vm.run!.retry, lang, prompts.validate))}>
-              {t(lang, 'run_retry', vm.run.retry.length)}
+            <Button
+              key="retry"
+              variant="secondary"
+              dimColor={isWorking('retry')}
+              onPress={isWorking('retry') ? noop : work('retry', () => validate($, vm.run!.retry, lang, prompts.validate))}
+            >
+              {isWorking('retry') ? t(lang, 'cd_queuing', vm.run.retry.length) : t(lang, 'run_retry', vm.run.retry.length)}
             </Button>
           </Box>
         )}
@@ -713,8 +722,13 @@ export const register: Register = (on, options) => {
               <Text size="caption" color={C.subtle}>
                 {t(lang, `ag_${a.status}`)}
               </Text>
-              <Button key={`stop:${a.id}`} variant="secondary" onPress={once(`stop:${a.id}`, () => stopAgent($, a.id))}>
-                {t(lang, 'ag_stop')}
+              <Button
+                key={`stop:${a.id}`}
+                variant="secondary"
+                dimColor={isWorking(`stop:${a.id}`)}
+                onPress={isWorking(`stop:${a.id}`) ? noop : work(`stop:${a.id}`, () => stopAgent($, a.id))}
+              >
+                {isWorking(`stop:${a.id}`) ? t(lang, 'ag_stopping') : t(lang, 'ag_stop')}
               </Button>
             </Box>
           )
@@ -732,6 +746,8 @@ export const register: Register = (on, options) => {
       onPress: () => void
       primary?: boolean
       isOff?: boolean
+      // what it says while its press runs
+      working?: string
     }
     const card = (key: string, title: string, body: string, btn?: Action) => (
       <Box key={key} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={24} {...PANEL}>
@@ -745,8 +761,13 @@ export const register: Register = (on, options) => {
         </Box>
         {btn && (
           <Box flexDirection="row">
-            <Button key={btn.key} variant={btn.primary && !btn.isOff ? 'primary' : 'secondary'} dimColor={btn.isOff} onPress={btn.isOff ? noop : btn.onPress}>
-              {btn.label}
+            <Button
+              key={btn.key}
+              variant={btn.primary && !btn.isOff && !isWorking(btn.key) ? 'primary' : 'secondary'}
+              dimColor={btn.isOff || isWorking(btn.key)}
+              onPress={btn.isOff || isWorking(btn.key) ? noop : btn.onPress}
+            >
+              {isWorking(btn.key) && btn.working ? btn.working : btn.label}
             </Button>
           </Box>
         )}
@@ -766,7 +787,8 @@ export const register: Register = (on, options) => {
                 label: runs(vm.clean) ? t(lang, 'cd_validating') : t(lang, 'in_validate_n', vm.clean.length),
                 primary: true,
                 isOff: busy,
-                onPress: once('validate-clean', () => validate($, vm.clean, lang, prompts.validate)),
+                working: t(lang, 'cd_queuing', vm.clean.length),
+                onPress: work('validate-clean', () => validate($, vm.clean, lang, prompts.validate)),
               }
             : undefined,
         )}
@@ -779,7 +801,8 @@ export const register: Register = (on, options) => {
                 key: 'fix',
                 label: isFixing ? t(lang, 'cd_fixing') : t(lang, 'fix_n', vm.rework.length),
                 isOff: isFixing,
-                onPress: once('fix', () => fix($, vm.rework, lang, prompts.fix)),
+                working: t(lang, 'cd_starting_fix'),
+                onPress: work('fix', () => fix($, vm.rework, lang, prompts.fix)),
               }
             : undefined,
         )}
@@ -803,56 +826,36 @@ export const register: Register = (on, options) => {
             ? {
                 key: 'auto-on',
                 label: t(lang, 'cd_auto_on'),
-                onPress: once('auto', () => setAuto('mine', vm.auto.every)),
+                working: t(lang, 'auto_turning_on'),
+                onPress: work('auto-on', () => setAuto('mine', vm.auto.every)),
               }
             : {
                 key: 'auto-off',
                 label: t(lang, 'cd_auto_off'),
-                onPress: once('auto', () => setAuto('off', vm.auto.every)),
+                working: t(lang, 'auto_turning_off'),
+                onPress: work('auto-off', () => setAuto('off', vm.auto.every)),
               },
         )}
       </Box>
     )
 
-    // The repos: each its name (opens its page) and Validate on one line, its counts under it.
+    // The repos: each row has one action, opening its page, so the whole row is that button and
+    // its words carry the counts. Validating lives on the card above and at the foot of each page.
     const sectionTitle = (title: string) => (
-      <Text size="heading" weight="semibold" color={C.text}>
+      <Text weight="semibold" color={C.text}>
         {title}
       </Text>
     )
     const repoRows = (
       <Box key="repos" flexDirection="column" gap={SPACE.block}>
         {sectionTitle(t(lang, 'rl_title'))}
-        <Box flexDirection="column" gap={SPACE.block}>
+        <Box flexDirection="column" gap={SPACE.row}>
           {vm.groups.map(g => (
-            <Box key={`repo-row:${g.repo}`} flexDirection="column" gap={SPACE.line}>
-              <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
-                <Button key={`open:${g.repo}`} variant="secondary" onPress={() => goTo(g.repo)}>
-                  {clip(g.name)}
-                </Button>
-                <Box flexGrow={1} />
-                {(g.go.length > 0 || busy) && (
-                  <Button
-                    key={`validate:${g.repo}`}
-                    variant="secondary"
-                    dimColor={busy}
-                    onPress={busy ? noop : once(`validate:${g.repo}`, () => validate($, g.go, lang, prompts.validate))}
-                  >
-                    {runs(g.rows.map(x => x.url)) ? t(lang, 'cd_validating') : t(lang, 'in_validate_n', g.go.length)}
-                  </Button>
-                )}
-              </Box>
-              <Text size="caption" color={C.subtle}>
-                {[
-                  t(lang, 'rl_prs', g.rows.length),
-                  g.go.length ? t(lang, 'rl_go', g.go.length) : '',
-                  g.issues ? t(lang, 'rl_issues', g.issues) : '',
-                  g.merge ? t(lang, 'rl_merge') : '',
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </Text>
-            </Box>
+            <Button key={`open:${g.repo}`} variant="secondary" onPress={() => goTo(g.repo)}>
+              {[t(lang, 'rl_open', clip(g.name)), g.go.length ? t(lang, 'rl_go', g.go.length) : t(lang, 'rl_prs', g.rows.length), g.issues ? t(lang, 'rl_issues', g.issues) : '']
+                .filter(Boolean)
+                .join(' · ')}
+            </Button>
           ))}
         </Box>
       </Box>
@@ -892,7 +895,7 @@ export const register: Register = (on, options) => {
     // the boxes' numbers padded to one width with figure spaces, so every box is as wide
     const padNum = (num: string, w: number) => '\u2007'.repeat(Math.max(0, w - num.length)) + num
     const line = (x: Row, numW: number) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.inline} hover={{ backgroundColor: HOVER }}>
+      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.inline}>
         {/* the box names its PR and stays through a run, dimmed, so the focus and the column never
             move; a line that cannot be picked here (its author left out in Who, or Argos at work
             on it) keeps it dimmed too, and the line says why */}
@@ -963,12 +966,12 @@ export const register: Register = (on, options) => {
         <Box key="repo-go" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
           <Button
             key="validate"
-            variant="primary"
-            dimColor={busy || !going.length}
+            variant={busy || !going.length || isWorking(`validate:${g.repo}`) ? 'secondary' : 'primary'}
+            dimColor={busy || !going.length || isWorking(`validate:${g.repo}`)}
             onPress={
-              busy || !going.length
+              busy || !going.length || isWorking(`validate:${g.repo}`)
                 ? noop
-                : once(`validate:${g.repo}`, () =>
+                : work(`validate:${g.repo}`, () =>
                     validate(
                       $,
                       going.map(x => x.url),
@@ -978,7 +981,13 @@ export const register: Register = (on, options) => {
                   )
             }
           >
-            {busy ? t(lang, 'cd_validating') : going.length ? t(lang, 'in_validate_n', going.length) : t(lang, 'in_validate')}
+            {isWorking(`validate:${g.repo}`)
+              ? t(lang, 'cd_queuing', going.length)
+              : busy
+                ? t(lang, 'cd_validating')
+                : going.length
+                  ? t(lang, 'in_validate_n', going.length)
+                  : t(lang, 'in_validate')}
           </Button>
           <Button
             key="clear"
@@ -1023,7 +1032,8 @@ export const register: Register = (on, options) => {
     const savePrompt = async (repo: string, text: string) => {
       const r = await repoCmd('prompt', repo, text.trim())
       promptSaved.set(repo, !r?.exitCode)
-      if (!r?.exitCode) drafts.delete(repo)
+      if (r?.exitCode) promptErrors.set(repo, (r.stderr ?? '').trim() || t(lang, 'rp_cmd_failed'))
+      else drafts.delete(repo), promptErrors.delete(repo)
     }
     const section = (key: string, title: string, ...body: any[]) => (
       <Box key={key} flexDirection="column" gap={SPACE.block}>
@@ -1075,7 +1085,7 @@ export const register: Register = (on, options) => {
                   label: t(lang, `auto_mode_${m}`),
                 }))}
                 value={vm.auto.mode}
-                onSelect={(m: string) => void setAuto(m, vm.auto.every)}
+                onSelect={(m: string) => work('auto-schedule', () => setAuto(m, vm.auto.every))()}
               />
             </Box>
           )}
@@ -1092,13 +1102,13 @@ export const register: Register = (on, options) => {
                   label: t(lang, 'auto_every', n),
                 }))}
                 value={String(vm.auto.every)}
-                onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
+                onSelect={(n: string) => work('auto-schedule', () => setAuto(vm.auto.mode, Number(n)))()}
               />
             </Box>
           )}
         </Box>
         <Text size="caption" color={C.subtle}>
-          {vm.auto.line}
+          {isWorking('auto-schedule') ? t(lang, 'auto_saving') : vm.auto.line}
         </Text>
       </Box>,
     )
@@ -1128,13 +1138,15 @@ export const register: Register = (on, options) => {
               {t(lang, g.merge ? 'mg_turn_off' : 'mg_turn_on')}
             </Button>
           </Box>
-          <Text size="caption" color={C.subtle}>
-            {g.merge ? t(lang, 'mg_on_note') : t(lang, 'mg_off_note', g.name)}
-          </Text>
+          {g.merge && (
+            <Text size="caption" color={C.subtle}>
+              {t(lang, 'mg_on_note')}
+            </Text>
+          )}
         </Box>
         {confirming === g.repo && (
           // an action on GitHub: the confirmation opens under its button, in the warning look
-          <Box flexDirection="column" gap={SPACE.block} padding="sm" borderStyle="round" borderColor={rgba(HEX.warning, 0.35)} backgroundColor={rgba(HEX.warning, TINT)}>
+          <Box flexDirection="column" gap={SPACE.block} padding="sm" borderStyle="round" borderColor={rgba(HEX.warning, EDGE)} backgroundColor={rgba(HEX.warning, TINT)}>
             <Box flexDirection="column" gap={SPACE.line}>
               <Text weight="semibold" color={C.text}>
                 {t(lang, 'mg_confirm_title', g.repo)}
@@ -1163,9 +1175,14 @@ export const register: Register = (on, options) => {
               {t(lang, 'mg_method')}
             </Text>
             {mergeErrors.get(g.repo) && (
-              <Text size="caption" color={C.error}>
-                {mergeErrors.get(g.repo)}
-              </Text>
+              <Box flexDirection="column" gap={SPACE.line}>
+                <Text size="caption" color={C.error}>
+                  {mergeErrors.get(g.repo)}
+                </Text>
+                <Text size="caption" color={C.text}>
+                  {t(lang, 'mg_failed')}
+                </Text>
+              </Box>
             )}
             <Box flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
               <Button
@@ -1214,7 +1231,7 @@ export const register: Register = (on, options) => {
             </Button>
             {promptSaved.has(g.repo) ? (
               <Text size="caption" color={promptSaved.get(g.repo) ? C.success : C.error}>
-                {t(lang, promptSaved.get(g.repo) ? 'rp_saved' : 'rp_failed')}
+                {promptSaved.get(g.repo) ? t(lang, 'rp_saved') : t(lang, 'rp_failed', promptErrors.get(g.repo) ?? '')}
               </Text>
             ) : (
               drafts.has(g.repo) &&
@@ -1233,14 +1250,7 @@ export const register: Register = (on, options) => {
         bar(t(lang, 'settings')),
         whoSection,
         autoSection,
-        section(
-          'repo-settings',
-          t(lang, 'rl_title'),
-          <Text key="rp-base" size="caption" color={C.subtle}>
-            {t(lang, prompts.validate.mode === 'mine' && prompts.validate.text ? 'rp_base_mine' : 'rp_base')}
-          </Text>,
-          ...vm.groups.map(repoSettings),
-        ),
+        section('repo-settings', t(lang, 'rl_title'), ...vm.groups.map(repoSettings)),
         <Text key="prompts-note" size="caption" color={C.subtle}>
           {t(lang, 'se_prompts')}
         </Text>,
