@@ -36,6 +36,8 @@ One skill, `argos`, does every PR job. Ask in plain language, in any language.
 
 The plugin ships a mod that runs the vigil on its own timer, at no token cost, and toasts what is new. `/argos` opens a pane with one job: send the open PRs to AI validation in one tap, minus the ones you leave out. Keep it open: it refreshes with every round. Hover any icon to see what it means.
 
+**First run.** With no repo connected, `/argos` opens on **Set up Argos**: (1) the GitHub CLI (ready, missing, or nobody logged in, with **Copy login command** for `gh auth login`), (2) the account, picked from those gh knows, (3) the repos: the ones with open PRs for that account, each with **Connect <name>**, this folder when it has a GitHub remote, or one by `owner/name`. It ends with what Argos starts with (bots skipped, auto-validate off and what it costs) and **Open dashboard**, which waits until a repo is connected. Each step says where it stands and its fix; a failed check says why instead of guessing. **Settings → Run setup again** brings it back. `scripts/setup.mjs` does the checking.
+
 Three pages keep the flow short:
 
 - **The dashboard**, what `/argos` opens. The head ("22 to validate · 6 repos", when Argos last looked), **Check PRs** and **Open settings**. Then cards, each with the one flow it starts: **22 with nothing pending** → **Validate 22 PRs** (no change asked, no comment open, not a draft, not validated since its last commit); **3 PRs of mine to rework** → **Fix 3 PRs**; **5 with issues** (blockers found); **Auto-validate**, with when the next round looks and **Turn on auto-validate** / **Turn off auto-validate**. The agents at work sit above the cards. Last, one button per repo, "Open billing · 5 to validate · 1 with issues", which opens its page.

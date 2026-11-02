@@ -463,8 +463,8 @@ test('a failed check: a red banner, the list still there', async ($, on) => {
   await ui.unmount()
 })
 
-test('no connected repo: one sentence, one button', async ($, on) => {
-  on('state.get', stored({ round: { at: round.at, okAt: round.at, repos: [], pending: [], others: [], needsRepos: true } }))
+test('no connected repo after setup: one sentence, one button', async ($, on) => {
+  on('state.get', stored({ round: { at: round.at, okAt: round.at, repos: [], pending: [], others: [], needsRepos: true }, setupDone: true }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: 'No GitHub repo here' }))?.text).toBe('No GitHub repo here')
@@ -473,12 +473,50 @@ test('no connected repo: one sentence, one button', async ($, on) => {
 })
 
 test('the first check shows placeholders and says what is happening', async ($, on) => {
-  on('state.get', stored({ isRunning: true }))
+  on('state.get', stored({ isRunning: true, setupDone: true }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /^First check/ }))?.text).toBe('First check takes a few seconds.')
   expect((await ui.find({ type: 'Text', text: 'Checking PRs…' }))?.text).toBe('Checking PRs…')
   await ui.unmount()
+})
+
+test('first run: setup checks gh, picks the account, connects a suggested repo, then opens the dashboard', async ($, on) => {
+  const runs: string[][] = []
+  let stored2: unknown
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', (_: unknown, e: { value: unknown }) => {
+    stored2 = e.value
+    return { value: undefined }
+  })
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(2)])
+    const out = e.argv[1]?.endsWith('setup.mjs')
+      ? JSON.stringify({ gh: 'ok', accounts: [{ login: 'acme-dev', active: true }], account: 'acme-dev', suggestions: [{ repo: 'acme/web', prs: 3 }] })
+      : ''
+    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  // what setup.mjs found when the pane opened with no repo connected
+  const seeded: Record<string, unknown> = {
+    setup: { gh: 'ok', accounts: [{ login: 'acme-dev', active: true }], account: 'acme-dev', suggestions: [{ repo: 'acme/web', prs: 3 }], here: 'acme/shop' },
+  }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  const ui = await $.ui.mount(PANE)
+  const text = async (key: string) => (await ui.find({ key }))?.text
+  expect((await ui.find({ type: 'Text', text: /GitHub CLI$/ }))?.text).toBe('1 · GitHub CLI')
+  expect((await ui.find({ type: 'Text', text: /^Ready/ }))?.text).toBe('Ready · 1 account logged in.')
+  expect([await text('connect-here'), await text('connect:acme/web'), await text('setup-finish')]).toEqual(['Connect this folder (acme/shop)', 'Connect web', 'Open dashboard'])
+  // nothing connected yet: the way out waits, and says why
+  expect((await ui.find({ type: 'Text', text: /^Connect a repo first/ }))?.text).toBe('Connect a repo first.')
+  await ui.press({ key: 'connect:acme/web' })
+  expect(runs.find(a => a[0] === 'add')).toEqual(['add', 'acme/web', '--account', 'acme-dev', '--lang', 'en'])
+  await ui.unmount()
+  expect(stored2).toBeUndefined()
 })
 
 test('a bare /argos repos add connects the session folder', async ($, on) => {

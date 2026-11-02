@@ -56,6 +56,20 @@ export type Verdicts = {
 // A connected repo as repos.json keeps it: auto-merge and its own validation prompt (skills is
 // what an older version kept instead, read as a prompt to use them).
 export type RepoCfg = { repo: string; account?: string; path?: string; merge?: boolean; prompt?: string; skills?: string[] }
+// What setup.mjs finds on a first run: is gh there, its logged-in accounts, the one in use, and
+// repos with open PRs for it (error: why they could not be listed).
+export type SetupInfo = {
+  // error: the check itself failed (timeout, crash), with why in error
+  gh: 'ok' | 'missing' | 'none' | 'error'
+  accounts: { login: string; active: boolean }[]
+  account: string | null
+  suggestions: { repo: string; prs: number }[]
+  // the session folder's repo, when it has a GitHub remote
+  here?: string | null
+  error?: string
+  // when the check ran
+  at?: string
+}
 // What round.mjs writes to last-round.json.
 export type Round = {
   at: string
@@ -93,6 +107,10 @@ declare module 'claude-code' {
       announced: string | null
       // the connected repos as repos.json keeps them (auto-merge, prompt)
       repos: RepoCfg[]
+      // what setup.mjs found on the first run
+      setup: SetupInfo | null
+      // whether the first setup was finished
+      setupDone: boolean
       // the presses still at work, by key, so their buttons say so
       pending: string[]
       // the page the pane shows: home (the dashboard), settings, or a repo by name

@@ -9,8 +9,8 @@ import type { PluginOptions, Register } from 'claude-code'
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
 import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, STARS, TINT, rgba, titled } from './look'
-import { UI, authorOf, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
-import type { RepoCfg, Round, Verdicts } from '../types'
+import { UI, authorOf, hhmm, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
+import type { RepoCfg, Round, SetupInfo, Verdicts } from '../types'
 
 export { outOf, reason, toViewModel, verdictOf, verdictTag } from './view'
 
@@ -46,6 +46,12 @@ const repos = atom(REPOS, [] as RepoCfg[])
 const page = atom({ plugin: 'argos', key: 'page' } as const, 'home')
 // the presses still at work (Turning on…, Saving…), so their buttons say so
 const pending = atom({ plugin: 'argos', key: 'pending' } as const, [] as string[])
+// what setup.mjs found: gh, its accounts, repos to suggest
+const SETUP = { plugin: 'argos', key: 'setup' } as const
+// whether the first setup was finished (kept in $.store, read into the pane when it opens)
+const SETUP_DONE = { plugin: 'argos', key: 'setupDone' } as const
+const setupDoneAtom = atom(SETUP_DONE, false)
+const setupInfo = atom(SETUP, null as SetupInfo | null)
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
@@ -56,6 +62,12 @@ const promptDrafts = new Map<string, string>()
 const promptSaved = new Map<string, boolean>()
 const mergeErrors = new Map<string, string>()
 const promptErrors = new Map<string, string>()
+// why connecting a repo failed, by the button that tried
+const connectErrors = new Map<string, string>()
+// setup: the login command was copied; what was typed as another repo; the accounts asked for
+const copiedLogin = new Set<boolean>()
+const otherDraft = new Map<string, string>()
+const wantedAccount: string[] = []
 // A press runs once: a second press while the first is still at work is dropped.
 const inflight = new Set<string>()
 const once = (key: string, fn: () => Promise<unknown>) => () => {
@@ -272,10 +284,48 @@ async function addRepo($: any) {
   if (!text.includes('/argos repos add')) await $.prompt.fill({ text: '/argos repos add ', mode: 'replace' })
 }
 
+// First setup's facts (setup.mjs): gh, its accounts, repos to suggest. Run when the pane opens with
+// no repo connected, and from the setup page's buttons; never while drawing.
+async function checkSetup($: any, account?: string, lang = 'en') {
+  if (account) wantedAccount.push(account)
+  if (inflight.has('setup-check')) return
+  inflight.add('setup-check')
+  try {
+    await update($, pending, list => [...list, 'setup-check'])
+    let asked: string | undefined
+    let info: SetupInfo
+    // the person may pick another account while a check runs: check again for the last one picked
+    do {
+      asked = wantedAccount.at(-1) ?? account
+      const at = new Date(await $.clock.now()).toISOString()
+      try {
+        const r = await $.process.run(['node', `${$.plugin.root}/scripts/setup.mjs`, ...(asked ? ['--account', asked] : []), '--json'], { timeoutMs: 60_000 })
+        info = { ...JSON.parse(r.stdout), at }
+      } catch (e) {
+        // a check that failed says so; it never claims gh is missing
+        info = { gh: 'error', accounts: [], account: null, suggestions: [], error: String((e as Error)?.message ?? e).split('\n')[0], at }
+      }
+    } while (wantedAccount.at(-1) && wantedAccount.at(-1) !== asked)
+    wantedAccount.length = 0
+    // a re-check that fixed gh says so, since its fix box goes away
+    const before = (await $.state.get(SETUP)).value as SetupInfo | null
+    if (before && before.gh !== 'ok' && info!.gh === 'ok') $.ui.toast(`Argos: ${t(lang, 'su_gh_ready')}`)
+    await update($, setupInfo, () => info)
+    await update($, pending, list => list.filter(k => k !== 'setup-check'))
+  } catch {
+    // the session went away mid-check: nothing to show it to
+  } finally {
+    inflight.delete('setup-check')
+  }
+}
+
 async function openPane($: any) {
   await load($)
   await loadVerdicts($)
-  await loadRepos($)
+  const list = await loadRepos($)
+  const done = (await $.store.get('setupDone').catch(() => undefined)) === true
+  await $.state.set(SETUP_DONE, done)
+  if (!list.length && !done && !(await $.state.get(SETUP)).value) void checkSetup($)
   await $.ui.open({ id: PANE, title: 'Argos' })
 }
 
@@ -421,7 +471,7 @@ export const register: Register = (on, options) => {
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
-    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, where, confirming, fixing, validating, busyKeys] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, where, confirming, fixing, validating, busyKeys, setupData, setupDone] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
@@ -435,6 +485,8 @@ export const register: Register = (on, options) => {
       read($, fixRuns),
       read($, agentRuns),
       read($, pending),
+      read($, setupInfo),
+      read($, setupDoneAtom),
     ])
     // the agents at work first: a line a fixing agent holds says so
     const working = (await $.agent.list().catch(() => []))
@@ -556,6 +608,279 @@ export const register: Register = (on, options) => {
         vm.error.isAuth ? { label: t(lang, 'in_fix_auth'), onPress: () => void fixAuth() } : { label: t(lang, 'in_retry'), onPress: checkNow },
       )
 
+    const setAuto = async (mode: string, every: number) => {
+      await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
+      await loadVerdicts($)
+    }
+    const noop = () => undefined
+    // a press that takes a while: once, and shown as at work until it ends
+    const work = (key: string, fn: () => Promise<unknown>) =>
+      once(key, async () => {
+        await update($, pending, list => [...list, key])
+        try {
+          await fn()
+        } finally {
+          await update($, pending, list => list.filter(k => k !== key))
+        }
+      })
+    const isWorking = (key: string) => busyKeys.includes(key)
+
+    // First setup: with no repo connected and the setup never finished, the pane opens on three
+    // steps (the GitHub CLI, the account, the repos), each saying where it stands and the one thing
+    // that moves it on, then the defaults it starts with. A mark says only what really stands: a
+    // step waiting on an earlier one is never shown done. What needs a terminal (logging gh in)
+    // is copied for the person to run; everything else happens here. Settings brings it back.
+    // a repo counts as connected once repos.json or the last round names it
+    const repoCount = Math.max(repoList.length, last?.repos?.length ?? 0)
+    if (where === 'setup' || (!setupDone && !repoCount)) {
+      const s = setupData
+      const checking = isWorking('setup-check')
+      const ghOk = s?.gh === 'ok'
+      const account = s?.account ?? ''
+      const connected = new Set(repoList.map(r => r.repo.toLowerCase()))
+      const connect = (target: string, key: string) =>
+        work(key, async () => {
+          const r = await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, 'add', target, ...(account ? ['--account', account] : []), '--lang', lang])
+          await loadRepos($)
+          if (r.exitCode) connectErrors.set(key, (r.stderr || r.stdout || '').trim() || t(lang, 'su_connect_failed_why'))
+          else connectErrors.delete(key)
+        })
+      // another repo by name: only owner/name goes to repos.mjs; anything else says how to write it
+      const connectOther = (text: string) => {
+        const name = text.trim()
+        if (!/^[\w.-]+\/[\w.-]+$/.test(name)) return void (connectErrors.set('connect-other', t(lang, 'su_other_bad')), update($, pending, list => [...list]))
+        connectErrors.delete('connect-other')
+        connect(name, 'connect-other')()
+      }
+      const finish = async () => {
+        await $.store.set('setupDone', true).catch(() => {})
+        await update($, setupDoneAtom, () => true)
+        await update($, page, () => 'home')
+        await tick($, options, true)
+      }
+      const MARK = {
+        done: { svg: I.check, word: t(lang, 'su_mark_done') },
+        now: { svg: I.queued, word: t(lang, 'su_mark_now') },
+        wait: { svg: I.queued, word: t(lang, 'su_mark_wait') },
+        blocked: { svg: I.cross, word: t(lang, 'su_mark_blocked') },
+      }
+      type Mark = keyof typeof MARK
+      // a step: its mark (named in words) and number, what stands now, then its actions under it
+      const step = (key: string, n: number, title: string, state: Mark, ...body: any[]) => (
+        <Box key={key} flexDirection="column" gap={SPACE.row}>
+          <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+            {icon(MARK[state].svg, MARK[state].word, 16, 16)}
+            <Text weight="semibold" color={C.text}>
+              {`${n} · ${title}`}
+            </Text>
+          </Box>
+          <Box flexDirection="column" gap={SPACE.inline} marginLeft={3}>
+            {body.filter(Boolean)}
+          </Box>
+        </Box>
+      )
+      const note = (text: string, color: string = C.subtle) => (
+        <Text size="caption" color={color}>
+          {text}
+        </Text>
+      )
+      const checkedAt = s?.at ? t(lang, 'su_checked_at', hhmm(Date.parse(s.at))) : ''
+      const ghProblem = s && !ghOk ? (s.gh === 'error' ? 'error' : s.gh === 'missing' ? 'missing' : 'none') : null
+      const ghStep = step(
+        'su-gh',
+        1,
+        t(lang, 'su_gh'),
+        !s ? 'now' : ghOk ? 'done' : 'blocked',
+        !s ? (
+          note(t(lang, 'su_gh_checking'))
+        ) : ghOk ? (
+          note(t(lang, 'su_gh_ok', s.accounts.length))
+        ) : (
+          <Box key="gh-fix" flexDirection="column" gap={SPACE.line}>
+            {note(ghProblem === 'error' ? t(lang, 'su_gh_error', s.error ?? '') : t(lang, ghProblem === 'missing' ? 'su_gh_missing' : 'su_gh_none'), C.error)}
+            {note(t(lang, ghProblem === 'missing' ? 'su_gh_missing_fix' : ghProblem === 'none' ? 'su_gh_none_fix' : 'su_gh_error_fix'), C.text)}
+          </Box>
+        ),
+        s && !ghOk && (
+          <Box key="gh-actions" flexDirection="column" gap={SPACE.row}>
+            {ghProblem === 'none' && (
+              <Box flexDirection="column" gap={SPACE.line}>
+                <Box flexDirection="row">
+                  <Button
+                    key="copy-login"
+                    variant="secondary"
+                    onPress={work('copy-login', async () => {
+                      await $.ui.copy({ text: 'gh auth login' })
+                      copiedLogin.add(true)
+                    })}
+                  >
+                    {copiedLogin.size ? t(lang, 'su_copied_login') : t(lang, 'su_copy_login')}
+                  </Button>
+                </Box>
+                {copiedLogin.size > 0 && note(t(lang, 'su_copied_note'))}
+              </Box>
+            )}
+            <Box flexDirection="column" gap={SPACE.line}>
+              <Box flexDirection="row">
+                <Button key="check-gh" variant="secondary" dimColor={checking} onPress={checking ? noop : () => void checkSetup($, account || undefined, lang)}>
+                  {checking ? t(lang, 'su_gh_checking') : t(lang, 'su_check_gh')}
+                </Button>
+              </Box>
+              {!checking && checkedAt && note(checkedAt)}
+            </Box>
+          </Box>
+        ),
+      )
+      const accountStep = step(
+        'su-account',
+        2,
+        t(lang, 'su_account'),
+        ghOk ? 'done' : 'wait',
+        !ghOk ? (
+          note(t(lang, 'su_after_gh'))
+        ) : s!.accounts.length > 1 && Select ? (
+          <Select
+            key="setup-account"
+            label={t(lang, 'su_account_pick')}
+            options={s!.accounts.map(a => ({ value: a.login, label: a.login }))}
+            value={wantedAccount.at(-1) ?? account}
+            onSelect={(login: string) => void checkSetup($, login, lang)}
+          />
+        ) : (
+          note(t(lang, 'su_account_one', account))
+        ),
+      )
+      // the folder Claude runs in, when it is a GitHub repo
+      const here = s?.here ?? null
+      const repoStep = step(
+        'su-repos',
+        3,
+        t(lang, 'su_repos'),
+        !ghOk ? 'wait' : repoCount ? 'done' : 'now',
+        !ghOk && note(t(lang, 'su_after_gh')),
+        ghOk && note(checking ? t(lang, 'su_loading_repos', wantedAccount.at(-1) ?? account) : repoCount ? t(lang, 'su_repos_n', repoCount) : t(lang, 'su_repos_none')),
+        ghOk && s!.suggestions.length > 0 && (
+          <Box key="suggest" flexDirection="column" gap={SPACE.block}>
+            {note(t(lang, 'su_suggest', account))}
+            {s!.suggestions.map(x => {
+              const key = `connect:${x.repo}`
+              const isIn = connected.has(x.repo.toLowerCase())
+              const off = checking || isIn || isWorking(key)
+              const name = clip(x.repo.split('/')[1] ?? x.repo, 16)
+              return (
+                <Box key={`sug:${x.repo}`} flexDirection="column" gap={SPACE.line}>
+                  <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+                    <Box flexDirection="column" gap={SPACE.line} flexGrow={1} flexShrink={1} minWidth={0}>
+                      <Text weight="semibold" color={C.text}>
+                        {x.repo}
+                      </Text>
+                      {note(t(lang, 'su_open_prs', x.prs))}
+                    </Box>
+                    <Box flexShrink={0}>
+                      <Button key={key} variant="secondary" dimColor={off} onPress={off ? noop : connect(x.repo, key)}>
+                        {isIn ? t(lang, 'su_connected', name) : isWorking(key) ? t(lang, 'su_connecting') : t(lang, 'su_connect', name)}
+                      </Button>
+                    </Box>
+                  </Box>
+                  {connectErrors.get(key) && note(`${connectErrors.get(key)} ${t(lang, 'su_connect_fix')}`, C.error)}
+                </Box>
+              )
+            })}
+          </Box>
+        ),
+        ghOk && s?.error && note(t(lang, 'su_suggest_failed', s.error), C.warning),
+        // other ways in: this folder, or a repo by name
+        ghOk && here && (
+          <Box key="here" flexDirection="column" gap={SPACE.line}>
+            <Box flexDirection="row">
+              <Button
+                key="connect-here"
+                variant="secondary"
+                dimColor={checking || connected.has(here.toLowerCase()) || isWorking('connect-here')}
+                onPress={checking || connected.has(here.toLowerCase()) || isWorking('connect-here') ? noop : connect(here, 'connect-here')}
+              >
+                {connected.has(here.toLowerCase())
+                  ? t(lang, 'su_here_connected')
+                  : isWorking('connect-here')
+                    ? t(lang, 'su_connecting')
+                    : t(lang, 'su_connect_here', clip(here, 28))}
+              </Button>
+            </Box>
+            {connectErrors.get('connect-here') && note(`${connectErrors.get('connect-here')} ${t(lang, 'su_connect_fix')}`, C.error)}
+          </Box>
+        ),
+        ghOk && Input && (
+          <Box key="other" flexDirection="column" gap={SPACE.row}>
+            <Input
+              key="connect-other"
+              label={t(lang, 'su_other')}
+              placeholder="acme/web"
+              submitLabel={t(lang, 'su_connect_repo')}
+              onInput={(text: string) => void otherDraft.set('v', text)}
+              onSubmit={(text: string) => connectOther(text)}
+            />
+            <Box flexDirection="row">
+              <Button
+                key="connect-other-btn"
+                variant="secondary"
+                dimColor={checking || isWorking('connect-other')}
+                onPress={checking || isWorking('connect-other') ? noop : () => connectOther(otherDraft.get('v') ?? '')}
+              >
+                {isWorking('connect-other') ? t(lang, 'su_connecting') : t(lang, 'su_connect_repo')}
+              </Button>
+            </Box>
+            {connectErrors.get('connect-other') && note(connectErrors.get('connect-other')!, C.error)}
+          </Box>
+        ),
+      )
+      // what Argos starts with, not steps: who goes and the automatic mode, each changeable later
+      const autoOn = (judged?.auto ?? 'off') !== 'off'
+      const defaults = (
+        <Box key="su-defaults" flexDirection="column" gap={SPACE.row}>
+          <Text weight="semibold" color={C.text}>
+            {t(lang, 'su_defaults')}
+          </Text>
+          <Box flexDirection="column" gap={SPACE.inline} marginLeft={3}>
+            {note(`${t(lang, 'su_who')}: ${vm.state === 'ok' ? vm.who.label.replace(/^[^:]+:\s*/, '') : t(lang, 'su_who_default')}`)}
+            {note(`${t(lang, 'auto_label')}: ${autoOn ? t(lang, 'su_auto_on') : t(lang, 'su_auto_off')}`)}
+            <Box flexDirection="row">
+              <Button
+                key="su-auto"
+                variant="secondary"
+                dimColor={!repoCount || isWorking('su-auto')}
+                onPress={!repoCount || isWorking('su-auto') ? noop : work('su-auto', () => setAuto(autoOn ? 'off' : 'mine', judged?.autoEvery ?? 30))}
+              >
+                {isWorking('su-auto') ? t(lang, autoOn ? 'auto_turning_off' : 'auto_turning_on') : t(lang, autoOn ? 'cd_auto_off' : 'cd_auto_on')}
+              </Button>
+            </Box>
+          </Box>
+        </Box>
+      )
+      return frame(
+        <Box key="su-head" flexDirection="column" gap={SPACE.line}>
+          <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+            {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
+            <Text size="heading" weight="semibold" color={C.text}>
+              {t(lang, 'su_title')}
+            </Text>
+          </Box>
+          {note(t(lang, 'su_sub'))}
+        </Box>,
+        ghStep,
+        accountStep,
+        repoStep,
+        defaults,
+        <Box key="su-finish" flexDirection="column" gap={SPACE.line}>
+          <Box flexDirection="row">
+            <Button key="setup-finish" variant={repoCount ? 'primary' : 'secondary'} dimColor={!repoCount} onPress={repoCount ? () => void finish() : noop}>
+              {t(lang, 'su_finish')}
+            </Button>
+          </Box>
+          {!repoCount && note(t(lang, ghOk ? 'su_finish_needs' : 'su_finish_needs_gh'))}
+        </Box>,
+      )
+    }
+
     // The first check: static placeholders one line tall (a height counts lines), so nothing jumps.
     if (vm.state === 'loading' || vm.state === 'never')
       return frame(
@@ -593,23 +918,7 @@ export const register: Register = (on, options) => {
       await loadRepos($)
       return r as { exitCode?: number; stderr?: string } | undefined
     }
-    const setAuto = async (mode: string, every: number) => {
-      await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
-      await loadVerdicts($)
-    }
     const busy = Boolean(vm.run?.isRunning)
-    const noop = () => undefined
-    // a press that takes a while: once, and shown as at work until it ends
-    const work = (key: string, fn: () => Promise<unknown>) =>
-      once(key, async () => {
-        await update($, pending, list => [...list, key])
-        try {
-          await fn()
-        } finally {
-          await update($, pending, list => list.filter(k => k !== key))
-        }
-      })
-    const isWorking = (key: string) => busyKeys.includes(key)
     // what the run holds: a Validate whose PRs are in it says Validating…, the rest only dim
     const inRun = new Set(vm.run?.isRunning ? vm.run.urls : [])
     const runs = (urls: string[]) => urls.some(u => inRun.has(u))
@@ -1273,6 +1582,11 @@ export const register: Register = (on, options) => {
         <Text key="prompts-note" size="caption" color={C.subtle}>
           {t(lang, 'se_prompts')}
         </Text>,
+        <Box key="setup-again" flexDirection="row">
+          <Button key="setup-again" variant="secondary" onPress={() => void (goTo('setup'), checkSetup($, undefined, lang))}>
+            {t(lang, 'se_setup')}
+          </Button>
+        </Box>,
       )
 
     const opened = vm.groups.find(g => g.repo === where)
