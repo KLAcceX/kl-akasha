@@ -96,13 +96,6 @@ export const I = {
       16,
       `<circle cx="4" cy="3.5" r="1.75" ${st(c)}/><circle cx="4" cy="12.5" r="1.75" ${st(c)}/><circle cx="12" cy="12.5" r="1.75" ${st(c)}/><path d="M4 5.25v5.5M12 10.75V6.5a2 2 0 0 0-2-2H7.5M9 3 7.5 4.5 9 6" ${st(c)}/>`,
     ),
-  // where a page leads, and the way back: grey, so they sit behind the words they mark
-  chevron: S(16, `<path d="M6 4l4 4-4 4" ${st(HEX.grey, 1.6)}/>`),
-  back: S(16, `<path d="M13 8H3.5M7.5 4 3.5 8l4 4" ${st(HEX.grey, 1.6)}/>`),
-  gear: S(
-    16,
-    `<circle cx="8" cy="8" r="2" ${st(HEX.grey, 1.4)}/><circle cx="8" cy="8" r="4.4" ${st(HEX.grey, 1.4)}/><path d="M8 1.6v2M8 12.4v2M1.6 8h2M12.4 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4" ${st(HEX.grey, 1.4)}/>`,
-  ),
   // how a PR stands in a run: queued, Argos at work (it turns where the surface animates), done,
   // failed; the words beside them say the same
   queued: S(16, `<circle cx="8" cy="8" r="4.5" ${st(HEX.grey, 1.5)}/>`),

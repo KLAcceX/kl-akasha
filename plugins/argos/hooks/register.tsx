@@ -424,12 +424,9 @@ export const register: Register = (on, options) => {
             </Button>
           )}
           {vm.state === 'ok' && (
-            <Box flexDirection="row" alignItems="center" gap={SPACE.row}>
-              {icon(I.gear, '⚙', 16, 16)}
-              <Button key="settings-page" plain={true} onPress={() => void update($, page, () => 'settings')}>
-                {t(lang, 'settings')}
-              </Button>
-            </Box>
+            <Button key="settings-page" plain={true} onPress={() => void update($, page, () => 'settings')}>
+              {t(lang, 'settings')}
+            </Button>
           )}
         </Box>
         <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={SPACE.row}>
@@ -533,16 +530,16 @@ export const register: Register = (on, options) => {
       await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
       await loadVerdicts($)
     }
-    // a page's title row: Back to the dashboard, then its name
+    // a page's path: "Pull requests / billing", the first part the way back to the dashboard. A
+    // control is one native button with words; an icon beside it would be a second object that
+    // does nothing when clicked, so drawings stay on what is not pressed.
     const bar = (title: string) => (
-      <Box key="bar" flexDirection="column" gap={SPACE.line}>
-        <Box flexDirection="row" alignItems="center" gap={SPACE.row}>
-          {icon(I.back, '←', 16, 16)}
-          <Button key="back" plain={true} onPress={() => goTo('home')}>
-            {t(lang, 'pg_back')}
-          </Button>
-        </Box>
-        <Text size="heading" weight="semibold" color={C.text}>
+      <Box key="bar" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
+        <Button key="back" plain={true} onPress={() => goTo('home')}>
+          {t(lang, 'in_title')}
+        </Button>
+        <Text color={C.subtle}>/</Text>
+        <Text weight="semibold" color={C.text}>
           {title}
         </Text>
       </Box>
@@ -691,12 +688,9 @@ export const register: Register = (on, options) => {
         </Text>
         {vm.groups.map(g => (
           <Box key={`repo-row:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.inline} paddingX="xs" hover={{ backgroundColor: HOVER }}>
-            <Box flexDirection="row" alignItems="center">
-              <Button key={`open:${g.repo}`} plain={true} onPress={() => goTo(g.repo)}>
-                {g.name}
-              </Button>
-              {icon(I.chevron, '›', 14, 14)}
-            </Box>
+            <Button key={`open:${g.repo}`} plain={true} onPress={() => goTo(g.repo)}>
+              {g.name}
+            </Button>
             <Text size="caption" color={C.subtle}>
               {[t(lang, 'rl_prs', g.rows.length), g.go.length ? t(lang, 'rl_go', g.go.length) : '', g.issues ? t(lang, 'rl_issues', g.issues) : '', g.merge ? t(lang, 'rl_merge') : ''].filter(Boolean).join(' · ')}
             </Text>
