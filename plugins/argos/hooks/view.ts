@@ -129,7 +129,7 @@ export const PRESETS = [
 const kindsOut = (out: Set<string>) => [...out].filter(x => x.startsWith('kind:')).map(x => x.slice(5))
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x))
 export const UI: Ui = { out: [], back: [] }
-// limit: minutes a PR may stay "validating"; repos: auto-merge and skills per repo (repos.json)
+// limit: minutes a PR may stay "validating"; repos: auto-merge and prompt per repo (repos.json)
 type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; verdicts?: Verdicts | null; ignored?: string[]; limit?: number; repos?: RepoCfg[]; fixing?: string[] }
 // 14:30, the person's own clock: times instead of "in 12 min", so nothing on screen ticks
 export const hhmm = (ms: number) => {
@@ -316,7 +316,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       mark: isAll ? ('on' as const) : picked ? ('mixed' as const) : ('off' as const),
       count: t(lang, 'in_of', picked, lines.length),
       merge: Boolean(cfgOf(repo)?.merge),
-      skills: cfgOf(repo)?.skills ?? [],
+      prompt: cfgOf(repo)?.prompt ?? '',
     }
   })
 

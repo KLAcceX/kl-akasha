@@ -284,7 +284,7 @@ test('quick picks: everything with nothing pending, or my PRs with something ask
   await ui.unmount()
 })
 
-test('automatic mode, a repo\'s auto-merge (two taps on, one off) and its skills, from the pane', async ($, on) => {
+test('automatic mode, a repo\'s auto-merge (two taps on, one off) and its own prompt, from the pane', async ($, on) => {
   const runs: string[][] = []
   // the seeded values, and the pane's own writes read back
   const seeded: Record<string, unknown> = { round, verdicts: { ...judged, auto: 'off', batch: { urls: [], at: null } }, repos: [{ repo: 'acme/web' }] }
@@ -316,9 +316,9 @@ test('automatic mode, a repo\'s auto-merge (two taps on, one off) and its skills
   await ui.press({ key: 'merge:acme/web' })
   await ui.press({ key: 'merge-yes:acme/web' })
   expect(runs.at(-1)).toEqual(['merge', 'acme/web', 'on', '--lang', 'en'])
-  // skills for this repo, saved on Enter
-  await ui.input({ key: 'skills:acme/web', text: 'api-style, billing-ledger' })
-  expect(runs.at(-1)).toEqual(['skills', 'acme/web', 'api-style', 'billing-ledger', '--lang', 'en'])
+  // this repo's prompt, saved on Enter
+  await ui.input({ key: 'prompt:acme/web', text: ' Check the ledger invariants first ' })
+  expect(runs.at(-1)).toEqual(['prompt', 'acme/web', 'Check the ledger invariants first', '--lang', 'en'])
   await ui.unmount()
 })
 

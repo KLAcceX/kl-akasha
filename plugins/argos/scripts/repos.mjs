@@ -10,8 +10,8 @@
 //   node repos.mjs remove <owner/name | URL | folder> [--lang ...]
 //   node repos.mjs merge <repo> on|off [--lang ...]
 //       on: Argos approves and merges this repo's PRs that pass its strict rule (see merge.mjs)
-//   node repos.mjs skills <repo> [skill ...] [--lang ...]
-//       the skills the validation reads as references for this repo; none clears them
+//   node repos.mjs prompt <repo> [text ...] [--lang ...]
+//       this repo's own validation prompt, added to Argos's job for its PRs; none clears it
 //   node repos.mjs --self-test
 // Env: ARGOS_STATE overrides the state file path (repos.json sits beside it).
 import { execFileSync } from "node:child_process";
@@ -103,19 +103,21 @@ function main(args) {
     return console.log(`Argos: ${t(lang, next.length < list.length ? "removed" : "not_connected", name)}`);
   }
   // per repo settings, on a connected repo only
-  if ((verb === "merge" || verb === "skills") && rest[0]) {
+  if ((verb === "merge" || verb === "prompt") && rest[0]) {
     const name = repoFromArg(rest[0]) ?? rest[0];
     const old = list.find((r) => same(r.repo, name));
     if (!old) fail(t(lang, "not_connected", name));
     if (verb === "merge" && !["on", "off"].includes(rest[1])) fail("merge <repo> on|off");
-    const skills = rest.slice(1).flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean);
-    const next = verb === "merge" ? { ...old, merge: rest[1] === "on" } : { ...old, skills };
+    const text = rest.slice(1).join(" ").trim();
+    // a prompt replaces the skills list an older version kept
+    const { skills: _, prompt: __, ...base } = old;
+    const next = verb === "merge" ? { ...old, merge: rest[1] === "on" } : { ...base, ...(text && { prompt: text }) };
     write(list.map((r) => (r === old ? next : r)));
-    return console.log(`Argos: ${verb === "merge" ? t(lang, next.merge ? "merge_on" : "merge_off", old.repo) : t(lang, "skills_set", old.repo, skills.join(", "))}`);
+    return console.log(`Argos: ${verb === "merge" ? t(lang, next.merge ? "merge_on" : "merge_off", old.repo) : t(lang, text ? "rp_set" : "rp_clear", old.repo)}`);
   }
   if (args.includes("--json")) return console.log(JSON.stringify(list));
   if (!list.length) return console.log(`Argos: ${t(lang, "no_repos")}`);
-  const extra = (r) => `${r.merge ? " · auto-merge" : ""}${r.skills?.length ? ` · skills: ${r.skills.join(", ")}` : ""}`;
+  const extra = (r) => `${r.merge ? " · auto-merge" : ""}${r.prompt ? " · own prompt" : ""}`;
   console.log([`Argos: ${t(lang, "list_title")}`, ...list.map((r) => `- ${r.repo}${r.account ? ` as ${r.account}` : ""}${extra(r)}${r.path ? `  (${r.path})` : ""}`)].join("\n"));
 }
 

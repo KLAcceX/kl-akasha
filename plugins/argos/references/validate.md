@@ -23,7 +23,7 @@ With the account that owns its repo (`node scripts/repos.mjs list --json` names 
 
 Keep one PR short: this is a triage, not the full review of `references/review.md`.
 
-**Skills as references.** A PR line may name skills: `- <url> (skills: security-review, api-style)`. Read each one's `SKILL.md` and judge the PR by its rules as well; what it finds counts like any other finding (a Blocker only with `file:line` and how it fails). A skill you cannot find is named in the report, never guessed.
+**The user's rules.** The request may carry the user's own prompt and, per repo, a line `Rules for <owner/repo>: <text>`. Apply them to that repo's PRs on top of the layers, and read any skill they name (its `SKILL.md`). What they find counts like any other finding (a Blocker only with `file:line` and how it fails). A skill you cannot find is named in the report, never guessed.
 
 ## 3. Record the verdict
 

@@ -53,8 +53,9 @@ export type Verdicts = {
   batch: { urls: string[]; at: string | null }
   prs: Record<string, Verdict>
 }
-// A connected repo as repos.json keeps it: auto-merge and its own validation skills.
-export type RepoCfg = { repo: string; account?: string; path?: string; merge?: boolean; skills?: string[] }
+// A connected repo as repos.json keeps it: auto-merge and its own validation prompt (skills is
+// what an older version kept instead, read as a prompt to use them).
+export type RepoCfg = { repo: string; account?: string; path?: string; merge?: boolean; prompt?: string; skills?: string[] }
 // What round.mjs writes to last-round.json.
 export type Round = {
   at: string
@@ -90,7 +91,7 @@ declare module 'claude-code' {
       verdicts: Verdicts | null
       // the run whose end was already told in a toast (its batch's start time)
       announced: string | null
-      // the connected repos as repos.json keeps them (auto-merge, skills)
+      // the connected repos as repos.json keeps them (auto-merge, prompt)
       repos: RepoCfg[]
       // the repo whose Settings fold is open
       settingsOpen: string | null

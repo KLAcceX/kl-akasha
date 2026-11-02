@@ -38,22 +38,21 @@ const ignored = atom(IGNORED, [] as string[])
 const authorsOpen = atom({ plugin: 'argos', key: 'authorsOpen' } as const, false)
 // what verdicts.mjs last wrote: the AI's validations, read by the lines
 const verdicts = atom(VERDICTS, null)
-// the connected repos as repos.json keeps them (auto-merge, skills), and which repo's Settings
+// the connected repos as repos.json keeps them (auto-merge, prompt), and which repo's Settings
 // fold is open, or asking to confirm auto-merge
 const repos = atom(REPOS, [] as RepoCfg[])
 const settingsOpen = atom({ plugin: 'argos', key: 'settingsOpen' } as const, null as string | null)
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
-// what was typed in each repo's skills field, by repo; outside the atoms so typing redraws nothing
-const skillDrafts = new Map<string, string>()
+// what was typed in each repo's prompt field, by repo; outside the atoms so typing redraws nothing
+const promptDrafts = new Map<string, string>()
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 15),
   account: String(options.account ?? '').trim(),
   qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
   lang: String(options.language ?? 'en'),
-  skills: String(options.skills ?? '').split(',').map(s => s.trim()).filter(Boolean),
   // minutes a PR may stay "validating" before it counts as failed
   limit: Math.max(2, Number(options.runLimitMinutes) || 10),
   // the prompts behind Validate and Fix: Argos's own, the person's, or both
@@ -102,32 +101,35 @@ async function loadRepos($: any): Promise<RepoCfg[]> {
   }
 }
 
-// The skills a PR's validation reads as references: the plugin's own list, then its repo's.
-async function skillsOf($: any, global: string[]) {
+// A repo's own validation prompt, added to Argos's job for its PRs. An older repos.json kept a
+// list of skills instead: it reads as a prompt to use them.
+async function repoPrompts($: any) {
   const list = await loadRepos($)
   return (url: string) => {
-    const own = list.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))?.skills ?? []
-    return [...new Set([...global, ...own])]
+    const r = list.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))
+    const text = r?.prompt ?? (r?.skills?.length ? `Read the skills ${r.skills.join(', ')} and judge by their rules.` : '')
+    return r && text ? { repo: r.repo, text } : null
   }
 }
 
 // Validates PRs in the background: queues them, then hands them to subagents with the validate
 // job, ten each so a long list runs side by side; each agent marks a PR started as it reaches it.
 // No chat is opened, the verdicts land on the lines as each one finishes. Each PR carries the
-// skills its validation reads.
+// rules of its repo, the repo's own prompt, once per repo in the batch.
 // The person's own prompt replaces Argos's job only in what to look for: the verdicts are still
 // recorded with verdicts.mjs, or the pane could not show them.
-async function validate($: any, urls: string[], lang: string, skills: string[], prompt: Prompt) {
+async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
   if (!urls.length) return
   await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'queue', ...urls])
   await loadVerdicts($)
-  const of = await skillsOf($, skills)
-  const line = (u: string) => (of(u).length ? `- ${u} (skills: ${of(u).join(', ')})` : `- ${u}`)
+  const of = await repoPrompts($)
   const scripts = `${$.plugin.root}/scripts`
   const ask = compose(prompt, [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`], text => [text, t(lang, 'b_record', scripts)])
   for (let i = 0; i < urls.length; i += 10) {
     const part = urls.slice(i, i + 10)
-    const { agentId } = await $.agent.spawn({ prompt: [...ask, `Scripts: ${scripts}`, ...part.map(line)].join('\n'), description: `Argos validate · ${part.length} PRs` })
+    const rules = new Map(part.flatMap(u => (of(u) ? [[of(u)!.repo, of(u)!.text] as const] : [])))
+    const lines = [...ask, `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
+    const { agentId } = await $.agent.spawn({ prompt: lines.join('\n'), description: `Argos validate · ${part.length} PRs` })
     if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
   }
 }
@@ -165,7 +167,7 @@ async function stopAgent($: any, id: string) {
 // every watched PR with "all"; authors left out stay out. A failed one waits for Retry. Each round
 // is recorded, sent or not, so the pane can say when it looked. ponytail: ten per round, so a
 // burst never spends a fortune at once.
-async function autoValidate($: any, r: Round | null, lang: string, skills: string[], prompt: Prompt) {
+async function autoValidate($: any, r: Round | null, lang: string, prompt: Prompt) {
   const v = await loadVerdicts($)
   if (!r || !v || v.auto === 'off') return
   const now = await $.clock.now()
@@ -178,7 +180,7 @@ async function autoValidate($: any, r: Round | null, lang: string, skills: strin
     return (verdict.state === 'none' || verdict.state === 'stale') && outOf(p, verdict) === null
   }
   const urls = [...new Set(all.filter(p => (v.auto === 'all' || mine(p)) && changed(p)).map(p => p.url))].slice(0, 10)
-  await validate($, urls, lang, skills, prompt)
+  await validate($, urls, lang, prompt)
   await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'ran', String(urls.length)])
   await loadVerdicts($)
 }
@@ -231,7 +233,7 @@ async function openPane($: any) {
 // when another one ran it within the interval, and only shows it.
 async function tick($: any, options: PluginOptions, force: boolean) {
   if ((await $.state.get(RUNNING)).value || (await $.state.get(DEMO)).value) return
-  const { minutes, account, qualifiers, lang, skills, limit, prompts } = config(options)
+  const { minutes, account, qualifiers, lang, limit, prompts } = config(options)
   const last = await load($)
   const now = await $.clock.now()
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
@@ -242,7 +244,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     await $.process.run(argv, { timeoutMs: 120_000 })
     const fresh = await load($)
     if (fresh?.notify) $.ui.toast(fresh.notify)
-    await autoValidate($, fresh, lang, skills, prompts.validate).catch(() => {})
+    await autoValidate($, fresh, lang, prompts.validate).catch(() => {})
     await afterVerdicts($, lang, limit).catch(() => {})
   } catch (err) {
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
@@ -259,7 +261,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
 }
 
 export const register: Register = (on, options) => {
-  const { lang, minutes, account, skills, limit, prompts } = config(options)
+  const { lang, minutes, account, limit, prompts } = config(options)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -354,7 +356,7 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
     // the terminal is the one surface without Svg: icons fall back to their text marks; the mobile
-    // app has no fields, so there the automatic mode and the skills are only said
+    // app has no fields, so there the automatic mode and the repo prompts are only said
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
@@ -653,7 +655,7 @@ export const register: Register = (on, options) => {
           </Text>
         )}
         {vm.run.retry.length > 0 && (
-          <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills, prompts.validate)}>
+          <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, prompts.validate)}>
             {t(lang, 'run_retry', vm.run.retry.length)}
           </Button>
         )}
@@ -717,7 +719,7 @@ export const register: Register = (on, options) => {
             key="validate"
             variant={vm.validate.count ? 'primary' : 'secondary'}
             dimColor={!vm.validate.count}
-            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills, prompts.validate) : undefined)}
+            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, prompts.validate) : undefined)}
           >
             {vm.validate.label}
           </Button>
@@ -794,7 +796,7 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // A repo's Settings fold: its auto-merge (two taps to turn on, the second naming what it will
-    // do on GitHub; one to turn off) and its own validation skills beside the global ones.
+    // do on GitHub; one to turn off) and its own validation prompt, added after the global one.
     const toggleSettings = async (repo: string) => {
       await update($, settingsOpen, x => (x === repo ? null : repo))
       await update($, confirmMerge, () => null)
@@ -807,9 +809,9 @@ export const register: Register = (on, options) => {
       await repoCmd('merge', repo, isOn ? 'on' : 'off')
       await update($, confirmMerge, () => null)
     }
-    // what the person typed in a skills field, kept outside the drawing so typing redraws nothing
-    const drafts = skillDrafts
-    const saveSkills = (repo: string, text: string) => repoCmd('skills', repo, ...text.split(',').map(x => x.trim()).filter(Boolean))
+    // what the person typed in a prompt field, kept outside the drawing so typing redraws nothing
+    const drafts = promptDrafts
+    const savePrompt = (repo: string, text: string) => repoCmd('prompt', repo, text.trim())
     // One soft panel under the heading; inside, the lines of a block sit tight and the space
     // goes between blocks only.
     const fold = (g: Group) => (
@@ -877,33 +879,31 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" gap={SPACE.inline}>
           <Box flexDirection="column" gap={SPACE.line}>
             <Text size="caption" weight="semibold" color={C.text}>
-              {t(lang, 'skills_title')}
+              {t(lang, 'rp_title')}
             </Text>
-            {skills.length > 0 && (
-              <Text size="caption" color={C.subtle}>
-                {t(lang, 'skills_global', skills.join(', '))}
-              </Text>
-            )}
+            <Text size="caption" color={C.subtle}>
+              {t(lang, prompts.validate.mode === 'mine' && prompts.validate.text ? 'rp_base_mine' : 'rp_base')}
+            </Text>
           </Box>
           <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
             <Box flexGrow={1} flexShrink={1} minWidth={0}>
               {Input && (
                 <Input
-                  key={`skills:${g.repo}`}
-                  label={t(lang, 'skills_label', g.name)}
-                  value={g.skills.join(', ')}
-                  submitLabel={t(lang, 'skills_save')}
+                  key={`prompt:${g.repo}`}
+                  label={t(lang, 'rp_label', g.name)}
+                  value={g.prompt}
+                  submitLabel={t(lang, 'rp_save')}
                   onInput={(text: string) => void drafts.set(g.repo, text)}
-                  onSubmit={(text: string) => void saveSkills(g.repo, text)}
+                  onSubmit={(text: string) => void savePrompt(g.repo, text)}
                 />
               )}
             </Box>
-            <Button key={`skills-save:${g.repo}`} plain={true} onPress={() => void saveSkills(g.repo, drafts.get(g.repo) ?? g.skills.join(', '))}>
-              {t(lang, 'skills_save')}
+            <Button key={`prompt-save:${g.repo}`} plain={true} onPress={() => void savePrompt(g.repo, drafts.get(g.repo) ?? g.prompt)}>
+              {t(lang, 'rp_save')}
             </Button>
           </Box>
           <Text size="caption" color={C.subtle}>
-            {t(lang, 'skills_note', g.name)}
+            {t(lang, 'rp_note', g.name)}
           </Text>
         </Box>
       </Box>
