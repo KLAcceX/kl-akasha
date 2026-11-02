@@ -519,6 +519,18 @@ test('first run: setup checks gh, picks the account, connects a suggested repo, 
   expect(stored2).toBeUndefined()
 })
 
+test('/argos stats answers from the history script', async ($, on) => {
+  const runs: string[][] = []
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(1)])
+    return { value: { exitCode: 0, stdout: ' Argos: last 30 days ', stderr: '' } }
+  })
+  const answer = await $.command.run({ command: 'argos', args: 'stats' })
+  expect(runs[0]?.slice(1)).toEqual(['stats', '--lang', 'en'])
+  expect(runs[0]?.[0]).toMatch(/history\.mjs$/)
+  expect(answer.text).toBe('Argos: last 30 days')
+})
+
 test('a bare /argos repos add connects the session folder', async ($, on) => {
   const runs: string[][] = []
   // each add starts a round; a round already running makes it return at once

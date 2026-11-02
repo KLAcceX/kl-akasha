@@ -7,6 +7,9 @@
 //   - the verdict passed: no blocker, nothing needing attention, not partial
 //   - the verdict is on the head commit, the PR is open and not a draft
 //   - the PR is not the user's own (GitHub does not let anyone approve their own)
+//   - it comes from a branch of the repo itself, never a fork, and its author may already write to
+//     the repo (an app counts: someone with admin rights installed it). A verdict reads the PR's
+//     own text, so it can be talked into passing; this script decides on facts the PR cannot write
 //   - no conflicts, and every CI check passed (no checks at all is not green)
 //   - after the approval, GitHub says it can merge (required reviews and rules satisfied)
 // Merge uses the first method the repo allows (squash, merge commit, rebase), pinned to the head
@@ -26,16 +29,20 @@ import { read, write } from "./verdicts.mjs";
 const repoOf = (url) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
 const sameSha = (a = "", b = "") => Boolean(a && b) && (a.startsWith(b) || b.startsWith(a));
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+const WRITERS = new Set(["admin", "write"]);
 
 // A passing verdict: the only ones this script looks at; the rest show their own verdict.
 export const passes = (v) => v?.state === "done" && v.issues === 0 && !v.attention && !v.partial;
 
-// From `gh pr view --json state,isDraft,headRefOid,author,mergeable,statusCheckRollup`: null when
-// it may be approved, else the reason it is skipped, in a few words.
-export function gate(pr, verdict, me) {
+// From `gh pr view --json state,isDraft,headRefOid,author,isCrossRepository,mergeable,statusCheckRollup`
+// and the author's permission on the repo: null when it may be approved, else the reason it is
+// skipped, in a few words. What it cannot tell counts against: no answer never lets a PR through.
+export function gate(pr, verdict, me, access) {
   if (pr.state !== "OPEN" || pr.isDraft) return "not open";
   if (!sameSha(pr.headRefOid, verdict.sha)) return "new commits";
   if (me && pr.author?.login?.toLowerCase() === me.toLowerCase()) return "your PR";
+  if (pr.isCrossRepository !== false) return "from a fork";
+  if (!pr.author?.is_bot && !WRITERS.has(access)) return access ? "author cannot write" : "author access unknown";
   if (pr.mergeable !== "MERGEABLE") return pr.mergeable === "CONFLICTING" ? "conflicts" : "mergeability unknown";
   const checks = pr.statusCheckRollup ?? [];
   if (!checks.length) return "no CI";
@@ -58,8 +65,8 @@ function sweep() {
     const run = (args) => gh(args, env);
     let outcome;
     try {
-      const pr = JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,mergeable,statusCheckRollup"]));
-      const why = gate(pr, verdict, run(["api", "user", "-q", ".login"]));
+      const pr = JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,mergeable,statusCheckRollup"]));
+      const why = gate(pr, verdict, run(["api", "user", "-q", ".login"]), pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login));
       if (why) outcome = { state: "skipped", why };
       else {
         run(["pr", "review", url, "--approve", "--body", "Argos: validated with no blockers and nothing needing attention."]);
@@ -82,27 +89,46 @@ function sweep() {
   return done;
 }
 
+// The author's permission on the repo, or undefined when GitHub does not say.
+function accessOf(run, repo, login) {
+  try {
+    return login ? run(["api", `repos/${repo}/collaborators/${login}/permission`, "-q", ".permission"]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function gh(args, env = process.env) {
   return execFileSync("gh", args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
 function selfTest() {
-  const ok = { state: "OPEN", isDraft: false, headRefOid: "abc1234def", author: { login: "bia" }, mergeable: "MERGEABLE", statusCheckRollup: [{ conclusion: "SUCCESS" }, { state: "SUCCESS" }, { conclusion: "SKIPPED" }] };
+  const ok = { state: "OPEN", isDraft: false, headRefOid: "abc1234def", author: { login: "bia" }, isCrossRepository: false, mergeable: "MERGEABLE", statusCheckRollup: [{ conclusion: "SUCCESS" }, { state: "SUCCESS" }, { conclusion: "SKIPPED" }] };
   const v = { state: "done", sha: "abc1234", issues: 0, attention: 0, partial: false };
   assert.equal(passes(v), true);
   assert.equal(passes({ ...v, attention: 1 }), false);
   assert.equal(passes({ ...v, partial: true }), false);
   assert.equal(passes({ ...v, issues: 2 }), false);
   assert.equal(passes({ state: "running" }), false);
-  assert.equal(gate(ok, v, "me"), null);
-  assert.equal(gate({ ...ok, headRefOid: "fff9999" }, v, "me"), "new commits");
-  assert.equal(gate(ok, v, "BIA"), "your PR");
-  assert.equal(gate({ ...ok, isDraft: true }, v, "me"), "not open");
-  assert.equal(gate({ ...ok, mergeable: "CONFLICTING" }, v, "me"), "conflicts");
-  assert.equal(gate({ ...ok, statusCheckRollup: [] }, v, "me"), "no CI");
-  assert.equal(gate({ ...ok, statusCheckRollup: [{ conclusion: "FAILURE" }] }, v, "me"), "CI red");
+  assert.equal(gate(ok, v, "me", "write"), null);
+  assert.equal(gate(ok, v, "me", "admin"), null);
+  assert.equal(gate({ ...ok, headRefOid: "fff9999" }, v, "me", "write"), "new commits");
+  assert.equal(gate(ok, v, "BIA", "write"), "your PR");
+  assert.equal(gate({ ...ok, isDraft: true }, v, "me", "write"), "not open");
+  assert.equal(gate({ ...ok, mergeable: "CONFLICTING" }, v, "me", "write"), "conflicts");
+  assert.equal(gate({ ...ok, statusCheckRollup: [] }, v, "me", "write"), "no CI");
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ conclusion: "FAILURE" }] }, v, "me", "write"), "CI red");
   // a check still running is not green either
-  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me"), "CI red");
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me", "write"), "CI red");
+  // who opened it: a fork never, even with write access; a person needs write access; no answer
+  // counts against; an app in the repo's own branch passes
+  assert.equal(gate({ ...ok, isCrossRepository: true }, v, "me", "write"), "from a fork");
+  assert.equal(gate({ ...ok, isCrossRepository: undefined }, v, "me", "write"), "from a fork");
+  assert.equal(gate(ok, v, "me", "read"), "author cannot write");
+  assert.equal(gate(ok, v, "me", "none"), "author cannot write");
+  assert.equal(gate(ok, v, "me"), "author access unknown");
+  assert.equal(gate({ ...ok, author: { login: "app/dependabot", is_bot: true } }, v, "me"), null);
+  assert.equal(gate({ ...ok, author: { login: "app/evil", is_bot: true }, isCrossRepository: true }, v, "me"), "from a fork");
   assert.equal(method({ allow_squash_merge: false, allow_merge_commit: true }), "--merge");
   assert.equal(method({}), null);
   console.log("self-test ok");

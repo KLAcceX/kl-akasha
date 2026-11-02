@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
+import { add as addHistory } from "./history.mjs";
 
 const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "verdicts.json");
@@ -88,7 +89,10 @@ function main(args) {
     const partial = rest.includes("--partial");
     if (!isPr(url) || !/^[0-9a-f]{7,40}$/.test(sha ?? "") || ![issues, attention].every((n) => Number.isInteger(n) && n >= 0))
       throw new Error('set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial] [--finding "<text>"]');
-    write(set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding") }, now));
+    const next = set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding") }, now);
+    write(next);
+    // this file keeps only the last verdict of a PR; the history keeps each commit's
+    addHistory({ kind: "verdict", url, sha, issues, attention, partial, finding: next.prs[url].finding, at: now });
     const said = issues ? `blocks ${issues}` : partial ? "partial" : "passed";
     return console.log(`${url}: ${said}${attention ? ` · attention ${attention}` : ""}`);
   }

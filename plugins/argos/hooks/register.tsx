@@ -396,8 +396,36 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // A fixing agent's last line ("Fixed 2 · skipped 1: uncommitted work") comes back as a toast.
+  // What an agent the pane started spent goes to the history: GitHub does not know it.
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId && e.usage) {
+      const fixes = ((await $.state.get(FIX_RUNS)).value ?? {}) as Record<string, string[]>
+      const validates = ((await $.state.get(AGENT_RUNS)).value ?? {}) as Record<string, string[]>
+      const prs = fixes[e.agentId] ?? validates[e.agentId]
+      if (prs)
+        await $.process
+          .run([
+            'node',
+            `${$.plugin.root}/scripts/history.mjs`,
+            'usage',
+            '--kind',
+            fixes[e.agentId] ? 'fix' : 'validate',
+            '--prs',
+            String(prs.length),
+            '--model',
+            e.usage.model,
+            '--input',
+            String(e.usage.input_tokens),
+            '--output',
+            String(e.usage.output_tokens),
+            '--cache-read',
+            String(e.usage.cache_read_input_tokens),
+            '--cache-write',
+            String(e.usage.cache_creation_input_tokens),
+          ])
+          .catch(() => {})
+    }
+    // A fixing agent's last line ("Fixed 2 · skipped 1: uncommitted work") comes back as a toast.
     const runs = ((await $.state.get(FIX_RUNS)).value ?? {}) as Record<string, string[]>
     if (e.agentId && runs[e.agentId]) {
       const { [e.agentId]: _, ...rest } = runs
@@ -427,7 +455,11 @@ export const register: Register = (on, options) => {
   on('command.run', async ($, e, next) => {
     if (e.command !== 'argos' && e.command !== 'argos:argos') return next(e)
     const args = e.args.trim().split(/\s+/).filter(Boolean)
-    if (args.length && !['repos', 'demo'].includes(args[0])) return next(e)
+    if (args.length && !['repos', 'demo', 'stats'].includes(args[0])) return next(e)
+    if (args[0] === 'stats') {
+      const { stdout, stderr } = await $.process.run(['node', `${$.plugin.root}/scripts/history.mjs`, 'stats', '--lang', lang])
+      return { text: (stdout || stderr).trim() }
+    }
     if (args[0] === 'repos') {
       if (args.length === 2 && args[1] === 'add') args.push(await $.session.cwd())
       const { stdout, stderr } = await $.process.run([
