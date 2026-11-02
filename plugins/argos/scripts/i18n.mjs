@@ -19,6 +19,8 @@ const WORDS = {
     in_restore: "Restaurar padrão",
     in_of: (x, y) => `${x} de ${y}`,
     in_only: "Só",
+    pick_clean: "Sem pendência",
+    pick_rework: "Meus PRs a retrabalhar",
     // who goes: one control, its label the whole state
     who: (x) => `Quem: ${x}`,
     who_everyone: "Todos",
@@ -126,6 +128,8 @@ const WORDS = {
     in_restore: "Restore default",
     in_of: (x, y) => `${x} of ${y}`,
     in_only: "Only",
+    pick_clean: "Nothing pending",
+    pick_rework: "My PRs to rework",
     // who goes: one control, its label the whole state
     who: (x) => `Who: ${x}`,
     who_everyone: "Everyone",

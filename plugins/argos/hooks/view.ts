@@ -161,6 +161,8 @@ export function toViewModel(r: Round | null, o: Opts) {
       hasReason: Boolean(auto) && auto !== 'running',
       // the pane left it out by itself: a tap brings it back rather than leaving it out
       isAuto: leftBy !== null && leftBy !== 'hand' && leftBy !== 'author' && leftBy !== 'running',
+      // the person's own PR with a change asked or a comment open: work to redo, then validate
+      isRework: (p.kind === 'mine' || (Boolean(r.me) && p.author === r.me)) && has(p, 'changes_requested', 'threads', 'unanswered', 'new_reviews'),
     }
   })
 
@@ -229,6 +231,17 @@ export function toViewModel(r: Round | null, o: Opts) {
     : ui.out.length || ui.back.length
       ? { label: t(lang, 'in_restore'), keys: null }
       : null
+  // Quick picks, one tap each, the selection becoming exactly that set: every PR with nothing
+  // pending (no change asked, no comment open, not a draft, not validated since its last commit),
+  // or my PRs with something asked of me, to validate again once reworked. ✓ marks the one in use.
+  const free = rows.filter(x => x.canToggle)
+  const going = new Set(toGo.map(x => x.key))
+  const pick = (id: string, keys: string[]) => {
+    const isOn = keys.length > 0 && keys.length === going.size && keys.every(k => going.has(k))
+    return { id, keys, label: `${t(lang, `pick_${id}`)} ${keys.length}${isOn ? ' ✓' : ''}` }
+  }
+  const rework = free.filter(x => x.isRework).map(x => x.key)
+  const picks = [pick('clean', free.filter(x => !x.hasReason).map(x => x.key)), ...(rework.length ? [pick('rework', rework)] : [])]
   // Validation in flight: "Validating 9 of 22" while any of it runs.
   const vb = o.verdicts?.batch?.urls ?? []
   const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
@@ -244,6 +257,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     rows,
     groups,
     clear,
+    picks,
     progress,
     // all of it in one repo of several says which ("Validate 4 · billing"), so a tap on Only
     // never sends more than the person meant; nothing picked reads "Validate", disabled

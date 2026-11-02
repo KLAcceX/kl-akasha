@@ -398,6 +398,15 @@ export const register: Register = (on, options) => {
       await update($, out, list => (keys ? [...new Set([...list, ...keys])] : []))
       await update($, back, () => [])
     }
+    // A quick pick makes the selection exactly its lines: the rest are left out by hand, or handed
+    // back to the pane when it would leave them out anyway.
+    const pickOnly = async (keys: string[]) => {
+      const want = new Set(keys)
+      const free = vm.rows.filter(x => x.canToggle)
+      const freeKeys = new Set(free.map(x => x.key))
+      await update($, out, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => !want.has(x.key) && !x.hasReason).map(x => x.key)])
+      await update($, back, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => want.has(x.key) && x.hasReason).map(x => x.key)])
+    }
     // One button validates everything left in, in the background; the stars fill in on the lines.
     const go = (
       <Box key="go" flexDirection="column" gap="xs">
@@ -409,6 +418,13 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
+          {vm.picks.map(p => (
+            <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
+              {p.label}
+            </Button>
+          ))}
+        </Box>
         <Box flexDirection="row" alignItems="center" gap="sm">
           <Button
             key="validate"

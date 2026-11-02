@@ -232,6 +232,22 @@ test('a repo heading takes or leaves its whole repo, Only keeps just it; Clear l
   await ui.unmount()
 })
 
+test('quick picks: everything with nothing pending, or my PRs with something asked of me', async ($, on) => {
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  const ui = await $.ui.mount(PANE)
+  const text = async (key: string) => (await ui.find({ key }))?.text
+  expect([await text('quick:clean'), await text('quick:rework')]).toEqual(['Nothing pending 5 ✓', 'My PRs to rework 1'])
+  // my S3 migration has open threads: the pane left it out, the pick brings it alone
+  await ui.press({ key: 'quick:rework' })
+  expect([await text('validate'), await text('quick:rework'), await text('quick:clean')]).toEqual(['Validate 1 · portal', 'My PRs to rework 1 ✓', 'Nothing pending 5'])
+  await ui.press({ key: 'quick:clean' })
+  expect([await text('validate'), await text('pick:acme/portal#219')]).toEqual(['Validate 5', '☐'])
+  await ui.unmount()
+})
+
 test('who: presets leave kinds out, the label always says the whole state', async ($, on) => {
   expect(ok(vmOf(round, {}, 'en', ['kind:agent'])).validate.count).toBe(4)
   expect(ok(vmOf(round)).who.presets.map(p => p.id)).toEqual(['everyone', 'people', 'agents'])
