@@ -343,9 +343,9 @@ test('a prompt: the Argos one, it plus your own, or yours alone (the Argos one w
   expect(compose({ mode: 'mine', text: '' }, ['job'], mine)).toEqual(['job'])
 })
 
-test('the agents at work are listed with Stop; Fix my PRs goes to the chat as a prompt', async ($, on) => {
+test('the agents at work are listed with Stop; Fix my PRs runs in the background and says when done', async ($, on) => {
   const runs: string[][] = []
-  let filled = ''
+  const spawned: { prompt: string; description: string }[] = []
   const seeded: Record<string, unknown> = {
     round,
     verdicts: { ...judged, batch: { urls: ['u9'], at: round.at }, prs: { u9: V({ state: 'running', at: new Date(NOW - 6e4).toISOString() }) } },
@@ -362,9 +362,9 @@ test('the agents at work are listed with Stop; Fix my PRs goes to the chat as a 
     runs.push([...e.argv.slice(2)])
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('prompt.fill', (_: unknown, e: { text: string }) => {
-    filled = e.text
-    return { isFilled: true }
+  on('agent.spawn', (_: unknown, e: { prompt: string; description: string }) => {
+    spawned.push(e)
+    return { agentId: 'f1', model: 'm' }
   })
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /agent working$/ }))?.text).toBe('1 agent working')
@@ -373,16 +373,22 @@ test('the agents at work are listed with Stop; Fix my PRs goes to the chat as a 
   expect(runs.at(-1)).toEqual(['fail', 'u9', '--reason', 'stopped'])
   await ui.unmount()
 
-  // Fix my PRs: the S3 migration has open threads; the prompt waits in the chat for the person
+  // Fix my PRs: the S3 migration has open threads; one agent fixes, pushes and replies on its own
   seeded.verdicts = { ...judged, batch: { urls: [], at: null } }
   const fix = await $.ui.mount(PANE)
   expect((await fix.find({ key: 'fix' }))?.text).toBe('Fix my 1 with Argos')
   await fix.press({ key: 'fix' })
-  expect(filled.split('\n')).toEqual([
-    '/argos Fix these PRs of mine with Argos (job 2 in mine.md: turn the review into changes and replies). Show me the plan before pushing or replying.',
-    '- u219',
-  ])
+  expect(spawned.at(-1)?.description).toBe('Argos fix · 1 PRs')
+  expect(spawned.at(-1)?.prompt).toMatch(/push and reply without asking me/)
+  expect(spawned.at(-1)?.prompt.split('\n').at(-1)).toBe('- u219')
   await fix.unmount()
+
+  // while it works, its line says fixing and the button is gone
+  seeded.fixRuns = { a1: ['u219'] }
+  const busy = await $.ui.mount(PANE)
+  expect(await busy.find({ key: 'fix' })).toBeFalsy()
+  expect(await busy.find({ type: 'Text', text: /fixing/ })).toBeTruthy()
+  await busy.unmount()
 })
 
 test('who: presets leave kinds out, the label always says the whole state', async ($, on) => {

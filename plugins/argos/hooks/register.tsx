@@ -26,6 +26,8 @@ const REPOS = { plugin: 'argos', key: 'repos' } as const
 // the validating agents this mod started, each with its PRs; and the ones the person stopped
 const AGENT_RUNS = { plugin: 'argos', key: 'agentRuns' } as const
 const STOPPED = { plugin: 'argos', key: 'stopped' } as const
+// the fixing agents this mod started, each with the person's PRs it fixes
+const FIX_RUNS = { plugin: 'argos', key: 'fixRuns' } as const
 const round = atom(ROUND, null)
 const isRunning = atom(RUNNING, false)
 // PRs the person left out by hand, and PRs left out by the pane that the person brought back
@@ -42,6 +44,7 @@ const repos = atom(REPOS, [] as RepoCfg[])
 const settingsOpen = atom({ plugin: 'argos', key: 'settingsOpen' } as const, null as string | null)
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
+const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
 // what was typed in each repo's skills field, by repo; outside the atoms so typing redraws nothing
 const skillDrafts = new Map<string, string>()
 
@@ -127,6 +130,22 @@ async function validate($: any, urls: string[], lang: string, skills: string[], 
     const { agentId } = await $.agent.spawn({ prompt: [...ask, `Scripts: ${scripts}`, ...part.map(line)].join('\n'), description: `Argos validate · ${part.length} PRs` })
     if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
   }
+}
+
+// Fixes the person's own PRs in the background: one agent takes them one at a time (they share
+// local clones), turns each review into commits and replies, pushes and answers on its own, and
+// skips a PR it cannot fix safely (no clone, uncommitted work, conflicts). It ends with one line
+// the pane shows as a toast. The person's own prompt replaces Argos's job only in how to fix.
+async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
+  if (!urls.length) return
+  const list = await loadRepos($)
+  const line = (u: string) => {
+    const path = list.find(r => u.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))?.path
+    return path ? `- ${u} (clone: ${path})` : `- ${u}`
+  }
+  const ask = compose(prompt, [t(lang, 'b_fix'), `Job: ${$.plugin.root}/references/mine.md (Job 2, in the background)`], text => [text, t(lang, 'b_fix_rules')])
+  const { agentId } = await $.agent.spawn({ prompt: [...ask, `Scripts: ${$.plugin.root}/scripts`, ...urls.map(line)].join('\n'), description: `Argos fix · ${urls.length} PRs` })
+  if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: urls }))
 }
 
 // Stops a validating agent the mod started: from now on every tool it calls is refused, so it
@@ -264,6 +283,18 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A fixing agent's last line ("Fixed 2 · skipped 1: uncommitted work") comes back as a toast.
+  on('turn.complete', async ($, e, next) => {
+    const runs = ((await $.state.get(FIX_RUNS)).value ?? {}) as Record<string, string[]>
+    if (e.agentId && runs[e.agentId]) {
+      const { [e.agentId]: _, ...rest } = runs
+      await $.state.set(FIX_RUNS, rest)
+      const last = e.answer.trim().split('\n').at(-1)?.trim()
+      $.ui.toast(`Argos: ${last || t(config(options).lang, 'fix_ended')}`)
+    }
+    return next(e)
+  })
+
   // The AI records verdicts with verdicts.mjs from Bash; the lines follow as each one lands.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e)
@@ -327,7 +358,7 @@ export const register: Register = (on, options) => {
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
-    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, openSettings, confirming] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, openSettings, confirming, fixing] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
@@ -338,7 +369,12 @@ export const register: Register = (on, options) => {
       read($, repos),
       read($, settingsOpen),
       read($, confirmMerge),
+      read($, fixRuns),
     ])
+    // the agents at work first: a line a fixing agent holds says so
+    const working = (await $.agent.list().catch(() => []))
+      .filter((a: { spawnedBy?: string; status: string }) => a.spawnedBy === 'argos' && ['pending', 'running', 'waiting'].includes(a.status))
+      .map((a: { id: string; description: string; status: string }) => ({ id: a.id, description: a.description, status: a.status }))
     const vm = toViewModel(last, {
       now: await $.clock.now(),
       lang,
@@ -349,11 +385,8 @@ export const register: Register = (on, options) => {
       ignored: authorsOut,
       limit,
       repos: repoList,
+      fixing: working.flatMap(a => fixing[a.id] ?? []),
     })
-    // the validating agents this mod started that are still at work, as the session lists them
-    const working = (await $.agent.list().catch(() => []))
-      .filter((a: { spawnedBy?: string; status: string }) => a.spawnedBy === 'argos' && ['pending', 'running', 'waiting'].includes(a.status))
-      .map((a: { id: string; description: string; status: string }) => ({ id: a.id, description: a.description, status: a.status }))
     // a box per line, per author and per repo; the terminal draws them in brackets
     const BOX = hasSvg ? { on: '☑', mixed: '◩', off: '☐' } : { on: '[x]', mixed: '[-]', off: '[ ]' }
     // tick returns at once while a round runs, so pressing twice does nothing
@@ -575,13 +608,6 @@ export const register: Register = (on, options) => {
       await update($, out, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => !want.has(x.key) && !x.hasReason).map(x => x.key)])
       await update($, back, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => want.has(x.key) && x.hasReason).map(x => x.key)])
     }
-    // Fix my PRs: their review turned into changes and replies is not background work (it edits
-    // code and pushes), so it goes to the chat as a prompt the person reads and sends.
-    const fixMine = async (urls: string[]) => {
-      const list = urls.map(u => `- ${u}`)
-      const ask = compose(prompts.fix, [`/argos ${t(lang, 'b_fix')}`, ...list], text => [text, ...list])
-      await $.prompt.fill({ text: ask.join('\n'), mode: 'replace' })
-    }
     // The agents at work, each with Stop: its tools are refused from then on, so it ends.
     const agents = working.length > 0 && (
       <Box key="agents" flexDirection="column" gap="xs">
@@ -656,7 +682,7 @@ export const register: Register = (on, options) => {
                 </Button>
               ))}
               {vm.rework.length > 0 && (
-                <Button key="fix" plain={true} onPress={() => void fixMine(vm.rework)}>
+                <Button key="fix" plain={true} onPress={() => void fix($, vm.rework, lang, prompts.fix)}>
                   {t(lang, 'fix_n', vm.rework.length)}
                 </Button>
               )}

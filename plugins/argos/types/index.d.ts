@@ -100,6 +100,8 @@ declare module 'claude-code' {
       agentRuns: Record<string, string[]>
       // the agents the person stopped: every tool they call is refused
       stopped: string[]
+      // the fixing agents the mod started, by agent id, each with the person's PRs
+      fixRuns: Record<string, string[]>
     }
   }
 }

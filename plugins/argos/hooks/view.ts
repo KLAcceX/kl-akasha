@@ -130,7 +130,7 @@ const kindsOut = (out: Set<string>) => [...out].filter(x => x.startsWith('kind:'
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x))
 export const UI: Ui = { out: [], back: [] }
 // limit: minutes a PR may stay "validating"; repos: auto-merge and skills per repo (repos.json)
-type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; verdicts?: Verdicts | null; ignored?: string[]; limit?: number; repos?: RepoCfg[] }
+type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; verdicts?: Verdicts | null; ignored?: string[]; limit?: number; repos?: RepoCfg[]; fixing?: string[] }
 // 14:30, the person's own clock: times instead of "in 12 min", so nothing on screen ticks
 export const hhmm = (ms: number) => {
   const d = new Date(ms)
@@ -192,9 +192,12 @@ export function toViewModel(r: Round | null, o: Opts) {
   const run = runOf(o.verdicts, now, lang, limit)
   const showRun = Boolean(run && (run.isRunning || run.doneAt > Date.parse(okAt ?? '')))
   const inRun = new Set(showRun ? run!.urls : [])
+  // the person's PRs a fixing agent holds right now
+  const fixingSet = new Set(o.fixing ?? [])
   const cfgOf = (repo: string) => (o.repos ?? []).find(c => c.repo.toLowerCase() === repo.toLowerCase())
   // how a line in the run ended, in words, with the tone of its colour
   const statusOf = (p: Item, v: ReturnType<typeof verdictOf>): { text: string; tone: Tone } | null => {
+    if (fixingSet.has(p.url)) return { text: t(lang, 'st_fixing'), tone: 'subtle' }
     if (!inRun.has(p.url)) return null
     const raw = o.verdicts!.prs[p.url]!
     if (v.state === 'queued') return { text: t(lang, 'st_queued'), tone: 'subtle' }
@@ -368,7 +371,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     clear,
     picks,
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
-    rework: rows.filter(x => x.isRework).map(x => x.url),
+    rework: rows.filter(x => x.isRework && !fixingSet.has(x.url)).map(x => x.url),
     run: showRun ? run : null,
     auto,
     mergeLine: merging.length ? t(lang, 'mg_line', merging.join(', ')) : '',

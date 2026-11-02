@@ -43,3 +43,7 @@ Details, commands and reply style: `references/address.md`. The evidence behind 
 5. **Draft replies.** One per thread or comment, in the reviewer's language: what changed and in which commit, or why not. Show them as a table with the commits made.
 6. **Wait for the yes.** Pushing, replying, resolving threads and re-requesting review change the PR for everyone. Ask once, listing what will happen. On a yes: push, then post exactly the replies the user saw (as they edited them), then re-request review once if they agreed. Leave thread resolution to the reviewer unless the user or the project says otherwise.
 7. **Learn from it.** Once the PR is done, offer once to refresh the repo's lessons (`references/lessons.md`).
+
+### In the background (Fix from the pane)
+
+Fix my PRs in the pane hands the PRs to one agent, with each PR's local clone when the repo has one. The person asked for it to run on its own, so steps 3 and 6 change: there is no plan to show and no yes to wait for. Fix each PR in turn (steps 1, 2, 4, 5; no step 7), then push, post the replies, and re-request review once. Skip a PR, and say why, when there is no clone, the clone has uncommitted work, or the branch has conflicts. Never force-push, merge, resolve threads or touch someone else's PR. End with one line only, which the pane shows as a toast: `Fixed N · skipped M: why`.
