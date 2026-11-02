@@ -205,7 +205,7 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   await ui.press({ key: 'settings-page' })
   expect(await text('who:me')).toBe('☑ me 4')
   await ui.press({ key: 'who:me' })
-  expect([await text('who:me'), (await ui.find({ type: 'Text', text: /^Who:/ }))?.text]).toEqual(['☐ me 4', 'Who: Everyone · me out'])
+  expect([await text('who:me'), (await ui.find({ type: 'Text', text: /^Who:/ }))?.text]).toEqual(['☐ me 4', 'Who: Everyone but bots · me out'])
   await ui.press({ key: 'back' })
   expect(await text('validate-clean')).toBe('Validate 3')
   // the box of an author left out opens Settings, where Who brings them back
@@ -432,8 +432,10 @@ test('who: presets leave kinds out, the label always says the whole state', asyn
   const who = async () => (await ui.find({ type: 'Text', text: /^Who:/ }))?.text
   expect(await ui.find({ key: 'who:dev3' })).toBeUndefined()
   await ui.press({ key: 'settings-page' })
+  // bots stay out until the person lets them in
+  expect(await who()).toBe('Who: Everyone but bots')
   await ui.press({ key: 'who:dev3' })
-  expect(await who()).toBe('Who: Everyone · dev3 out')
+  expect(await who()).toBe('Who: Everyone but bots · dev3 out')
   await ui.press({ key: 'only:dev5' })
   expect(await who()).toBe('Who: only dev5')
   // a preset resets the people

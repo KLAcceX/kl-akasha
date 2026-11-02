@@ -34,7 +34,9 @@ const isRunning = atom(RUNNING, false)
 const out = atom({ plugin: 'argos', key: 'out' } as const, UI.out)
 const back = atom({ plugin: 'argos', key: 'back' } as const, UI.back)
 // authors left out everywhere, kept across sessions in $.store
-const ignored = atom(IGNORED, [] as string[])
+// update bots stay out of validation until the person lets them in (Who, in Settings)
+const NO_BOTS = ['kind:bot']
+const ignored = atom(IGNORED, NO_BOTS)
 const authorsOpen = atom({ plugin: 'argos', key: 'authorsOpen' } as const, false)
 // what verdicts.mjs last wrote: the AI's validations, read by the lines
 const verdicts = atom(VERDICTS, null)
@@ -178,7 +180,7 @@ async function autoValidate($: any, r: Round | null, lang: string, prompt: Promp
   if (!r || !v || v.auto === 'off') return
   const now = await $.clock.now()
   if (v.lastAuto && now - Date.parse(v.lastAuto.at) < (v.autoEvery ?? 30) * 6e4 - 3e4) return
-  const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? [])
+  const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? NO_BOTS)
   const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)) && !skip.has(`kind:${kindOf(p)}`))
   const mine = (p: (typeof all)[number]) => p.kind === 'mine' || (Boolean(r.me) && p.author === r.me)
   const changed = (p: (typeof all)[number]) => {
@@ -273,7 +275,7 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     await load($)
     await loadVerdicts($)
-    // authors left out outlive the session
+    // authors left out outlive the session; with none saved yet, bots stay out
     const saved = await $.store.get('ignored').catch(() => undefined)
     if (Array.isArray(saved)) await $.state.set(IGNORED, saved.filter((x): x is string => typeof x === 'string'))
     // The plugin's skill already owns /argos (argos:argos); the hook below answers it. Registering
