@@ -428,7 +428,7 @@ export const register: Register = (on, options) => {
     )
     // One line per PR, packed to the left so the eye never crosses an empty middle: a box to leave
     // it out (or bring back one the pane left out), its verdict, who opened it, the title with its
-    // number, and under it why the pane left it out. A running line has no box: Argos holds it.
+    // number and why the pane left it out, all on one line. A running line shows ⠿: Argos holds it.
     // With more than one repo the lines sit under a heading per repo: its box takes or leaves the
     // whole repo, and Only makes the selection that repo alone.
     const VERDICT_W = 4
@@ -504,24 +504,18 @@ export const register: Register = (on, options) => {
           )}
         </Box>
         {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
-            <Box flexShrink={1} minWidth={0}>
-              <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
-                {x.title}
-              </Text>
-            </Box>
-            <Box flexShrink={0}>
-              <Text size="caption" color={C.subtle}>
-                {x.num}
-              </Text>
-            </Box>
-          </Box>
-          {x.why && (
-            <Text size="caption" color={C.subtle}>
-              {x.why}
+        {/* one line tall whatever the state: the title gives way, its number and reason stay */}
+        <Box flexDirection="row" alignItems="center" gap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box flexShrink={1} minWidth={0}>
+            <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
+              {x.title}
             </Text>
-          )}
+          </Box>
+          <Box flexShrink={0}>
+            <Text size="caption" color={C.subtle}>
+              {x.why ? `${x.num} · ${x.why}` : x.num}
+            </Text>
+          </Box>
         </Box>
       </Box>
     )
