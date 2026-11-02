@@ -422,9 +422,12 @@ export const register: Register = (on, options) => {
             </Button>
           )}
           {vm.state === 'ok' && (
-            <Button key="settings-page" plain={true} onPress={() => void update($, page, () => 'settings')}>
-              {t(lang, 'settings')}
-            </Button>
+            <Box flexDirection="row" alignItems="center" gap={SPACE.row}>
+              {icon(I.gear, '⚙', 16, 16)}
+              <Button key="settings-page" plain={true} onPress={() => void update($, page, () => 'settings')}>
+                {t(lang, 'settings')}
+              </Button>
+            </Box>
           )}
         </Box>
         <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={SPACE.row}>
@@ -531,7 +534,8 @@ export const register: Register = (on, options) => {
     // a page's title row: Back to the dashboard, then its name
     const bar = (title: string) => (
       <Box key="bar" flexDirection="column" gap={SPACE.line}>
-        <Box flexDirection="row">
+        <Box flexDirection="row" alignItems="center" gap={SPACE.row}>
+          {icon(I.back, '←', 16, 16)}
           <Button key="back" plain={true} onPress={() => goTo('home')}>
             {t(lang, 'pg_back')}
           </Button>
@@ -555,7 +559,7 @@ export const register: Register = (on, options) => {
     // the run line stays only when no validating agent stands for the run (a run the chat started)
     const runLine = vm.run?.isRunning && !working.some(a => validating[a.id]) && (
       <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
-        <Text color={C.brand}>⠿</Text>
+        {icon(I.spin, '⠿', 14, 14, t(lang, 'st_validating', 1).replace(/ · .*/, ''))}
         <Text size="caption" weight="semibold" color={C.text}>
           {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
         </Text>
@@ -569,7 +573,7 @@ export const register: Register = (on, options) => {
     // what the last run came to, until the next run or check, with Retry on the failed ones
     const doneLine = vm.run && !vm.run.isRunning && (
       <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
-        {!vm.run.failed && <Text color={C.success}>✓</Text>}
+        {!vm.run.failed && icon(I.check, '✓', 14, 14)}
         <Text size="caption" weight="semibold" color={C.text}>
           {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
         </Text>
@@ -601,7 +605,7 @@ export const register: Register = (on, options) => {
           const p = progressOf(a.id)
           return (
             <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
-              <Text color={C.brand}>⠿</Text>
+              {icon(I.spin, '⠿', 14, 14, t(lang, `ag_${a.status}`))}
               <Text size="caption" color={C.text}>
                 {a.description}
               </Text>
@@ -685,9 +689,12 @@ export const register: Register = (on, options) => {
         </Text>
         {vm.groups.map(g => (
           <Box key={`repo-row:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.inline} paddingX="xs" hover={{ backgroundColor: HOVER }}>
-            <Button key={`open:${g.repo}`} plain={true} onPress={() => goTo(g.repo)}>
-              {`${g.name} ▸`}
-            </Button>
+            <Box flexDirection="row" alignItems="center">
+              <Button key={`open:${g.repo}`} plain={true} onPress={() => goTo(g.repo)}>
+                {g.name}
+              </Button>
+              {icon(I.chevron, '›', 14, 14)}
+            </Box>
             <Text size="caption" color={C.subtle}>
               {[t(lang, 'rl_prs', g.rows.length), g.go.length ? t(lang, 'rl_go', g.go.length) : '', g.issues ? t(lang, 'rl_issues', g.issues) : '', g.merge ? t(lang, 'rl_merge') : ''].filter(Boolean).join(' · ')}
             </Text>
@@ -707,6 +714,8 @@ export const register: Register = (on, options) => {
     // title with its number and why the pane left it out, all on one line. A running line shows
     // ⠿: Argos holds it. The heading's box takes or leaves the whole repo.
     const VERDICT_W = 4
+    // a line's mark in a run, as the view names it
+    const MARKS: Record<string, string> = { '○': I.queued, '⠿': I.spin, '✓': I.check, '✕': I.cross }
     // Taking the repo brings back what the pane left out too; leaving it hands those back to the
     // pane (they keep their reason) and leaves the rest out by hand.
     const pickRepo = async (g: Group) => {
@@ -732,19 +741,25 @@ export const register: Register = (on, options) => {
       <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.row} paddingX="xs" hover={{ backgroundColor: HOVER }}>
         {busy ? (
           <Box flexShrink={0} width={2}>
-            <Text color={x.mark.color}>{x.mark.glyph || ' '}</Text>
+            {x.mark.glyph ? icon(MARKS[x.mark.glyph] ?? I.queued, x.mark.glyph, 14, 14) : <Text> </Text>}
           </Box>
         ) : (
           // every line's box is the same native button, unboxed (a width clips it), so they all
           // line up; an author left out opens Settings, where Who brings them back
-          <Button
-            key={`pick:${x.key}`}
-            plain={true}
-            dimColor={!x.canToggle}
-            onPress={() => (x.canToggle ? toggle(x) : x.isRunning ? undefined : goTo('settings'))}
-          >
-            {x.isRunning ? '⠿' : x.isIn ? BOX.on : BOX.off}
-          </Button>
+          x.isRunning ? (
+            <Box flexShrink={0} width={2}>
+              {icon(I.spin, '⠿', 14, 14)}
+            </Box>
+          ) : (
+            <Button
+              key={`pick:${x.key}`}
+              plain={true}
+              dimColor={!x.canToggle}
+              onPress={() => (x.canToggle ? toggle(x) : goTo('settings'))}
+            >
+              {x.isIn ? BOX.on : BOX.off}
+            </Button>
+          )
         )}
         {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
         <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
