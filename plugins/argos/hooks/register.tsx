@@ -781,21 +781,36 @@ export const register: Register = (on, options) => {
     // what the person typed in a skills field, kept outside the drawing so typing redraws nothing
     const drafts = skillDrafts
     const saveSkills = (repo: string, text: string) => repoCmd('skills', repo, ...text.split(',').map(x => x.trim()).filter(Boolean))
+    // One soft panel under the heading; inside, the lines of a block sit tight and the space
+    // goes between blocks only.
     const fold = (g: Group) => (
-      <Box key={`fold:${g.repo}`} flexDirection="column" gap="sm" paddingX="lg">
+      <Box
+        key={`fold:${g.repo}`}
+        flexDirection="column"
+        gap="md"
+        padding="md"
+        marginBottom="sm"
+        borderStyle="round"
+        borderColor="rgba(128,128,128,0.25)"
+        backgroundColor="rgba(128,128,128,0.05)"
+      >
         {confirming === g.repo ? (
-          <Box flexDirection="column" gap="xs">
-            <Text weight="semibold" color={C.text}>
-              {t(lang, 'mg_confirm_title', g.repo)}
-            </Text>
-            <Text size="caption" color={C.text}>
-              {t(lang, 'mg_confirm_body', last?.me ?? '')}
-            </Text>
-            {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
-              <Text key={`rule:${i}`} size="caption" color={C.text}>
-                {`· ${rule}`}
+          <Box flexDirection="column" gap="md">
+            <Box flexDirection="column" gap={0}>
+              <Text weight="semibold" color={C.text}>
+                {t(lang, 'mg_confirm_title', g.repo)}
               </Text>
-            ))}
+              <Text size="caption" color={C.text}>
+                {t(lang, 'mg_confirm_body', last?.me ?? '')}
+              </Text>
+            </Box>
+            <Box flexDirection="column" gap={0}>
+              {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
+                <Text key={`rule:${i}`} size="caption" color={C.text}>
+                  {`· ${rule}`}
+                </Text>
+              ))}
+            </Box>
             <Text size="caption" color={C.subtle}>
               {t(lang, 'mg_method')}
             </Text>
@@ -809,7 +824,7 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         ) : (
-          <Box flexDirection="column" gap="xs">
+          <Box flexDirection="column" gap={0}>
             <Box flexDirection="row" alignItems="center" gap="sm">
               <Text size="caption" weight="semibold" color={C.text}>
                 {t(lang, g.merge ? 'mg_on' : 'mg_off')}
@@ -827,15 +842,17 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        <Box flexDirection="column" gap="xs">
-          <Text size="caption" weight="semibold" color={C.text}>
-            {t(lang, 'skills_title')}
-          </Text>
-          {skills.length > 0 && (
-            <Text size="caption" color={C.subtle}>
-              {t(lang, 'skills_global', skills.join(', '))}
+        <Box flexDirection="column" gap="sm">
+          <Box flexDirection="column" gap={0}>
+            <Text size="caption" weight="semibold" color={C.text}>
+              {t(lang, 'skills_title')}
             </Text>
-          )}
+            {skills.length > 0 && (
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'skills_global', skills.join(', '))}
+              </Text>
+            )}
+          </Box>
           <Box flexDirection="row" alignItems="center" gap="sm">
             <Box flexGrow={1} flexShrink={1} minWidth={0}>
               {Input && (
