@@ -839,8 +839,10 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // The repos: each row has one action, opening its page, so the whole row is that button and
-    // its words carry the counts. Validating lives on the card above and at the foot of each page.
+    // The repos, as a list: each row its name in semibold with its counts under it, always in one
+    // order (PRs, to validate, with issues, zeros left out), and on the right one button that opens
+    // its page. The button's words never change during a run, so the target stays still; only the
+    // counts move. A Box cannot be pressed, so the button is the row's one target.
     const sectionTitle = (title: string) => (
       <Text weight="semibold" color={C.text}>
         {title}
@@ -849,13 +851,30 @@ export const register: Register = (on, options) => {
     const repoRows = (
       <Box key="repos" flexDirection="column" gap={SPACE.block}>
         {sectionTitle(t(lang, 'rl_title'))}
-        <Box flexDirection="column" gap={SPACE.row}>
+        <Box flexDirection="column" gap={SPACE.block}>
           {vm.groups.map(g => (
-            <Button key={`open:${g.repo}`} variant="secondary" onPress={() => goTo(g.repo)}>
-              {[t(lang, 'rl_open', clip(g.name)), g.go.length ? t(lang, 'rl_go', g.go.length) : t(lang, 'rl_prs', g.rows.length), g.issues ? t(lang, 'rl_issues', g.issues) : '']
-                .filter(Boolean)
-                .join(' · ')}
-            </Button>
+            <Box key={`repo-row:${g.repo}`} flexDirection="row" alignItems="center" gap={SPACE.inline}>
+              <Box flexDirection="column" gap={SPACE.line} flexGrow={1} flexShrink={1} minWidth={0}>
+                <Text weight="semibold" color={C.text} wrap="truncate">
+                  {g.name}
+                </Text>
+                <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.row}>
+                  <Text size="caption" color={C.subtle}>
+                    {[t(lang, 'rl_prs', g.rows.length), g.go.length ? t(lang, 'rl_go', g.go.length) : ''].filter(Boolean).join(' · ')}
+                  </Text>
+                  {g.issues > 0 && (
+                    <Text size="caption" color={C.warning}>
+                      {`· ${t(lang, 'rl_issues', g.issues)}`}
+                    </Text>
+                  )}
+                </Box>
+              </Box>
+              <Box flexShrink={0}>
+                <Button key={`open:${g.repo}`} variant="secondary" onPress={() => goTo(g.repo)}>
+                  {t(lang, 'rl_open', clip(g.name, 16))}
+                </Button>
+              </Box>
+            </Box>
           ))}
         </Box>
       </Box>

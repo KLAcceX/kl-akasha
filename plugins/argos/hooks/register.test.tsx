@@ -189,7 +189,7 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   const text = async (key: string) => (await ui.find({ key }))?.text
   expect((await ui.find({ type: 'Text', text: /to validate/ }))?.text).toBe('5 to validate · 3 repos')
   // each repo row is one button: opening its page is its only action, its counts in its words
-  expect([await text('validate-clean'), await text('fix'), await text('open:acme/portal')]).toEqual(['Validate 5 PRs', 'Fix 1 PR', 'Open portal · 2 to validate'])
+  expect([await text('validate-clean'), await text('fix'), await text('open:acme/portal')]).toEqual(['Validate 5 PRs', 'Fix 1 PR', 'Open portal'])
   // no line is on the dashboard: a repo's own page holds them
   expect(await ui.find({ key: 'pick:acme/web#7' })).toBeUndefined()
   await ui.press({ key: 'open:acme/web' })
@@ -288,7 +288,7 @@ test('on a repo page its box takes or leaves the whole repo; Validate and Clear 
   expect([await text('validate'), await text('clear')]).toEqual(['Validate PRs', 'Clear selection'])
   // the other repos keep their picks
   await ui.press({ key: 'back' })
-  expect(await text('open:acme/web')).toBe('Open web · 2 to validate')
+  expect(await text('open:acme/web')).toBe('Open web')
   await ui.unmount()
 })
 test('automatic mode, a repo\'s auto-merge (two taps on, one off) and its own prompt, from the dashboard and Settings', async ($, on) => {
@@ -340,7 +340,7 @@ test('while a run goes the lines are locked and say how each stands; Validate wa
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
   // the buttons stay where they are, dimmed, saying the run goes
-  expect([(await ui.find({ key: 'validate-clean' }))?.text, (await ui.find({ key: 'open:acme/api' }))?.text]).toEqual(['Validating PRs…', 'Open api · 1 PR'])
+  expect([(await ui.find({ key: 'validate-clean' }))?.text, (await ui.find({ key: 'open:acme/api' }))?.text]).toEqual(['Validating PRs…', 'Open api'])
   expect((await ui.find({ type: 'Text', text: /^Validating/ }))?.text).toBe('Validating 2 of 3')
   await ui.unmount()
   // a repo page: no box to tap, each line says how it stands
