@@ -8,8 +8,9 @@
 //   - the verdict is on the head commit, the PR is open and not a draft
 //   - the PR is not the user's own (GitHub does not let anyone approve their own)
 //   - it comes from a branch of the repo itself, never a fork, and its author may already write to
-//     the repo (an app counts: someone with admin rights installed it). A verdict reads the PR's
-//     own text, so it can be talked into passing; this script decides on facts the PR cannot write
+//     the repo, or is an app that only touches upkeep files (Dependabot, Renovate). A coding agent
+//     does not pass: it writes code from instructions anyone may have left it. A verdict reads the
+//     PR's own text, so it can be talked into passing; this script decides on facts the PR cannot write
 //   - no conflicts, and every CI check passed (no checks at all is not green)
 //   - after the approval, GitHub says it can merge (required reviews and rules satisfied)
 // Merge uses the first method the repo allows (squash, merge commit, rebase), pinned to the head
@@ -24,6 +25,7 @@ import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import { read as readRepos } from "./repos.mjs";
+import { onlyUpkeep } from "./upkeep.mjs";
 import { read, write } from "./verdicts.mjs";
 
 const repoOf = (url) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
@@ -34,7 +36,7 @@ const WRITERS = new Set(["admin", "write"]);
 // A passing verdict: the only ones this script looks at; the rest show their own verdict.
 export const passes = (v) => v?.state === "done" && v.issues === 0 && !v.attention && !v.partial;
 
-// From `gh pr view --json state,isDraft,headRefOid,author,isCrossRepository,mergeable,statusCheckRollup`
+// From `gh pr view --json state,isDraft,headRefOid,author,isCrossRepository,files,mergeable,statusCheckRollup`
 // and the author's permission on the repo: null when it may be approved, else the reason it is
 // skipped, in a few words. What it cannot tell counts against: no answer never lets a PR through.
 export function gate(pr, verdict, me, access) {
@@ -42,7 +44,9 @@ export function gate(pr, verdict, me, access) {
   if (!sameSha(pr.headRefOid, verdict.sha)) return "new commits";
   if (me && pr.author?.login?.toLowerCase() === me.toLowerCase()) return "your PR";
   if (pr.isCrossRepository !== false) return "from a fork";
-  if (!pr.author?.is_bot && !WRITERS.has(access)) return access ? "author cannot write" : "author access unknown";
+  if (pr.author?.is_bot) {
+    if (!onlyUpkeep((pr.files ?? []).map((f) => f.path))) return "coding agent";
+  } else if (!WRITERS.has(access)) return access ? "author cannot write" : "author access unknown";
   if (pr.mergeable !== "MERGEABLE") return pr.mergeable === "CONFLICTING" ? "conflicts" : "mergeability unknown";
   const checks = pr.statusCheckRollup ?? [];
   if (!checks.length) return "no CI";
@@ -65,7 +69,7 @@ function sweep() {
     const run = (args) => gh(args, env);
     let outcome;
     try {
-      const pr = JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,mergeable,statusCheckRollup"]));
+      const pr = JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,files,mergeable,statusCheckRollup"]));
       const why = gate(pr, verdict, run(["api", "user", "-q", ".login"]), pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login));
       if (why) outcome = { state: "skipped", why };
       else {
@@ -121,14 +125,17 @@ function selfTest() {
   // a check still running is not green either
   assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me", "write"), "CI red");
   // who opened it: a fork never, even with write access; a person needs write access; no answer
-  // counts against; an app in the repo's own branch passes
+  // counts against; an app passes only when it touches nothing but upkeep files
   assert.equal(gate({ ...ok, isCrossRepository: true }, v, "me", "write"), "from a fork");
   assert.equal(gate({ ...ok, isCrossRepository: undefined }, v, "me", "write"), "from a fork");
   assert.equal(gate(ok, v, "me", "read"), "author cannot write");
   assert.equal(gate(ok, v, "me", "none"), "author cannot write");
   assert.equal(gate(ok, v, "me"), "author access unknown");
-  assert.equal(gate({ ...ok, author: { login: "app/dependabot", is_bot: true } }, v, "me"), null);
-  assert.equal(gate({ ...ok, author: { login: "app/evil", is_bot: true }, isCrossRepository: true }, v, "me"), "from a fork");
+  const bump = [{ path: "package.json" }, { path: "web/package-lock.json" }];
+  assert.equal(gate({ ...ok, author: { login: "app/dependabot", is_bot: true }, files: bump }, v, "me"), null);
+  assert.equal(gate({ ...ok, author: { login: "app/copilot-swe-agent", is_bot: true }, files: [...bump, { path: "src/pay.ts" }] }, v, "me"), "coding agent");
+  assert.equal(gate({ ...ok, author: { login: "app/dependabot", is_bot: true } }, v, "me"), "coding agent");
+  assert.equal(gate({ ...ok, author: { login: "app/evil", is_bot: true }, files: bump, isCrossRepository: true }, v, "me"), "from a fork");
   assert.equal(method({ allow_squash_merge: false, allow_merge_commit: true }), "--merge");
   assert.equal(method({}), null);
   console.log("self-test ok");

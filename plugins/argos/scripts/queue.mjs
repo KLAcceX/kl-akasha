@@ -7,6 +7,7 @@
 //   node queue.mjs repo:acme/api repo:acme/web --lang en
 //   node queue.mjs --self-test
 // Signals are stable codes (see i18n.mjs); text output translates them.
+import { UPKEEP } from "./upkeep.mjs";
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { label, langArg, t } from "./i18n.mjs";
@@ -39,9 +40,6 @@ const isBot = (a) => !a || a.__typename === "Bot" || /\[bot\]$/.test(a.login);
 const isOther = (a, me) => a && !isBot(a) && a.login !== me;
 // A machine account: a GitHub App, or a user account named as one (snyk-bot is a plain user).
 export const isMachine = (a) => Boolean(a) && (isBot(a) || /(^|[-_.])bot$/i.test(a.login));
-// What an update bot touches: manifests, lock files, workflows, Dockerfiles, changelogs.
-const UPKEEP =
-  /(^|\/)(package(-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|Pipfile(\.lock)?|poetry\.lock|pyproject\.toml|uv\.lock|go\.(mod|sum)|Cargo\.(toml|lock)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile|[^/]*\.csproj|packages\.lock\.json|Directory\.Packages\.props|mix\.(exs|lock)|pubspec\.(yaml|lock)|Podfile(\.lock)?|Package\.resolved|\.terraform\.lock\.hcl|Dockerfile|CHANGELOG[^/]*|\.release-please-manifest\.json)$|^\.github\/workflows\//i;
 // A machine that writes code is a coding agent (Copilot, Devin...); one that only touches
 // upkeep files is an update bot (Dependabot, Snyk, Renovate). Read from the PR, not from a list.
 export const isAI = (a, files = []) => isMachine(a) && files.some((f) => !UPKEEP.test(f));
