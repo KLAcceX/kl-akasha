@@ -8,7 +8,7 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { C, HEX, HOVER, I, LOGO, STARS, TINT, rgba, titled } from './look'
+import { C, HEX, HOVER, I, LOGO, PANEL, SPACE, STARS, TINT, rgba, titled } from './look'
 import { UI, authorOf, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
 import type { RepoCfg, Round, Verdicts } from '../types'
 
@@ -400,8 +400,8 @@ export const register: Register = (on, options) => {
     // The head: the mark, "Pull requests" and Check now; under it how many go to validation and
     // when Argos last looked.
     const head = (withCheck: boolean) => (
-      <Box key="head" flexDirection="column" gap={0}>
-        <Box flexDirection="row" alignItems="center" gap="sm">
+      <Box key="head" flexDirection="column" gap={SPACE.line}>
+        <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
           {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
             <Text size="heading" weight="semibold" color={C.text}>
@@ -414,7 +414,7 @@ export const register: Register = (on, options) => {
             </Button>
           )}
         </Box>
-        <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap="xs">
+        <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={SPACE.row}>
           {vm.state === 'ok' && (
             <Text weight="semibold" color={vm.failed ? C.error : C.text}>
               {vm.failed ? t(lang, 'in_failed') : vm.summary}
@@ -435,7 +435,7 @@ export const register: Register = (on, options) => {
     )
     // A banner: check failed (red), no repo (neutral).
     const banner = (key: string, look: { bg?: string; border: string }, svg: string, title: string, sub: string, btn?: { label: string; onPress: () => void }) => (
-      <Box key={key} flexDirection="row" gap="sm" padding="sm" borderStyle="round" borderColor={look.border} backgroundColor={look.bg}>
+      <Box key={key} flexDirection="row" gap={SPACE.inline} padding="sm" borderStyle="round" borderColor={look.border} backgroundColor={look.bg}>
         {icon(svg, '●')}
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text weight="semibold" color={C.text}>
@@ -459,7 +459,7 @@ export const register: Register = (on, options) => {
     // Space goes between Boxes, never between lines of Text: lines of one thought sit at 0, blocks
     // of a region md apart, regions lg apart, and stacked rows of Buttons xs apart.
     const frame = (...body: any[]) => (
-      <Box flexDirection="column" gap="lg" padding="md">
+      <Box flexDirection="column" gap={SPACE.region} padding="md">
         {body.filter(Boolean)}
       </Box>
     )
@@ -483,7 +483,7 @@ export const register: Register = (on, options) => {
     if (vm.state === 'loading' || vm.state === 'never')
       return frame(
         head(vm.state === 'never'),
-        <Box key="skeleton" flexDirection="column" gap="xs">
+        <Box key="skeleton" flexDirection="column" gap={SPACE.row}>
           {['78%', '64%', '72%'].map((w, i) => (
             <Box key={`sk${i}`} height={1} width={w} backgroundColor="rgba(128,128,128,0.18)" />
           ))}
@@ -528,7 +528,7 @@ export const register: Register = (on, options) => {
       await loadVerdicts($)
     }
     const auto = (
-      <Box key="auto" flexDirection="row" flexWrap="wrap" alignItems="center" gap="xs">
+      <Box key="auto" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.row}>
           <Text size="caption" color={C.text}>
             {t(lang, 'auto_label')}
           </Text>
@@ -551,9 +551,9 @@ export const register: Register = (on, options) => {
       </Box>
     )
     const who = (
-      <Box key="who-box" flexDirection="column" gap="md">
-        <Box flexDirection="column" gap={0}>
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap="xs" columnGap="md">
+      <Box key="who-box" flexDirection="column" gap={SPACE.block}>
+        <Box flexDirection="column" gap={SPACE.line}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.block}>
             <Button key="who" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
               {`${vm.who.label} ${isOpen ? '▾' : '▸'}`}
             </Button>
@@ -570,14 +570,9 @@ export const register: Register = (on, options) => {
         </Box>
         {isOpen && (
           <Box
-            flexDirection="column"
-            gap="md"
-            padding="md"
-            borderStyle="round"
-            borderColor="rgba(128,128,128,0.25)"
-            backgroundColor="rgba(128,128,128,0.05)"
+            flexDirection="column" {...PANEL}
           >
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
               <Text size="caption" color={C.subtle}>
                 {t(lang, 'who_set')}
               </Text>
@@ -587,9 +582,9 @@ export const register: Register = (on, options) => {
                 </Button>
               ))}
             </Box>
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap="xs" columnGap="md">
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.block}>
               {vm.authors.map(a => (
-                <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap="xs">
+                <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap={SPACE.row}>
                   {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 16, 16, a.tip)}
                   <Button key={`who:${a.name}`} plain={true} onPress={() => void toggleAuthor(a)}>
                     {`${a.isOut ? BOX.off : BOX.on} ${a.name} ${a.count}`}
@@ -628,7 +623,7 @@ export const register: Register = (on, options) => {
     const isFixing = working.some(a => fixing[a.id])
     // The run line: kept only when no validating agent stands for the run (a run the chat started).
     const runLine = vm.run?.isRunning && !working.some(a => validating[a.id]) && (
-      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
+      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
         <Text color={C.brand}>⠿</Text>
         <Text size="caption" weight="semibold" color={C.text}>
           {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
@@ -642,7 +637,7 @@ export const register: Register = (on, options) => {
     )
     // What the last run came to, until the next run or check, with Retry on the failed ones.
     const doneLine = vm.run && !vm.run.isRunning && (
-      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
+      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
         {!vm.run.failed && <Text color={C.success}>✓</Text>}
         <Text size="caption" weight="semibold" color={C.text}>
           {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
@@ -668,7 +663,7 @@ export const register: Register = (on, options) => {
     // carries how far it got ("4 of 7 · 1 failed") and the one Stop. Stop refuses its tools from
     // then on, so it ends.
     const agents = (working.length > 0 || runLine || doneLine) && (
-      <Box key="agents" flexDirection="column" gap="xs">
+      <Box key="agents" flexDirection="column" gap={SPACE.row}>
         {working.length > 0 && (
           <Text size="caption" weight="semibold" color={C.text}>
             {t(lang, 'ag_title', working.length)}
@@ -677,7 +672,7 @@ export const register: Register = (on, options) => {
         {working.map(a => {
           const p = progressOf(a.id)
           return (
-            <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+            <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
               <Text color={C.brand}>⠿</Text>
               <Text size="caption" color={C.text}>
                 {a.description}
@@ -709,15 +704,15 @@ export const register: Register = (on, options) => {
     // Fix act, so they share the second row. Fix pushes, so it hides while its agent works. While
     // a run goes the lines are locked and both rows wait.
     const go = !vm.run?.isRunning && (
-      <Box key="go" flexDirection="column" gap="xs">
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
+      <Box key="go" flexDirection="column" gap={SPACE.row}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.block}>
           {vm.picks.map(p => (
             <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
               {p.label}
             </Button>
           ))}
         </Box>
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap="sm">
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
           <Button
             key="validate"
             variant={vm.validate.count ? 'primary' : 'secondary'}
@@ -769,7 +764,7 @@ export const register: Register = (on, options) => {
     }
     const MARK = { on: BOX.on, mixed: BOX.mixed, off: BOX.off }
     const header = (g: Group) => (
-      <Box key={`group:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap="xs" columnGap="sm" paddingX="xs">
+      <Box key={`group:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.inline} paddingX="xs">
         {g.keys.length ? (
           <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
             {`${MARK[g.mark]} ${g.name}`}
@@ -820,18 +815,11 @@ export const register: Register = (on, options) => {
     const fold = (g: Group) => (
       <Box
         key={`fold:${g.repo}`}
-        flexDirection="column"
-        gap="md"
-        padding="md"
-        marginLeft={3}
-        marginBottom="sm"
-        borderStyle="round"
-        borderColor="rgba(128,128,128,0.25)"
-        backgroundColor="rgba(128,128,128,0.05)"
+        flexDirection="column" {...PANEL} marginLeft={3} marginBottom="sm"
       >
         {confirming === g.repo ? (
-          <Box flexDirection="column" gap="md">
-            <Box flexDirection="column" gap={0}>
+          <Box flexDirection="column" gap={SPACE.block}>
+            <Box flexDirection="column" gap={SPACE.line}>
               <Text weight="semibold" color={C.text}>
                 {t(lang, 'mg_confirm_title', g.repo)}
               </Text>
@@ -839,7 +827,7 @@ export const register: Register = (on, options) => {
                 {t(lang, 'mg_confirm_body', last?.me ?? '')}
               </Text>
             </Box>
-            <Box flexDirection="column" gap={0}>
+            <Box flexDirection="column" gap={SPACE.line}>
               {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
                 <Box key={`rule:${i}`} flexDirection="row">
                   <Box flexShrink={0} width={2}>
@@ -858,7 +846,7 @@ export const register: Register = (on, options) => {
             <Text size="caption" color={C.subtle}>
               {t(lang, 'mg_method')}
             </Text>
-            <Box flexDirection="row" gap="sm">
+            <Box flexDirection="row" gap={SPACE.inline}>
               <Button key={`merge-yes:${g.repo}`} variant="primary" onPress={() => void setMerge(g.repo, true)}>
                 {t(lang, 'mg_yes', g.name)}
               </Button>
@@ -868,8 +856,8 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         ) : (
-          <Box flexDirection="column" gap={0}>
-            <Box flexDirection="row" alignItems="center" gap="sm">
+          <Box flexDirection="column" gap={SPACE.line}>
+            <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
               <Text size="caption" weight="semibold" color={C.text}>
                 {t(lang, g.merge ? 'mg_on' : 'mg_off')}
               </Text>
@@ -886,8 +874,8 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        <Box flexDirection="column" gap="sm">
-          <Box flexDirection="column" gap={0}>
+        <Box flexDirection="column" gap={SPACE.inline}>
+          <Box flexDirection="column" gap={SPACE.line}>
             <Text size="caption" weight="semibold" color={C.text}>
               {t(lang, 'skills_title')}
             </Text>
@@ -897,7 +885,7 @@ export const register: Register = (on, options) => {
               </Text>
             )}
           </Box>
-          <Box flexDirection="row" alignItems="center" gap="sm">
+          <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
             <Box flexGrow={1} flexShrink={1} minWidth={0}>
               {Input && (
                 <Input
@@ -930,7 +918,7 @@ export const register: Register = (on, options) => {
     // Button, does not clip), so the column lines up
     const locked = Boolean(vm.run?.isRunning)
     const line = (x: Row) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" hover={{ backgroundColor: HOVER }}>
+      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.row} paddingX="xs" hover={{ backgroundColor: HOVER }}>
         {locked ? (
           <Box flexShrink={0} width={2}>
             <Text color={x.mark.color}>{x.mark.glyph || ' '}</Text>
@@ -958,7 +946,7 @@ export const register: Register = (on, options) => {
         </Box>
         {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
         {/* one line tall whatever the state: the title gives way, its number and reason stay */}
-        <Box flexDirection="row" alignItems="center" gap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
+        <Box flexDirection="row" alignItems="center" gap={SPACE.row} flexGrow={1} flexShrink={1} minWidth={0}>
           <Box flexShrink={1} minWidth={0}>
             <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
               {x.title}
@@ -987,19 +975,19 @@ export const register: Register = (on, options) => {
       agents,
       go,
       vm.groups.length > 1 || openSettings ? (
-        <Box key="lines" flexDirection="column" gap="lg">
+        <Box key="lines" flexDirection="column" gap={SPACE.region}>
           {vm.groups.map(g => (
-            <Box key={`repo-group:${g.repo}`} flexDirection="column" gap="xs">
+            <Box key={`repo-group:${g.repo}`} flexDirection="column" gap={SPACE.row}>
               {header(g)}
               {openSettings === g.repo && fold(g)}
-              <Box flexDirection="column" gap={0}>
+              <Box flexDirection="column" gap={SPACE.line}>
                 {g.rows.map(line)}
               </Box>
             </Box>
           ))}
         </Box>
       ) : (
-        <Box key="lines" flexDirection="column" gap={0}>
+        <Box key="lines" flexDirection="column" gap={SPACE.line}>
           {vm.rows.map(line)}
         </Box>
       ),

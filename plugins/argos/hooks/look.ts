@@ -20,6 +20,28 @@ export const HEX = {
   error: '#F07A72',
   meter: '#4A4945',
 } as const
+// Spacing tokens: space goes between Boxes, never between lines of Text. Each step has one job,
+// so a gap says what it separates; the surface sizes the step names its own way.
+export const SPACE = {
+  // lines of one thought
+  line: 0,
+  // stacked rows of Buttons, items inside a row
+  row: 'xs',
+  // things side by side in a row
+  inline: 'sm',
+  // blocks of one region
+  block: 'md',
+  // regions of the pane
+  region: 'lg',
+} as const
+// An open fold (Who, a repo's Settings): one soft panel, spaced as blocks inside.
+export const PANEL = {
+  gap: SPACE.block,
+  padding: 'md',
+  borderStyle: 'round',
+  borderColor: 'rgba(128,128,128,0.25)',
+  backgroundColor: 'rgba(128,128,128,0.05)',
+} as const
 // a row under the pointer: a faint brand tint, readable under text in both themes
 export const HOVER = 'rgba(126,92,192,0.10)'
 
