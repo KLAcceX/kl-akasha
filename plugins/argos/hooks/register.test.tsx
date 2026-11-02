@@ -239,6 +239,33 @@ test('Validate N marks them running and hands them to background subagents, ten 
   await ui.unmount()
 })
 
+test('each repo with a local clone gets its own agent started there, with its own prompt', async ($, on) => {
+  const api = 'https://github.com/acme/api/pull/1'
+  const web = 'https://github.com/acme/web/pull/2'
+  const prs = [item({ kind: 'other', number: 1, repo: 'acme/api', url: api, author: 'bia', signals: [] }), item({ kind: 'other', number: 2, repo: 'acme/web', url: web, author: 'bia', signals: [] })]
+  const spawns: { prompt: string; cwd?: string }[] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: { ...round, repos: ['acme/api', 'acme/web'], pending: [], mine: [], others: prs }, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    if (e.path.endsWith('repos.json')) return { value: JSON.stringify([{ repo: 'acme/api', path: 'C:/src/api', prompt: 'Check the ledger first' }, { repo: 'acme/web' }]) }
+    throw new Error('no file')
+  })
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('agent.spawn', (_: unknown, e: { prompt: string; cwd?: string }) => {
+    spawns.push(e)
+    return { agentId: `a${spawns.length}`, model: 'm' }
+  })
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'validate' })
+  expect(spawns.map(x => x.cwd)).toEqual(['C:/src/api', undefined])
+  expect(spawns[0].prompt.split('\n')).toContain("Rules for acme/api (the user's, for this repo's PRs): Check the ledger first")
+  expect(spawns[1].prompt).not.toMatch(/Rules for/)
+  await ui.unmount()
+})
+
 test('a repo heading takes or leaves its whole repo, Only keeps just it; Clear leaves everything out, Restore brings the default back', async ($, on) => {
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),

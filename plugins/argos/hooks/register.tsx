@@ -101,15 +101,21 @@ async function loadRepos($: any): Promise<RepoCfg[]> {
   }
 }
 
+// A PR's connected repo, as repos.json keeps it.
+const repoOf = (list: RepoCfg[], url: string) => list.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))
 // A repo's own validation prompt, added to Argos's job for its PRs. An older repos.json kept a
 // list of skills instead: it reads as a prompt to use them.
-async function repoPrompts($: any) {
-  const list = await loadRepos($)
-  return (url: string) => {
-    const r = list.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))
-    const text = r?.prompt ?? (r?.skills?.length ? `Read the skills ${r.skills.join(', ')} and judge by their rules.` : '')
-    return r && text ? { repo: r.repo, text } : null
+const promptOf = (r: RepoCfg | undefined) => r?.prompt ?? (r?.skills?.length ? `Read the skills ${r.skills.join(', ')} and judge by their rules.` : '')
+// PRs by the local clone their agent runs in: an agent started in a repo's clone loads that
+// repo's CLAUDE.md and rules as a session opened there would; a repo without one runs in the
+// session's folder.
+const byClone = (list: RepoCfg[], urls: string[]) => {
+  const groups = new Map<string, string[]>()
+  for (const u of urls) {
+    const path = repoOf(list, u)?.path ?? ''
+    groups.set(path, [...(groups.get(path) ?? []), u])
   }
+  return [...groups]
 }
 
 // Validates PRs in the background: queues them, then hands them to subagents with the validate
@@ -122,32 +128,32 @@ async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
   if (!urls.length) return
   await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'queue', ...urls])
   await loadVerdicts($)
-  const of = await repoPrompts($)
+  const list = await loadRepos($)
   const scripts = `${$.plugin.root}/scripts`
   const ask = compose(prompt, [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`], text => [text, t(lang, 'b_record', scripts)])
-  for (let i = 0; i < urls.length; i += 10) {
-    const part = urls.slice(i, i + 10)
-    const rules = new Map(part.flatMap(u => (of(u) ? [[of(u)!.repo, of(u)!.text] as const] : [])))
-    const lines = [...ask, `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
-    const { agentId } = await $.agent.spawn({ prompt: lines.join('\n'), description: `Argos validate · ${part.length} PRs` })
-    if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
-  }
+  for (const [cwd, group] of byClone(list, urls))
+    for (let i = 0; i < group.length; i += 10) {
+      const part = group.slice(i, i + 10)
+      const rules = new Map(part.map(u => repoOf(list, u)).filter(r => r && promptOf(r)).map(r => [r!.repo, promptOf(r)]))
+      const lines = [...ask, `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
+      const { agentId } = await $.agent.spawn({ prompt: lines.join('\n'), description: `Argos validate · ${part.length} PRs`, ...(cwd && { cwd }) })
+      if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
+    }
 }
 
-// Fixes the person's own PRs in the background: one agent takes them one at a time (they share
-// local clones), turns each review into commits and replies, pushes and answers on its own, and
+// Fixes the person's own PRs in the background: one agent per repo, in its local clone, takes
+// them one at a time (they share the clone), turns each review into commits and replies, pushes and answers on its own, and
 // skips a PR it cannot fix safely (no clone, uncommitted work, conflicts). It ends with one line
 // the pane shows as a toast. The person's own prompt replaces Argos's job only in how to fix.
 async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
   if (!urls.length) return
   const list = await loadRepos($)
-  const line = (u: string) => {
-    const path = list.find(r => u.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))?.path
-    return path ? `- ${u} (clone: ${path})` : `- ${u}`
-  }
   const ask = compose(prompt, [t(lang, 'b_fix'), `Job: ${$.plugin.root}/references/mine.md (Job 2, in the background)`], text => [text, t(lang, 'b_fix_rules')])
-  const { agentId } = await $.agent.spawn({ prompt: [...ask, `Scripts: ${$.plugin.root}/scripts`, ...urls.map(line)].join('\n'), description: `Argos fix · ${urls.length} PRs` })
-  if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: urls }))
+  for (const [cwd, group] of byClone(list, urls)) {
+    const lines = [...ask, `Scripts: ${$.plugin.root}/scripts`, ...group.map(u => (cwd ? `- ${u} (clone: ${cwd})` : `- ${u}`))]
+    const { agentId } = await $.agent.spawn({ prompt: lines.join('\n'), description: `Argos fix · ${group.length} PRs`, ...(cwd && { cwd }) })
+    if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: group }))
+  }
 }
 
 // Stops a validating agent the mod started: from now on every tool it calls is refused, so it
