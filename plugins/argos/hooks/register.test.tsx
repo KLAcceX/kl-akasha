@@ -53,11 +53,11 @@ test('one list: every open PR in a fixed order, all going to validation but what
     ['#7', true, ''],
     ['#8', true, ''],
   ])
-  // a repo with a draft or a change request left out is not "all": its heading offers Select all
-  expect(vm.groups.map(g => [g.name, g.rows.length, g.count, g.action])).toEqual([
-    ['api', 1, '1 of 1', 'Deselect all'],
-    ['portal', 4, '2 of 4', 'Select all'],
-    ['web', 2, '2 of 2', 'Deselect all'],
+  // a repo with a draft or a change request left out is not "all": its heading box is mixed
+  expect(vm.groups.map(g => [g.name, g.rows.length, g.count, g.mark])).toEqual([
+    ['api', 1, '1 of 1', 'on'],
+    ['portal', 4, '2 of 4', 'mixed'],
+    ['web', 2, '2 of 2', 'on'],
   ])
   expect(vm.summary).toBe('5 to validate · 3 repos')
   expect(vm.autoLine).toBe('Left out by itself: 1 change request · 1 draft')
@@ -136,11 +136,14 @@ test('a PR validated with no commit since is left out; a running one cannot be p
   const at = (k: string) => vm.rows.find(x => x.key === k)!
   expect([at('acme/web#7').isIn, at('acme/web#7').why, at('acme/web#7').verdict?.count]).toEqual([false, 'validated', '3'])
   expect([at('acme/web#8').why, at('acme/web#8').canToggle]).toEqual(['validating', false])
-  expect([at('acme/api#9').isIn, at('acme/api#9').verdict?.count]).toEqual([true, 'old'])
+  // an old verdict is a hollow star with no word, and the PR goes again
+  expect([at('acme/api#9').isIn, at('acme/api#9').verdict?.text, at('acme/api#9').verdict?.count]).toEqual([true, '☆', undefined])
+  // blockers are amber, a pass green: purple only says Argos looked
+  expect([at('acme/web#7').verdict?.color, verdictTag(verdictOf(shaOn(item({})), V({}) as never), 'en').color]).toEqual(['warning', 'success'])
   expect(vm.progress?.label).toBe('Validating 1 of 2')
 })
 
-test('the pane: the count, the author switches, one Validate button and one line per PR', async ($, on) => {
+test('the pane: the count, who goes, one Validate button and one line per PR', async ($, on) => {
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
   )
@@ -151,10 +154,15 @@ test('the pane: the count, the author switches, one Validate button and one line
   expect((await ui.find({ key: 'validate' }))?.text).toBe('Validate 5')
   expect((await ui.find({ key: 'pick:acme/web#7' }))?.text).toBe('☑')
   expect((await ui.find({ key: 'pick:acme/portal#222' }))?.text).toBe('☐')
-  // an author switch: one tap leaves them out, the line stays where it was
+  // Who opens the authors: one tap leaves one out, the line stays where it was
+  expect((await ui.find({ key: 'who' }))?.text).toBe('Who: Everyone ▸')
+  await ui.press({ key: 'who' })
+  expect((await ui.find({ key: 'who:me' }))?.text).toBe('☑ me 4')
   await ui.press({ key: 'who:me' })
-  expect((await ui.find({ key: 'who:me' }))?.text).toBe('me ✕')
+  expect([(await ui.find({ key: 'who:me' }))?.text, (await ui.find({ key: 'who' }))?.text]).toEqual(['☐ me 4', 'Who: Everyone · me out ▾'])
   expect((await ui.find({ key: 'validate' }))?.text).toBe('Validate 3')
+  // the line of an author left out has no box to press
+  expect(await ui.find({ key: 'pick:acme/portal#220' })).toBeUndefined()
   await ui.press({ key: 'pick:acme/web#7' })
   expect((await ui.find({ key: 'validate' }))?.text).toBe('Validate 2')
   await ui.press({ key: 'who:me' })
@@ -193,7 +201,7 @@ test('Validate N marks them running and hands them to background subagents, ten 
   await ui.unmount()
 })
 
-test('a repo heading takes or leaves its whole repo; Clear leaves everything out, Restore brings the default back', async ($, on) => {
+test('a repo heading takes or leaves its whole repo, Only keeps just it; Clear leaves everything out, Restore brings the default back', async ($, on) => {
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
   )
@@ -201,43 +209,53 @@ test('a repo heading takes or leaves its whole repo; Clear leaves everything out
   on('store.set', () => ({ value: undefined }))
   const ui = await $.ui.mount(PANE)
   const text =async (key: string) => (await ui.find({ key }))?.text
-  // portal goes 2 of 4 (a draft and a change request left out): Select all takes those too
-  expect(await text('repo:acme/portal')).toBe('Select all')
+  // portal goes 2 of 4 (a draft and a change request left out): its box takes those too
+  expect(await text('repo:acme/portal')).toBe('◩ portal')
   await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['Deselect all', 'Validate 7'])
-  // Deselect all: the draft and the change request go back to the pane, the rest out by hand
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑ portal', 'Validate 7'])
+  // and leaves them: the draft and the change request go back to the pane, the rest out by hand
   await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['Select all', 'Validate 3'])
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☐ portal', 'Validate 3'])
   expect((await ui.find({ type: 'Text', text: /^Left out by itself/ }))?.text).toBe('Left out by itself: 1 change request · 1 draft')
   await ui.press({ key: 'pick:acme/portal#220' })
   await ui.press({ key: 'pick:acme/portal#221' })
   expect(await text('validate')).toBe('Validate 5')
   await ui.press({ key: 'clear' })
-  expect([await text('validate'), await text('clear')]).toEqual(['Validate 0', 'Restore default'])
+  expect([await text('validate'), await text('clear')]).toEqual(['Validate', 'Restore default'])
   await ui.press({ key: 'clear' })
   expect([await text('validate'), await text('clear')]).toEqual(['Validate 5', 'Clear selection'])
+  // Only: that repo at the pane's own picks, every other repo left out, and Validate says where
+  await ui.press({ key: 'only:acme/portal' })
+  expect([await text('validate'), await text('repo:acme/web')]).toEqual(['Validate 2 · portal', '☐ web'])
   await ui.unmount()
 })
 
-test('machines leave in bulk by kind; past six authors the switches fold, keeping what is out in sight', async ($, on) => {
-  const agentsOut = ok(vmOf(round, {}, 'en', ['kind:agent']))
-  expect(agentsOut.kinds.map(k => [k.kind, k.isOut, k.label])).toEqual([['agent', true, 'Agents ✕']])
-  expect(agentsOut.rows.find(x => x.author === 'Copilot')?.isIn).toBe(false)
-  expect(agentsOut.validate.count).toBe(4)
+test('who: presets leave kinds out, the label always says the whole state', async ($, on) => {
+  expect(ok(vmOf(round, {}, 'en', ['kind:agent'])).validate.count).toBe(4)
+  expect(ok(vmOf(round)).who.presets.map(p => p.id)).toEqual(['everyone', 'people', 'agents'])
+  expect(ok(vmOf(round, {}, 'en', ['kind:bot', 'kind:agent'])).who.label).toBe('Who: People only')
+  expect(ok(vmOf(round, {}, 'en', ['me', 'bia', 'caio'])).who.label).toBe('Who: only Copilot')
+  expect(ok(vmOf(round, {}, 'en', ['kind:agent', 'bia'])).who.label).toBe('Who: 2 of 4 authors')
   const many = Array.from({ length: 8 }, (_, i) => item({ kind: 'other', number: 500 + i, url: `u5${i}`, author: `dev${i}`, signals: [] }))
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
-    e.key === 'round' ? { value: { value: { ...round, pending: [], mine: [], others: many }, version: 1 } } : next(e),
+    e.key === 'round' ? { value: { value: { ...round, pending: [], mine: [], others: [...many, theirs] }, version: 1 } } : next(e),
   )
   on('clock.now', clock)
   on('store.set', () => ({ value: undefined }))
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ key: 'authors-fold' }))?.text).toBe('Authors (8) ▾')
+  const text = async (key: string) => (await ui.find({ key }))?.text
   expect(await ui.find({ key: 'who:dev3' })).toBeUndefined()
-  await ui.press({ key: 'authors-fold' })
+  await ui.press({ key: 'who' })
   await ui.press({ key: 'who:dev3' })
-  await ui.press({ key: 'authors-fold' })
-  // folded again: dev3, left out by name, stays in sight
-  expect([(await ui.find({ key: 'who:dev3' }))?.text, await ui.find({ key: 'who:dev4' })]).toEqual(['dev3 ✕', undefined])
+  expect(await text('who')).toBe('Who: Everyone · dev3 out ▾')
+  await ui.press({ key: 'only:dev5' })
+  expect([await text('who'), await text('validate')]).toEqual(['Who: only dev5 ▾', 'Validate 1 · portal'])
+  // a preset resets the people
+  await ui.press({ key: 'set:people' })
+  expect([await text('who'), await text('validate'), await text('set:people')]).toEqual(['Who: People only ▾', 'Validate 8 · portal', 'People ✓'])
+  // an author out with their kind comes back alone; the rest of the preset stays
+  await ui.press({ key: 'who:Copilot' })
+  expect([await text('who'), await text('validate')]).toEqual(['Who: Everyone but bots ▾', 'Validate 9'])
   await ui.unmount()
 })
 

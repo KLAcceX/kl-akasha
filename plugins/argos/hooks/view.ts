@@ -29,16 +29,16 @@ export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: 
   if (v.issues) return { state: 'issues', issues: v.issues, attention, finding }
   return { state: v.partial ? 'partial' : 'pass', issues: 0, attention, finding }
 }
-// The verdict as a star and a count: ✓ passed, the number of blockers, … while it runs, "old"
-// once new commits land; `+N` counts what needs attention without blocking.
+// The verdict as a purple star (Argos looked) and a count: a green ✓ passed, the number of
+// blockers in amber (purple never means a problem), a hollow grey star once new commits land;
+// `+N` counts what needs attention without blocking.
 export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
-  const purple = { color: C.merged }
   const more = v.attention ? `+${v.attention}` : ''
-  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: `✓${more}`, ...purple, text: `✦✓${more}`, tip: t(lang, 'tip_v_pass', v.attention) }
-  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, ...purple, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
+  if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: `✓${more}`, color: C.success, text: `✦✓${more}`, tip: t(lang, 'tip_v_pass', v.attention) }
+  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, color: C.warning, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
   if (v.state === 'partial') return { k: 'sig', svg: STARS.stale, w: 16, count: '½', color: C.subtle, text: '☆½', tip: t(lang, 'tip_v_partial', v.attention) }
-  if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, count: '…', color: C.subtle, text: '◌…', tip: t(lang, 'tip_v_run') }
-  if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, count: t(lang, 'vd_old'), color: C.subtle, text: `☆${t(lang, 'vd_old')}`, tip: t(lang, 'tip_v_stale') }
+  if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, text: '◌', tip: t(lang, 'tip_v_run') }
+  if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, text: '☆', tip: t(lang, 'tip_v_stale') }
   return { k: 'sig', svg: STARS.none, w: 16, text: '✧', tip: t(lang, 'tip_v_none') }
 }
 
@@ -73,6 +73,16 @@ export function ago(iso: string, now: number, lang: string): string {
 // The pane's own choices: PRs left out by hand, and PRs the pane left out by itself that the
 // person brought back. Authors left out are kept apart (`ignored`), across sessions.
 export type Ui = { out: string[]; back: string[] }
+// Who presets: the kinds each leaves out, offered when the kinds it names have authors here.
+export const PRESETS = [
+  { id: 'everyone', kinds: [], when: [] },
+  { id: 'no_bots', kinds: ['bot'], when: ['bot'] },
+  { id: 'people', kinds: ['bot', 'agent'], when: ['agent'] },
+  { id: 'bots', kinds: ['human', 'agent'], when: ['bot'] },
+  { id: 'agents', kinds: ['human', 'bot'], when: ['agent'] },
+] as const satisfies readonly { id: string; kinds: readonly string[]; when: readonly string[] }[]
+const kindsOut = (out: Set<string>) => [...out].filter(x => x.startsWith('kind:')).map(x => x.slice(5))
+const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x))
 export const UI: Ui = { out: [], back: [] }
 type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; verdicts?: Verdicts | null; ignored?: string[] }
 
@@ -146,6 +156,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       why: leftBy === null || leftBy === 'hand' || leftBy === 'author' ? '' : t(lang, `why_${leftBy}`),
       // a running validation and an author left out are not toggled from the line
       canToggle: leftBy !== 'running' && leftBy !== 'author',
+      isRunning: leftBy === 'running',
       // the pane would leave it out by itself (a draft, changes asked, already validated)
       hasReason: Boolean(auto) && auto !== 'running',
       // the pane left it out by itself: a tap brings it back rather than leaving it out
@@ -166,11 +177,22 @@ export function toViewModel(r: Round | null, o: Opts) {
   const authors = [...counts.values()]
     .sort((a, b) => b.count - a.count || order[a.kind] - order[b.kind] || a.name.localeCompare(b.name))
     .map(({ p, ...a }) => ({ ...a, svg: pic(p, a.kind, a.name), tip: t(lang, `tip_who_${a.kind}`, a.name), isOut: isOut(a.name, a.kind), byName: authorsOut.has(a.name) }))
-  // Machines in bulk: one switch leaves every update bot (or every agent) out, new ones too.
-  const kinds = (['bot', 'agent'] as const)
-    .map(kind => ({ kind, count: authors.filter(a => a.kind === kind).reduce((n, a) => n + a.count, 0), isOut: authorsOut.has(`kind:${kind}`) }))
-    .filter(k => k.count > 0)
-    .map(k => ({ ...k, label: k.isOut ? `${t(lang, `in_kind_${k.kind}`)} ✕` : `${t(lang, `in_kind_${k.kind}`)} ${k.count}` }))
+  // Who goes, as one control: presets leave whole kinds out (new bots too), people go by name.
+  // Its label says the whole state, so it never disagrees with the authors under it.
+  const present = (kind: string) => authors.some(a => a.kind === kind)
+  const preset = PRESETS.find(p => sameSet(p.kinds, kindsOut(authorsOut)))
+  const presets = PRESETS.filter(p => p.when.every(present)).map(p => ({ id: p.id, kinds: [...p.kinds], label: t(lang, `set_${p.id}`), isOn: p === preset }))
+  const namesOut = authors.filter(a => a.byName && !authorsOut.has(`kind:${a.kind}`)).map(a => a.name)
+  const inAuthors = authors.filter(a => !a.isOut)
+  const whoText =
+    !namesOut.length && preset
+      ? t(lang, `who_${preset.id}`)
+      : inAuthors.length === 1 && authors.length > 1
+        ? t(lang, 'who_only', inAuthors[0]!.name)
+        : preset && namesOut.length <= 3
+          ? `${t(lang, `who_${preset.id}`)} · ${namesOut.length === 1 ? t(lang, 'who_out', namesOut[0]) : t(lang, 'who_n_out', namesOut.length)}`
+          : t(lang, 'who_some', inAuthors.length, authors.length)
+  const who = { label: t(lang, 'who', whoText), presets }
 
   // What the pane left out by itself, in one line.
   const autoOut = (['changes', 'draft', 'done'] as const)
@@ -179,13 +201,14 @@ export function toViewModel(r: Round | null, o: Opts) {
     .map(([why, n]) => t(lang, `out_${why}`, n))
     .join(' · ')
 
-  // Lines under their repo, whose heading says how many go ("5 of 7") and takes every line that
-  // can be picked in one tap, drafts and validated ones too, or leaves them all out once all go.
-  // A running line and an author left out are not picked from here.
+  // Lines under their repo, whose heading box says how many go (all, some, none: "5 of 7") and
+  // takes every line that can be picked in one tap, drafts and validated ones too, or leaves them
+  // all out once all go. A running line and an author left out are not picked from here.
   const groups = names.map(repo => {
     const lines = rows.filter(x => x.repo === repo)
     const free = lines.filter(x => x.canToggle)
     const isAll = free.length > 0 && free.every(x => x.isIn)
+    const picked = lines.filter(x => x.isIn).length
     return {
       repo,
       name: short(repo),
@@ -193,35 +216,46 @@ export function toViewModel(r: Round | null, o: Opts) {
       keys: free.map(x => x.key),
       reasonKeys: free.filter(x => x.hasReason).map(x => x.key),
       isAll,
-      action: free.length ? t(lang, isAll ? 'in_none' : 'in_all') : '',
-      count: t(lang, 'in_of', lines.filter(x => x.isIn).length, lines.length),
+      mark: isAll ? ('on' as const) : picked ? ('mixed' as const) : ('off' as const),
+      count: t(lang, 'in_of', picked, lines.length),
     }
   })
 
-  const going = rows.filter(x => x.isIn)
+  const toGo = rows.filter(x => x.isIn)
+  const goingRepos = [...new Set(toGo.map(x => x.repo))]
   // Clear leaves every line out; once nothing is left, Restore goes back to the pane's own pick.
-  const clear = going.length
-    ? { label: t(lang, 'in_clear'), keys: going.map(x => x.key) }
+  const clear = toGo.length
+    ? { label: t(lang, 'in_clear'), keys: toGo.map(x => x.key) }
     : ui.out.length || ui.back.length
       ? { label: t(lang, 'in_restore'), keys: null }
       : null
   // Validation in flight: "Validating 9 of 22" while any of it runs.
   const vb = o.verdicts?.batch?.urls ?? []
   const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
-  const progress = vrun ? { label: t(lang, 'in_validating', vb.length - vrun, vb.length), pct: `${Math.round(((vb.length - vrun) / vb.length) * 100)}%` } : null
+  const progress = vrun ? { label: t(lang, 'in_validating', vb.length - vrun, vb.length) } : null
 
   return {
     ...head,
     state: 'ok' as const,
-    summary: t(lang, 'in_to_validate', going.length, new Set(going.map(x => x.repo)).size),
+    summary: t(lang, 'in_to_validate', toGo.length, goingRepos.length),
     autoLine: autoOut ? t(lang, 'in_auto_out', autoOut) : '',
     authors,
-    kinds,
+    who,
     rows,
     groups,
     clear,
     progress,
-    validate: { label: t(lang, 'in_validate_n', going.length), urls: going.map(x => x.url), count: going.length },
+    // all of it in one repo of several says which ("Validate 4 · billing"), so a tap on Only
+    // never sends more than the person meant; nothing picked reads "Validate", disabled
+    validate: {
+      label: !toGo.length
+        ? t(lang, 'in_validate')
+        : names.length > 1 && goingRepos.length === 1
+          ? `${t(lang, 'in_validate_n', toGo.length)} · ${short(goingRepos[0]!)}`
+          : t(lang, 'in_validate_n', toGo.length),
+      urls: toGo.map(x => x.url),
+      count: toGo.length,
+    },
   }
 }
 export type ViewModel = ReturnType<typeof toViewModel>

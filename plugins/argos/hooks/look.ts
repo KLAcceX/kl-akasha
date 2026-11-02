@@ -1,16 +1,27 @@
 // The pane's look: one meaning per colour, and 16px icons with fixed fills (an Svg has no
 // currentColor). No mod runtime, so Node and the tests can import it.
 
+// Text colours are theme keys, so light and dark each get the host's own value. Purple means
+// Argos (picked, the verdict star, running), amber a problem, green a pass; never the other way.
 export const C = {
+  text: 'text',
+  subtle: 'subtle',
+  brand: 'merged',
+  warning: 'warning',
+  success: 'success',
+  error: 'error',
+} as const
+// An Svg keeps one fill in both themes, so its colours are picked to reach 3:1 on the dark pane
+// (#1f1f1e) and on white: brand 4.1 / 4.0, grey 4.7 / 3.6.
+export const HEX = {
   bg: '#1f1f1e',
-  text: '#ECEAE4',
-  subtle: '#9C9A93',
-  // the check failed
+  brand: '#8E6CD2',
+  grey: '#8A8880',
   error: '#F07A72',
-  // AI validation
-  merged: '#B794F4',
   meter: '#4A4945',
 } as const
+// a row under the pointer: a faint brand tint, readable under text in both themes
+export const HOVER = 'rgba(126,92,192,0.10)'
 
 // The Argos mark. MARK is the app icon (256, used at 28px and up): the brand's own frame
 // (ground rx 56, frame rx 40, stroke 18) around the mark the design recentred (58% of the inner
@@ -47,8 +58,6 @@ export const AVATAR = {
 // surface's Svg drops embedded images, so the pane draws the cells themselves.
 export const MOSAIC = (paths: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" shape-rendering="crispEdges">${paths}</svg>`
-export const BOTMARK =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="3.5" width="9" height="7" rx="2" fill="none" stroke="#9C9A93" stroke-width="1.2"/><circle cx="4.5" cy="7" r=".9" fill="#9C9A93"/><circle cx="7.5" cy="7" r=".9" fill="#9C9A93"/><path d="M6 3.5V1.5" stroke="#9C9A93" stroke-width="1.2" stroke-linecap="round"/></svg>'
 
 const RGB = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
 export const rgba = (h: string, a: number) => `rgba(${RGB(h).join(',')},${a})`
@@ -64,17 +73,17 @@ export const I = {
       16,
       `<circle cx="4" cy="3.5" r="1.75" ${st(c)}/><circle cx="4" cy="12.5" r="1.75" ${st(c)}/><circle cx="12" cy="12.5" r="1.75" ${st(c)}/><path d="M4 5.25v5.5M12 10.75V6.5a2 2 0 0 0-2-2H7.5M9 3 7.5 4.5 9 6" ${st(c)}/>`,
     ),
-  error: S(16, `<circle cx="8" cy="8" r="7" fill="${C.error}"/><path d="M8 4.4v4.4" ${st(C.bg, 1.8)}/><circle cx="8" cy="11.4" r="1" fill="${C.bg}"/>`),
+  error: S(16, `<circle cx="8" cy="8" r="7" fill="${HEX.error}"/><path d="M8 4.4v4.4" ${st(HEX.bg, 1.8)}/><circle cx="8" cy="11.4" r="1" fill="${HEX.bg}"/>`),
 }
 
 // The validator's star, in purple like the Argos mark: filled when validated, dashed while it
 // runs, a grey outline once new commits make it old, a dim solid star when never run.
 const STAR = 'M8 1.5 9.7 6.3 14.5 8 9.7 9.7 8 14.5 6.3 9.7 1.5 8 6.3 6.3Z'
 export const STARS = {
-  done: S(16, `<path d="${STAR}" fill="${C.merged}"/>`),
-  run: S(16, `<path d="${STAR}" fill="none" stroke="${C.merged}" stroke-width="1.3" stroke-linejoin="round" stroke-dasharray="2 1.6"/>`),
-  stale: S(16, `<path d="${STAR}" fill="none" stroke="${C.subtle}" stroke-width="1.3" stroke-linejoin="round"/>`),
-  none: S(16, `<path d="${STAR}" fill="${C.meter}"/>`),
+  done: S(16, `<path d="${STAR}" fill="${HEX.brand}"/>`),
+  run: S(16, `<path d="${STAR}" fill="none" stroke="${HEX.brand}" stroke-width="1.3" stroke-linejoin="round" stroke-dasharray="2 1.6"/>`),
+  stale: S(16, `<path d="${STAR}" fill="none" stroke="${HEX.grey}" stroke-width="1.3" stroke-linejoin="round"/>`),
+  none: S(16, `<path d="${STAR}" fill="${HEX.meter}"/>`),
 }
 
 // A verdict as drawn on a line: its SVG, a count after it as text in its colour. `text` stands

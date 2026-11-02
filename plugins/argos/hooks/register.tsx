@@ -1,14 +1,14 @@
 // Argos mod: the peacock's eyes inside Claude. A timer runs one Argos round over the connected
 // repos, and /argos opens the pane, built to take PR review off the person's back: every open PR
 // is one line, all of them go to validation unless the person leaves some out (an author with one
-// tap, or a line), and one button validates the rest in the background, the verdicts filling in
+// tap, a repo or a line), and one button validates the rest in the background, the verdicts filling in
 // on the lines. Words and numbers come from toViewModel (view.ts); colours and icons from look.ts.
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { AVATAR, BOTMARK, C, I, LOGO, STARS, TINT, rgba, titled } from './look'
+import { C, HEX, HOVER, I, LOGO, STARS, TINT, rgba, titled } from './look'
 import { UI, authorOf, kindOf, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
@@ -226,6 +226,8 @@ export const register: Register = (on, options) => {
       read($, authorsOpen),
     ])
     const vm = toViewModel(last, { now: await $.clock.now(), lang, minutes, running, ui: { out: left, back: brought }, verdicts: judged, ignored: authorsOut })
+    // a box per line, per author and per repo; the terminal draws them in brackets
+    const BOX = hasSvg ? { on: '☑', mixed: '◩', off: '☐' } : { on: '[x]', mixed: '[-]', off: '[ ]' }
     // tick returns at once while a round runs, so pressing twice does nothing
     const checkNow = () => void tick($, options, true)
     // An icon says what it means on hover: its tip as the SVG's title, drawn interactive; the
@@ -301,20 +303,20 @@ export const register: Register = (on, options) => {
       vm.error &&
       banner(
         'failed',
-        { bg: rgba(C.error, TINT + 0.01), border: rgba(C.error, 0.35) },
+        { bg: rgba(HEX.error, TINT + 0.01), border: rgba(HEX.error, 0.35) },
         I.error,
         t(lang, 'in_err_title'),
         vm.error.why,
         vm.error.isAuth ? { label: t(lang, 'in_fix_auth'), onPress: () => void fixAuth() } : { label: t(lang, 'in_retry'), onPress: checkNow },
       )
 
-    // The first check: static placeholders sized like real lines, so nothing jumps.
+    // The first check: static placeholders one line tall (a height counts lines), so nothing jumps.
     if (vm.state === 'loading' || vm.state === 'never')
       return frame(
         head(vm.state === 'never'),
         <Box key="skeleton" flexDirection="column" gap="xs">
           {['78%', '64%', '72%'].map((w, i) => (
-            <Box key={`sk${i}`} height={8} width={w} backgroundColor="#2E2E2C" />
+            <Box key={`sk${i}`} height={1} width={w} backgroundColor="rgba(128,128,128,0.18)" />
           ))}
           <Text size="caption" color={C.subtle}>
             {t(lang, 'in_first')}
@@ -325,50 +327,65 @@ export const register: Register = (on, options) => {
     if (vm.state === 'noRepos')
       return frame(
         head(false),
-        banner('norepo', { bg: 'rgba(255,255,255,0.03)', border: 'rgba(255,255,255,0.10)' }, I.pr(C.subtle), t(lang, 'in_norepo_title'), t(lang, 'in_norepo_body'), {
+        banner('norepo', { bg: 'rgba(128,128,128,0.05)', border: 'rgba(128,128,128,0.25)' }, I.pr(HEX.grey), t(lang, 'in_norepo_title'), t(lang, 'in_norepo_body'), {
           label: t(lang, 'in_setup'),
           onPress: () => void addRepo($),
         }),
       )
     if (vm.state !== 'ok') return frame(head(true))
 
-    // Authors are switches: one tap leaves an author out everywhere (and across sessions), one
-    // more brings them back. Nothing moves: the chip dims, its lines dim in place. Machines go in
-    // bulk too (kind:bot, kind:agent), new ones included. Past FOLD authors the list folds: the
-    // kinds and whoever is left out by name stay in sight, so no filter is ever hidden.
-    const toggleIgnored = async (entry: string) => {
+    // Who goes, in one control: its label says the whole state ("Who: Everyone but bots · rafa
+    // out"), and it opens the presets and every author. A preset leaves whole kinds out, new bots
+    // too, and resets the people; an author's box takes or leaves that person, and Only keeps just
+    // them. Authors left out outlive the session. Nothing moves: their lines stay, unpicked.
+    const setIgnored = async (fn: (list: string[]) => string[]) => {
       let next: string[] = []
-      await update($, ignored, list => (next = list.includes(entry) ? list.filter(x => x !== entry) : [...list, entry]))
+      await update($, ignored, list => (next = fn(list)))
       await $.store.set('ignored', next).catch(() => {})
     }
-    const FOLD = 6
-    const canFold = vm.authors.length > FOLD
-    const kindOut = new Set<string>(vm.kinds.filter(k => k.isOut).map(k => k.kind))
-    const shown = vm.authors.filter(a => !kindOut.has(a.kind) && (!canFold || isOpen || a.byName))
-    const chip = (key: string, isOut: boolean, label: string, onPress: () => void, pic?: any) => (
-      <Box key={`chip:${key}`} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" borderStyle="round" borderColor={isOut ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.14)'}>
-        {pic}
-        <Button key={key} plain={true} dimColor={isOut} onPress={onPress}>
-          {label}
-        </Button>
-      </Box>
-    )
-    const authors = (
-      <Box key="authors" flexDirection="column" gap="xs">
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap="xs">
-          <Text size="caption" color={C.subtle}>
-            {t(lang, 'in_leave_out')}
-          </Text>
-          {vm.kinds.map(k => chip(`kind:${k.kind}`, k.isOut, k.label, () => void toggleIgnored(`kind:${k.kind}`), icon(k.kind === 'bot' ? BOTMARK : AVATAR.agent, '⚙', 14, 14)))}
-          {shown.map(a =>
-            chip(`who:${a.name}`, a.isOut, a.isOut ? `${a.name} ✕` : `${a.name} ${a.count}`, () => void toggleIgnored(a.name), icon(a.svg, a.name.slice(0, 1).toUpperCase(), 18, 18, a.tip)),
-          )}
-          {canFold && (
-            <Button key="authors-fold" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
-              {t(lang, 'in_authors', vm.authors.length, isOpen)}
-            </Button>
-          )}
+    // an author out with their whole kind comes back alone: the kind turns into its other names
+    const toggleAuthor = (a: (typeof vm.authors)[number]) =>
+      setIgnored(list =>
+        list.includes(a.name)
+          ? list.filter(x => x !== a.name)
+          : list.includes(`kind:${a.kind}`)
+            ? [...list.filter(x => x !== `kind:${a.kind}`), ...vm.authors.filter(b => b.kind === a.kind && b.name !== a.name).map(b => b.name)]
+            : [...list, a.name],
+      )
+    const who = (
+      <Box key="who-box" flexDirection="column" gap="xs">
+        <Box flexDirection="row">
+          <Button key="who" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
+            {`${vm.who.label} ${isOpen ? '▾' : '▸'}`}
+          </Button>
         </Box>
+        {isOpen && (
+          <Box flexDirection="column" gap="xs" paddingX="xs">
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'who_set')}
+              </Text>
+              {vm.who.presets.map(p => (
+                <Button key={`set:${p.id}`} plain={true} onPress={() => void setIgnored(() => p.kinds.map(k => `kind:${k}`))}>
+                  {p.isOn ? `${p.label} ✓` : p.label}
+                </Button>
+              ))}
+            </Box>
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
+              {vm.authors.map(a => (
+                <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap="xs">
+                  {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 16, 16, a.tip)}
+                  <Button key={`who:${a.name}`} plain={true} onPress={() => void toggleAuthor(a)}>
+                    {`${a.isOut ? BOX.off : BOX.on} ${a.name} ${a.count}`}
+                  </Button>
+                  <Button key={`only:${a.name}`} plain={true} onPress={() => void setIgnored(() => vm.authors.filter(b => b.name !== a.name).map(b => b.name))}>
+                    {t(lang, 'in_only')}
+                  </Button>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
         {vm.autoLine && (
           <Text size="caption" color={C.subtle}>
             {vm.autoLine}
@@ -387,14 +404,9 @@ export const register: Register = (on, options) => {
         {vm.progress && (
           <Box flexDirection="row" alignItems="center" gap="xs">
             {icon(STARS.run, '✦', 14, 14)}
-            <Box flexShrink={0}>
-              <Text size="caption" weight="semibold" color={C.merged}>
-                {vm.progress.label}
-              </Text>
-            </Box>
-            <Box flexGrow={1} height={4} backgroundColor="#2E2E2C">
-              <Box height={4} width={vm.progress.pct} backgroundColor={C.merged} />
-            </Box>
+            <Text size="caption" weight="semibold" color={C.brand}>
+              {vm.progress.label}
+            </Text>
           </Box>
         )}
         <Box flexDirection="row" alignItems="center" gap="sm">
@@ -407,21 +419,21 @@ export const register: Register = (on, options) => {
             {vm.validate.label}
           </Button>
           {vm.clear && (
-            <Button key="clear" variant="secondary" onPress={() => void clearAll(vm.clear!.keys)}>
+            <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
               {vm.clear.label}
             </Button>
           )}
         </Box>
       </Box>
     )
-    // One line per PR, in a fixed order: a box to leave it out (or bring back one the pane left
-    // out), its title first so every title starts at the same place with its number beside it,
-    // why it is out, its verdict and who opened it. With more than one repo the lines sit under
-    // a heading per repo: a rule, the name, how many go, and one action for the whole repo.
-    const VERDICT_W = hasSvg ? 40 : 6
-    const BOX = hasSvg ? { on: '☑', off: '☐' } : { on: '[x]', off: '[ ]' }
+    // One line per PR, packed to the left so the eye never crosses an empty middle: a box to leave
+    // it out (or bring back one the pane left out), its verdict, who opened it, the title with its
+    // number, and under it why the pane left it out. A running line has no box: Argos holds it.
+    // With more than one repo the lines sit under a heading per repo: its box takes or leaves the
+    // whole repo, and Only makes the selection that repo alone.
+    const VERDICT_W = hasSvg ? 5 : 4
     type Group = (typeof vm.groups)[number]
-    // Select all brings back what the pane left out too; Deselect all hands those back to the
+    // Taking the repo brings back what the pane left out too; leaving it hands those back to the
     // pane (they keep their reason) and leaves the rest out by hand.
     const pickRepo = async (g: Group) => {
       const keys = new Set(g.keys)
@@ -434,26 +446,34 @@ export const register: Register = (on, options) => {
         await update($, back, list => [...new Set([...list, ...g.reasonKeys])])
       }
     }
+    // Only: this repo goes back to the pane's own picks, every other repo's lines are left out.
+    const onlyRepo = async (g: Group) => {
+      const mine = new Set(g.rows.map(x => x.key))
+      const others = vm.groups.filter(o => o.repo !== g.repo).flatMap(o => o.keys)
+      const otherSet = new Set(others)
+      await update($, out, list => [...new Set([...list.filter(k => !mine.has(k)), ...others])])
+      await update($, back, list => list.filter(k => !mine.has(k) && !otherSet.has(k)))
+    }
+    const MARK = { on: BOX.on, mixed: BOX.mixed, off: BOX.off }
     const header = (g: Group) => (
-      <Box key={`group:${g.repo}`} flexDirection="column" gap="xs" marginTop="md">
-        {hasSvg && <Box height={1} backgroundColor="rgba(255,255,255,0.10)" />}
-        <Box flexDirection="row" alignItems="center" gap="sm" paddingX="xs">
-          <Box flexShrink={1} minWidth={0}>
-            <Text weight="semibold" color={C.text} wrap="truncate">
-              {g.name}
-            </Text>
-          </Box>
-          <Box flexShrink={0} flexGrow={1}>
-            <Text size="caption" color={C.subtle}>
-              {g.count}
-            </Text>
-          </Box>
-          {g.action && (
-            <Button key={`repo:${g.repo}`} variant="secondary" onPress={() => void pickRepo(g)}>
-              {g.action}
-            </Button>
-          )}
-        </Box>
+      <Box key={`group:${g.repo}`} flexDirection="row" alignItems="center" gap="sm" paddingX="xs" marginTop="md">
+        {g.keys.length ? (
+          <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
+            {`${MARK[g.mark]} ${g.name}`}
+          </Button>
+        ) : (
+          <Text weight="semibold" color={C.text}>
+            {g.name}
+          </Text>
+        )}
+        <Text size="caption" color={C.subtle}>
+          {g.count}
+        </Text>
+        {vm.groups.length > 1 && g.keys.length > 0 && (
+          <Button key={`only:${g.repo}`} plain={true} onPress={() => void onlyRepo(g)}>
+            {t(lang, 'in_only')}
+          </Button>
+        )}
       </Box>
     )
     type Row = (typeof vm.rows)[number]
@@ -462,32 +482,19 @@ export const register: Register = (on, options) => {
       if (x.isAuto) void update($, back, list => [...list, x.key])
       else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
     }
-    const line = (x: Row, i: number) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" backgroundColor={i % 2 ? 'rgba(255,255,255,0.025)' : undefined}>
-        <Button key={`pick:${x.key}`} plain={true} dimColor={!x.canToggle} onPress={() => toggle(x)}>
-          {x.isIn ? BOX.on : BOX.off}
-        </Button>
-        <Box flexDirection="row" alignItems="center" gap="xs" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Box flexShrink={1} minWidth={0}>
-            <Text size="caption" color={C.text} dimColor={!x.isIn} wrap="truncate">
-              {x.title}
-            </Text>
-          </Box>
-          <Box flexShrink={0}>
-            <Text size="caption" color={C.subtle} dimColor={!x.isIn}>
-              {x.num}
-            </Text>
-          </Box>
-        </Box>
-        {x.why && (
-          <Box flexShrink={0}>
-            <Text size="caption" color={C.subtle}>
-              {x.why}
-            </Text>
-          </Box>
+    const line = (x: Row) => (
+      <Box key={x.key} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" hover={{ backgroundColor: HOVER }}>
+        {x.isRunning ? (
+          <Text color={C.brand}>⠿</Text>
+        ) : x.canToggle ? (
+          <Button key={`pick:${x.key}`} plain={true} onPress={() => toggle(x)}>
+            {x.isIn ? BOX.on : BOX.off}
+          </Button>
+        ) : (
+          <Text color={C.subtle}>{BOX.off}</Text>
         )}
-        {/* the verdict keeps one width, filled or not, so "why" and the avatars line up */}
-        <Box flexDirection="row" alignItems="center" justifyContent="flex-end" flexShrink={0} width={VERDICT_W}>
+        {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
+        <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
           {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
           {x.verdict?.count && (
             <Text size="caption" weight="semibold" color={x.verdict.color}>
@@ -496,12 +503,31 @@ export const register: Register = (on, options) => {
           )}
         </Box>
         {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box flexDirection="row" alignItems="center" gap="xs" minWidth={0}>
+            <Box flexShrink={1} minWidth={0}>
+              <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
+                {x.title}
+              </Text>
+            </Box>
+            <Box flexShrink={0}>
+              <Text size="caption" color={C.subtle}>
+                {x.num}
+              </Text>
+            </Box>
+          </Box>
+          {x.why && (
+            <Text size="caption" color={C.subtle}>
+              {x.why}
+            </Text>
+          )}
+        </Box>
       </Box>
     )
     return frame(
       head(true),
       failedBanner,
-      authors,
+      who,
       go,
       <Box key="lines" flexDirection="column">
         {vm.groups.length > 1 ? vm.groups.flatMap(g => [header(g), ...g.rows.map(line)]) : vm.rows.map(line)}
