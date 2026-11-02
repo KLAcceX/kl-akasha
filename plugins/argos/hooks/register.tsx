@@ -611,7 +611,7 @@ export const register: Register = (on, options) => {
     // a page's path: "Pull requests / billing", the first part the way back to the dashboard
     const bar = (title: string) => (
       <Box key="bar" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
-        <Button key="back" variant="secondary" onPress={() => goTo('home')}>
+        <Button key="back" variant="secondary" onPress={() => void (goTo('home'), update($, confirmMerge, () => null))}>
           {t(lang, 'in_title')}
         </Button>
         <Text size="heading" color={C.subtle}>
@@ -828,7 +828,7 @@ export const register: Register = (on, options) => {
             <Box key={`repo-row:${g.repo}`} flexDirection="column" gap={SPACE.line}>
               <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
                 <Button key={`open:${g.repo}`} variant="secondary" onPress={() => goTo(g.repo)}>
-                  {t(lang, 'rl_open', clip(g.name))}
+                  {clip(g.name)}
                 </Button>
                 <Box flexGrow={1} />
                 {(g.go.length > 0 || busy) && (

@@ -191,7 +191,7 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   expect([await text('validate-clean'), await text('fix'), await text('open:acme/portal'), await text('validate:acme/portal')]).toEqual([
     'Validate 5',
     'Fix my 1 with Argos',
-    'Open portal',
+    'portal',
     'Validate 2',
   ])
   // no line is on the dashboard: a repo's own page holds them
