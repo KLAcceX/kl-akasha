@@ -431,7 +431,7 @@ export const register: Register = (on, options) => {
     // number, and under it why the pane left it out. A running line has no box: Argos holds it.
     // With more than one repo the lines sit under a heading per repo: its box takes or leaves the
     // whole repo, and Only makes the selection that repo alone.
-    const VERDICT_W = hasSvg ? 5 : 4
+    const VERDICT_W = 4
     type Group = (typeof vm.groups)[number]
     // Taking the repo brings back what the pane left out too; leaving it hands those back to the
     // pane (they keep their reason) and leaves the rest out by hand.
