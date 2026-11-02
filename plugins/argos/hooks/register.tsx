@@ -41,7 +41,7 @@ const verdicts = atom(VERDICTS, null)
 // the connected repos as repos.json keeps them (auto-merge, prompt), and which repo's Settings
 // fold is open, or asking to confirm auto-merge
 const repos = atom(REPOS, [] as RepoCfg[])
-const settingsOpen = atom({ plugin: 'argos', key: 'settingsOpen' } as const, null as string | null)
+const page = atom({ plugin: 'argos', key: 'page' } as const, 'home')
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
@@ -366,7 +366,7 @@ export const register: Register = (on, options) => {
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
-    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, openSettings, confirming, fixing, validating] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, where, confirming, fixing, validating] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
@@ -375,7 +375,7 @@ export const register: Register = (on, options) => {
       read($, ignored),
       read($, authorsOpen),
       read($, repos),
-      read($, settingsOpen),
+      read($, page),
       read($, confirmMerge),
       read($, fixRuns),
       read($, agentRuns),
@@ -419,6 +419,11 @@ export const register: Register = (on, options) => {
           {withCheck && (
             <Button key="check" plain={true} dimColor={running} onPress={checkNow}>
               {t(lang, 'ui_check')}
+            </Button>
+          )}
+          {vm.state === 'ok' && (
+            <Button key="settings-page" plain={true} onPress={() => void update($, page, () => 'settings')}>
+              {t(lang, 'settings')}
             </Button>
           )}
         </Box>
@@ -511,117 +516,35 @@ export const register: Register = (on, options) => {
       )
     if (vm.state !== 'ok') return frame(head(true))
 
-    // Who goes, in one control: its label says the whole state ("Who: Everyone but bots · rafa
-    // out"), and it opens the presets and every author. A preset leaves whole kinds out, new bots
-    // too, and resets the people; an author's box takes or leaves that person, and Only keeps just
-    // them. Authors left out outlive the session. Nothing moves: their lines stay, unpicked.
-    const setIgnored = async (fn: (list: string[]) => string[]) => {
-      let next: string[] = []
-      await update($, ignored, list => (next = fn(list)))
-      await $.store.set('ignored', next).catch(() => {})
+    // Three pages: the dashboard (what stands, one tap per flow, the repos), a repo's own page (its
+    // lines, picked one by one) and Settings (who goes, the schedule, each repo's auto-merge and
+    // prompt). The dashboard stays short so the flow reads at a glance.
+    const goTo = (to: string) => void update($, page, () => to)
+    const repoCmd = async (...args: string[]) => {
+      await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
+      await loadRepos($)
     }
-    // an author out with their whole kind comes back alone: the kind turns into its other names
-    const toggleAuthor = (a: (typeof vm.authors)[number]) =>
-      setIgnored(list =>
-        list.includes(a.name)
-          ? list.filter(x => x !== a.name)
-          : list.includes(`kind:${a.kind}`)
-            ? [...list.filter(x => x !== `kind:${a.kind}`), ...vm.authors.filter(b => b.kind === a.kind && b.name !== a.name).map(b => b.name)]
-            : [...list, a.name],
-      )
-    // Automatic mode: two native Selects (what goes, how often; the second only while on) and one
-    // line saying whether it is on, when the next round looks and what the last one did.
     const setAuto = async (mode: string, every: number) => {
       await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
       await loadVerdicts($)
     }
-    const auto = (
-      <Box key="auto" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.row}>
-          <Text size="caption" color={C.text}>
-            {t(lang, 'auto_label')}
-          </Text>
-          {Select && (
-            <Select
-              key="auto-mode"
-              options={['off', 'mine', 'all'].map(m => ({ value: m, label: t(lang, `auto_mode_${m}`) }))}
-              value={vm.auto.mode}
-              onSelect={(m: string) => void setAuto(m, vm.auto.every)}
-            />
-          )}
-          {Select && vm.auto.mode !== 'off' && (
-            <Select
-              key="auto-every"
-              options={[15, 30, 60].map(n => ({ value: String(n), label: t(lang, 'auto_every', n) }))}
-              value={String(vm.auto.every)}
-              onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
-            />
-          )}
-      </Box>
-    )
-    const who = (
-      <Box key="who-box" flexDirection="column" gap={SPACE.block}>
-        <Box flexDirection="column" gap={SPACE.line}>
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.block}>
-            <Button key="who" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
-              {`${vm.who.label} ${isOpen ? '▾' : '▸'}`}
-            </Button>
-            {auto}
-          </Box>
-          <Text size="caption" color={C.subtle}>
-            {vm.auto.line}
-          </Text>
-          {vm.autoLine && (
-            <Text size="caption" color={C.subtle}>
-              {vm.autoLine}
-            </Text>
-          )}
+    // a page's title row: Back to the dashboard, then its name
+    const bar = (title: string) => (
+      <Box key="bar" flexDirection="column" gap={SPACE.line}>
+        <Box flexDirection="row">
+          <Button key="back" plain={true} onPress={() => goTo('home')}>
+            {t(lang, 'pg_back')}
+          </Button>
         </Box>
-        {isOpen && (
-          <Box
-            flexDirection="column" {...PANEL}
-          >
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
-              <Text size="caption" color={C.subtle}>
-                {t(lang, 'who_set')}
-              </Text>
-              {vm.who.presets.map(p => (
-                <Button key={`set:${p.id}`} plain={true} onPress={() => void setIgnored(() => p.kinds.map(k => `kind:${k}`))}>
-                  {p.isOn ? `${p.label} ✓` : p.label}
-                </Button>
-              ))}
-            </Box>
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.block}>
-              {vm.authors.map(a => (
-                <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap={SPACE.row}>
-                  {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 16, 16, a.tip)}
-                  <Button key={`who:${a.name}`} plain={true} onPress={() => void toggleAuthor(a)}>
-                    {`${a.isOut ? BOX.off : BOX.on} ${a.name} ${a.count}`}
-                  </Button>
-                  <Button key={`only:${a.name}`} plain={true} onPress={() => void setIgnored(() => vm.authors.filter(b => b.name !== a.name).map(b => b.name))}>
-                    {t(lang, 'in_only')}
-                  </Button>
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        )}
+        <Text size="heading" weight="semibold" color={C.text}>
+          {title}
+        </Text>
       </Box>
     )
-    // Clear leaves out every line in; Restore (keys null) drops the person's picks.
-    const clearAll = async (keys: string[] | null) => {
-      await update($, out, list => (keys ? [...new Set([...list, ...keys])] : []))
-      await update($, back, () => [])
-    }
-    // A quick pick makes the selection exactly its lines: the rest are left out by hand, or handed
-    // back to the pane when it would leave them out anyway.
-    const pickOnly = async (keys: string[]) => {
-      const want = new Set(keys)
-      const free = vm.rows.filter(x => x.canToggle)
-      const freeKeys = new Set(free.map(x => x.key))
-      await update($, out, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => !want.has(x.key) && !x.hasReason).map(x => x.key)])
-      await update($, back, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => want.has(x.key) && x.hasReason).map(x => x.key)])
-    }
-    // How far a validating agent got with its PRs ("4 of 7"), and how many of them failed.
+
+    // The agents at work and the runs, in one block: a validating agent is its run, so its line
+    // carries how far it got ("4 of 7 · 1 failed") and the one Stop. Stop refuses its tools from
+    // then on, so it ends.
     const progressOf = (id: string) => {
       const urls = validating[id]
       if (!urls) return null
@@ -629,7 +552,7 @@ export const register: Register = (on, options) => {
       return { done: states.filter(s => s === 'done' || s === 'failed').length, total: urls.length, failed: states.filter(s => s === 'failed').length }
     }
     const isFixing = working.some(a => fixing[a.id])
-    // The run line: kept only when no validating agent stands for the run (a run the chat started).
+    // the run line stays only when no validating agent stands for the run (a run the chat started)
     const runLine = vm.run?.isRunning && !working.some(a => validating[a.id]) && (
       <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
         <Text color={C.brand}>⠿</Text>
@@ -643,7 +566,7 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
-    // What the last run came to, until the next run or check, with Retry on the failed ones.
+    // what the last run came to, until the next run or check, with Retry on the failed ones
     const doneLine = vm.run && !vm.run.isRunning && (
       <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
         {!vm.run.failed && <Text color={C.success}>✓</Text>}
@@ -667,9 +590,6 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
-    // The agents at work and the runs, in one block: a validating agent is its run, so its line
-    // carries how far it got ("4 of 7 · 1 failed") and the one Stop. Stop refuses its tools from
-    // then on, so it ends.
     const agents = (working.length > 0 || runLine || doneLine) && (
       <Box key="agents" flexDirection="column" gap={SPACE.row}>
         {working.length > 0 && (
@@ -708,47 +628,85 @@ export const register: Register = (on, options) => {
         {doneLine}
       </Box>
     )
-    // The selection and what acts on it: the picks only change the selection; Validate, Clear and
-    // Fix act, so they share the second row. Fix pushes, so it hides while its agent works. While
-    // a run goes the lines are locked and both rows wait.
-    const go = !vm.run?.isRunning && (
-      <Box key="go" flexDirection="column" gap={SPACE.row}>
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.block}>
-          {vm.picks.map(p => (
-            <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
-              {p.label}
-            </Button>
-          ))}
+
+    // A dashboard card: what stands, in a number and a line, and the one flow it starts.
+    const card = (key: string, title: string, body: string, btn?: { key: string; label: string; onPress: () => void; primary?: boolean }) => (
+      <Box key={key} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={24} {...PANEL}>
+        <Box flexDirection="column" gap={SPACE.line}>
+          <Text weight="semibold" color={C.text}>
+            {title}
+          </Text>
+          <Text size="caption" color={C.subtle}>
+            {body}
+          </Text>
         </Box>
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
-          <Button
-            key="validate"
-            variant={vm.validate.count ? 'primary' : 'secondary'}
-            dimColor={!vm.validate.count}
-            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, prompts.validate) : undefined)}
-          >
-            {vm.validate.label}
-          </Button>
-          {vm.clear && (
-            <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
-              {vm.clear.label}
+        {btn && (
+          <Box flexDirection="row">
+            <Button key={btn.key} variant={btn.primary ? 'primary' : 'secondary'} onPress={btn.onPress}>
+              {btn.label}
             </Button>
-          )}
-          {vm.rework.length > 0 && !isFixing && (
-            <Button key="fix" plain={true} onPress={() => void fix($, vm.rework, lang, prompts.fix)}>
-              {t(lang, 'fix_n', vm.rework.length)}
-            </Button>
-          )}
-        </Box>
+          </Box>
+        )}
       </Box>
     )
-    // One line per PR, packed to the left so the eye never crosses an empty middle: a box to leave
-    // it out (or bring back one the pane left out), its verdict, who opened it, the title with its
-    // number and why the pane left it out, all on one line. A running line shows ⠿: Argos holds it.
-    // With more than one repo the lines sit under a heading per repo: its box takes or leaves the
-    // whole repo, and Only makes the selection that repo alone.
-    const VERDICT_W = 4
+    const busy = Boolean(vm.run?.isRunning)
+    const cards = (
+      <Box key="cards" flexDirection="row" flexWrap="wrap" gap={SPACE.block}>
+        {card(
+          'card:clean',
+          t(lang, 'cd_clean_title', vm.clean.length),
+          vm.clean.length ? t(lang, 'cd_clean_body') : t(lang, 'cd_clean_none'),
+          vm.clean.length && !busy ? { key: 'validate-clean', label: t(lang, 'in_validate_n', vm.clean.length), primary: true, onPress: () => void validate($, vm.clean, lang, prompts.validate) } : undefined,
+        )}
+        {card(
+          'card:mine',
+          t(lang, 'cd_mine_title', vm.rework.length),
+          isFixing ? t(lang, 'cd_mine_fixing') : vm.rework.length ? t(lang, 'cd_mine_body') : t(lang, 'cd_mine_none'),
+          vm.rework.length && !isFixing ? { key: 'fix', label: t(lang, 'fix_n', vm.rework.length), onPress: () => void fix($, vm.rework, lang, prompts.fix) } : undefined,
+        )}
+        {card('card:issues', t(lang, 'cd_issues_title', vm.issues), vm.issues ? t(lang, 'cd_issues_body') : t(lang, 'cd_issues_none'))}
+        {card(
+          'card:auto',
+          t(lang, 'auto_label'),
+          vm.auto.line,
+          vm.auto.mode === 'off'
+            ? { key: 'auto-on', label: t(lang, 'cd_auto_on'), onPress: () => void setAuto('mine', vm.auto.every) }
+            : { key: 'auto-off', label: t(lang, 'cd_auto_off'), onPress: () => void setAuto('off', vm.auto.every) },
+        )}
+      </Box>
+    )
+
+    // The repos, one line each: its name opens its page; Validate sends what it has picked.
     type Group = (typeof vm.groups)[number]
+    const repoRows = (
+      <Box key="repos" flexDirection="column" gap={SPACE.row}>
+        <Text size="caption" weight="semibold" color={C.text}>
+          {t(lang, 'rl_title')}
+        </Text>
+        {vm.groups.map(g => (
+          <Box key={`repo-row:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.inline} paddingX="xs" hover={{ backgroundColor: HOVER }}>
+            <Button key={`open:${g.repo}`} plain={true} onPress={() => goTo(g.repo)}>
+              {`${g.name} ▸`}
+            </Button>
+            <Text size="caption" color={C.subtle}>
+              {[t(lang, 'rl_prs', g.rows.length), g.go.length ? t(lang, 'rl_go', g.go.length) : '', g.issues ? t(lang, 'rl_issues', g.issues) : '', g.merge ? t(lang, 'rl_merge') : ''].filter(Boolean).join(' · ')}
+            </Text>
+            <Box flexGrow={1} />
+            {g.go.length > 0 && !busy && (
+              <Button key={`validate:${g.repo}`} plain={true} onPress={() => void validate($, g.go, lang, prompts.validate)}>
+                {t(lang, 'in_validate_n', g.go.length)}
+              </Button>
+            )}
+          </Box>
+        ))}
+      </Box>
+    )
+
+    // A repo's page: one line per PR, packed to the left so the eye never crosses an empty middle:
+    // a box to leave it out (or bring back one the pane left out), its verdict, who opened it, the
+    // title with its number and why the pane left it out, all on one line. A running line shows
+    // ⠿: Argos holds it. The heading's box takes or leaves the whole repo.
+    const VERDICT_W = 4
     // Taking the repo brings back what the pane left out too; leaving it hands those back to the
     // pane (they keep their reason) and leaves the rest out by hand.
     const pickRepo = async (g: Group) => {
@@ -762,55 +720,129 @@ export const register: Register = (on, options) => {
         await update($, back, list => [...new Set([...list, ...g.reasonKeys])])
       }
     }
-    // Only: this repo goes back to the pane's own picks, every other repo's lines are left out.
-    const onlyRepo = async (g: Group) => {
-      const mine = new Set(g.rows.map(x => x.key))
-      const others = vm.groups.filter(o => o.repo !== g.repo).flatMap(o => o.keys)
-      const otherSet = new Set(others)
-      await update($, out, list => [...new Set([...list.filter(k => !mine.has(k)), ...others])])
-      await update($, back, list => list.filter(k => !mine.has(k) && !otherSet.has(k)))
+    type Row = (typeof vm.rows)[number]
+    const toggle = (x: Row) => {
+      if (!x.canToggle) return
+      if (x.isAuto) void update($, back, list => [...list, x.key])
+      else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
     }
-    const MARK = { on: BOX.on, mixed: BOX.mixed, off: BOX.off }
-    const header = (g: Group) => (
-      <Box key={`group:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.inline} paddingX="xs">
-        {g.keys.length ? (
-          <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
-            {`${MARK[g.mark]} ${g.name}`}
-          </Button>
+    // while a run goes every line is locked: its mark is text in a fixed column (text, unlike a
+    // Button, does not clip), so the column lines up
+    const line = (x: Row) => (
+      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.row} paddingX="xs" hover={{ backgroundColor: HOVER }}>
+        {busy ? (
+          <Box flexShrink={0} width={2}>
+            <Text color={x.mark.color}>{x.mark.glyph || ' '}</Text>
+          </Box>
         ) : (
-          <Text weight="semibold" color={C.text}>
-            {g.name}
-          </Text>
-        )}
-        <Text size="caption" color={C.subtle}>
-          {g.count}
-        </Text>
-        {g.merge && (
-          <Text size="caption" weight="semibold" color={C.text}>
-            {t(lang, 'mg_heading')}
-          </Text>
-        )}
-        <Box flexGrow={1} />
-        {vm.groups.length > 1 && g.keys.length > 0 && (
-          <Button key={`only:${g.repo}`} plain={true} onPress={() => void onlyRepo(g)}>
-            {t(lang, 'in_only')}
+          // every line's box is the same native button, unboxed (a width clips it), so they all
+          // line up; an author left out opens Settings, where Who brings them back
+          <Button
+            key={`pick:${x.key}`}
+            plain={true}
+            dimColor={!x.canToggle}
+            onPress={() => (x.canToggle ? toggle(x) : x.isRunning ? undefined : goTo('settings'))}
+          >
+            {x.isRunning ? '⠿' : x.isIn ? BOX.on : BOX.off}
           </Button>
         )}
-        <Button key={`settings:${g.repo}`} plain={true} onPress={() => void toggleSettings(g.repo)}>
-          {`${t(lang, 'settings')} ${openSettings === g.repo ? '▾' : '▸'}`}
-        </Button>
+        {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
+        <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
+          {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
+          {x.verdict?.count && (
+            <Text size="caption" weight="semibold" color={x.verdict.color}>
+              {x.verdict.count}
+            </Text>
+          )}
+        </Box>
+        {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
+        {/* one line tall whatever the state: the title gives way, its number and reason stay */}
+        <Box flexDirection="row" alignItems="center" gap={SPACE.row} flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box flexShrink={1} minWidth={0}>
+            <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
+              {x.title}
+            </Text>
+          </Box>
+          <Box flexShrink={0}>
+            <Text size="caption" color={C.subtle}>
+              {x.status ? x.num : [x.num, x.why, x.mergeNote].filter(Boolean).join(' · ')}
+            </Text>
+          </Box>
+          {/* in the last run, how it ended: the word first, its colour only repeats it */}
+          {x.status && (
+            <Box flexShrink={0}>
+              <Text size="caption" color={x.status.color}>
+                {`· ${x.status.text}`}
+              </Text>
+            </Box>
+          )}
+        </Box>
       </Box>
     )
-    // A repo's Settings fold: its auto-merge (two taps to turn on, the second naming what it will
-    // do on GitHub; one to turn off) and its own validation prompt, added after the global one.
-    const toggleSettings = async (repo: string) => {
-      await update($, settingsOpen, x => (x === repo ? null : repo))
-      await update($, confirmMerge, () => null)
+    const repoPage = (g: Group) => {
+      const going = g.rows.filter(x => x.isIn)
+      return frame(
+        bar(g.name),
+        agents,
+        <Box key="repo-head" flexDirection="column" gap={SPACE.line}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} paddingX="xs">
+            {g.keys.length > 0 && !busy ? (
+              <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
+                {`${BOX[g.mark]} ${g.count}`}
+              </Button>
+            ) : (
+              <Text size="caption" color={C.subtle}>
+                {g.count}
+              </Text>
+            )}
+            {g.merge && (
+              <Text size="caption" weight="semibold" color={C.text}>
+                {t(lang, 'mg_heading')}
+              </Text>
+            )}
+          </Box>
+          <Box flexDirection="column" gap={SPACE.line}>
+            {g.rows.map(line)}
+          </Box>
+        </Box>,
+        !busy && (
+          <Box key="repo-go" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
+            <Button
+              key="validate"
+              variant={going.length ? 'primary' : 'secondary'}
+              dimColor={!going.length}
+              onPress={() => (going.length ? void validate($, going.map(x => x.url), lang, prompts.validate) : undefined)}
+            >
+              {going.length ? t(lang, 'in_validate_n', going.length) : t(lang, 'in_validate')}
+            </Button>
+            {going.length > 0 && (
+              <Button key="clear" plain={true} onPress={() => void update($, out, list => [...new Set([...list, ...going.map(x => x.key)])])}>
+                {t(lang, 'in_clear')}
+              </Button>
+            )}
+          </Box>
+        ),
+      )
     }
-    const repoCmd = async (...args: string[]) => {
-      await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
-      await loadRepos($)
+
+    // Settings: who goes (presets leave whole kinds out, new bots too, and reset the people; an
+    // author's box takes or leaves that person, Only keeps just them; authors left out outlive the
+    // session), the automatic schedule, and per repo its auto-merge (two taps to turn on, the
+    // second naming what it will do on GitHub; one to turn off) and its own validation prompt.
+    const setIgnored = async (fn: (list: string[]) => string[]) => {
+      let next: string[] = []
+      await update($, ignored, list => (next = fn(list)))
+      await $.store.set('ignored', next).catch(() => {})
     }
+    // an author out with their whole kind comes back alone: the kind turns into its other names
+    const toggleAuthor = (a: (typeof vm.authors)[number]) =>
+      setIgnored(list =>
+        list.includes(a.name)
+          ? list.filter(x => x !== a.name)
+          : list.includes(`kind:${a.kind}`)
+            ? [...list.filter(x => x !== `kind:${a.kind}`), ...vm.authors.filter(b => b.kind === a.kind && b.name !== a.name).map(b => b.name)]
+            : [...list, a.name],
+      )
     const setMerge = async (repo: string, isOn: boolean) => {
       await repoCmd('merge', repo, isOn ? 'on' : 'off')
       await update($, confirmMerge, () => null)
@@ -818,13 +850,76 @@ export const register: Register = (on, options) => {
     // what the person typed in a prompt field, kept outside the drawing so typing redraws nothing
     const drafts = promptDrafts
     const savePrompt = (repo: string, text: string) => repoCmd('prompt', repo, text.trim())
-    // One soft panel under the heading; inside, the lines of a block sit tight and the space
-    // goes between blocks only.
-    const fold = (g: Group) => (
-      <Box
-        key={`fold:${g.repo}`}
-        flexDirection="column" {...PANEL} marginLeft={3} marginBottom="sm"
-      >
+    const section = (key: string, title: string, ...body: any[]) => (
+      <Box key={key} flexDirection="column" gap={SPACE.block}>
+        <Text weight="semibold" color={C.text}>
+          {title}
+        </Text>
+        {body.filter(Boolean)}
+      </Box>
+    )
+    const whoSection = section(
+      'who',
+      vm.who.label,
+      <Box key="presets" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
+        <Text size="caption" color={C.subtle}>
+          {t(lang, 'who_set')}
+        </Text>
+        {vm.who.presets.map(p => (
+          <Button key={`set:${p.id}`} plain={true} onPress={() => void setIgnored(() => p.kinds.map(k => `kind:${k}`))}>
+            {p.isOn ? `${p.label} ✓` : p.label}
+          </Button>
+        ))}
+      </Box>,
+      <Box key="authors" flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.block}>
+        {vm.authors.map(a => (
+          <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap={SPACE.row}>
+            {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 16, 16, a.tip)}
+            <Button key={`who:${a.name}`} plain={true} onPress={() => void toggleAuthor(a)}>
+              {`${a.isOut ? BOX.off : BOX.on} ${a.name} ${a.count}`}
+            </Button>
+            <Button key={`only:${a.name}`} plain={true} onPress={() => void setIgnored(() => vm.authors.filter(b => b.name !== a.name).map(b => b.name))}>
+              {t(lang, 'in_only')}
+            </Button>
+          </Box>
+        ))}
+      </Box>,
+    )
+    // Automatic mode: two native Selects (what goes, how often; the second only while on) and one
+    // line saying when the next round looks and what the last one did.
+    const autoSection = section(
+      'auto',
+      t(lang, 'auto_label'),
+      <Box key="auto-controls" flexDirection="column" gap={SPACE.line}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.row}>
+          {Select && (
+            <Select
+              key="auto-mode"
+              options={['off', 'mine', 'all'].map(m => ({ value: m, label: t(lang, `auto_mode_${m}`) }))}
+              value={vm.auto.mode}
+              onSelect={(m: string) => void setAuto(m, vm.auto.every)}
+            />
+          )}
+          {Select && vm.auto.mode !== 'off' && (
+            <Select
+              key="auto-every"
+              options={[15, 30, 60].map(n => ({ value: String(n), label: t(lang, 'auto_every', n) }))}
+              value={String(vm.auto.every)}
+              onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
+            />
+          )}
+        </Box>
+        <Text size="caption" color={C.subtle}>
+          {vm.auto.line}
+        </Text>
+      </Box>,
+    )
+    // a repo's settings, in one panel: its auto-merge, then its own validation prompt
+    const repoSettings = (g: Group) => (
+      <Box key={`repo-settings:${g.repo}`} flexDirection="column" {...PANEL}>
+        <Text weight="semibold" color={C.text}>
+          {g.repo}
+        </Text>
         {confirming === g.repo ? (
           <Box flexDirection="column" gap={SPACE.block}>
             <Box flexDirection="column" gap={SPACE.line}>
@@ -914,89 +1009,20 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-    type Row = (typeof vm.rows)[number]
-    const toggle = (x: Row) => {
-      if (!x.canToggle) return
-      if (x.isAuto) void update($, back, list => [...list, x.key])
-      else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
-    }
-    // while a run goes every line is locked: its mark is text in a fixed column (text, unlike a
-    // Button, does not clip), so the column lines up
-    const locked = Boolean(vm.run?.isRunning)
-    const line = (x: Row) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.row} paddingX="xs" hover={{ backgroundColor: HOVER }}>
-        {locked ? (
-          <Box flexShrink={0} width={2}>
-            <Text color={x.mark.color}>{x.mark.glyph || ' '}</Text>
-          </Box>
-        ) : (
-          // every line's box is the same native button, unboxed (a width clips it), so they all
-          // line up; an author left out opens Who, where they come back
-          <Button
-            key={`pick:${x.key}`}
-            plain={true}
-            dimColor={!x.canToggle}
-            onPress={() => (x.canToggle ? toggle(x) : x.isRunning ? undefined : void update($, authorsOpen, () => true))}
-          >
-            {x.isRunning ? '⠿' : x.isIn ? BOX.on : BOX.off}
-          </Button>
-        )}
-        {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
-        <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
-          {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
-          {x.verdict?.count && (
-            <Text size="caption" weight="semibold" color={x.verdict.color}>
-              {x.verdict.count}
-            </Text>
-          )}
-        </Box>
-        {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
-        {/* one line tall whatever the state: the title gives way, its number and reason stay */}
-        <Box flexDirection="row" alignItems="center" gap={SPACE.row} flexGrow={1} flexShrink={1} minWidth={0}>
-          <Box flexShrink={1} minWidth={0}>
-            <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
-              {x.title}
-            </Text>
-          </Box>
-          <Box flexShrink={0}>
-            <Text size="caption" color={C.subtle}>
-              {x.status ? x.num : [x.num, x.why, x.mergeNote].filter(Boolean).join(' · ')}
-            </Text>
-          </Box>
-          {/* in the last run, how it ended: the word first, its colour only repeats it */}
-          {x.status && (
-            <Box flexShrink={0}>
-              <Text size="caption" color={x.status.color}>
-                {`· ${x.status.text}`}
-              </Text>
-            </Box>
-          )}
-        </Box>
-      </Box>
-    )
-    return frame(
-      head(true),
-      failedBanner,
-      who,
-      agents,
-      go,
-      vm.groups.length > 1 || openSettings ? (
-        <Box key="lines" flexDirection="column" gap={SPACE.region}>
-          {vm.groups.map(g => (
-            <Box key={`repo-group:${g.repo}`} flexDirection="column" gap={SPACE.row}>
-              {header(g)}
-              {openSettings === g.repo && fold(g)}
-              <Box flexDirection="column" gap={SPACE.line}>
-                {g.rows.map(line)}
-              </Box>
-            </Box>
-          ))}
-        </Box>
-      ) : (
-        <Box key="lines" flexDirection="column" gap={SPACE.line}>
-          {vm.rows.map(line)}
-        </Box>
-      ),
-    )
+    const settingsPage = () =>
+      frame(
+        bar(t(lang, 'settings')),
+        whoSection,
+        autoSection,
+        section('repo-settings', t(lang, 'rl_title'), ...vm.groups.map(repoSettings)),
+        <Text key="prompts-note" size="caption" color={C.subtle}>
+          {t(lang, 'se_prompts')}
+        </Text>,
+      )
+
+    const opened = vm.groups.find(g => g.repo === where)
+    if (where === 'settings') return settingsPage()
+    if (opened) return repoPage(opened)
+    return frame(head(true), failedBanner, agents, cards, repoRows)
   })
 }

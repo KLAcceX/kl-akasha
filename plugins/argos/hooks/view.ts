@@ -241,6 +241,8 @@ export function toViewModel(r: Round | null, o: Opts) {
       avatar: pic(p, kind, name),
       authorTip: t(lang, `tip_who_${kind}`, name),
       verdict: v.state === 'none' ? null : verdictTag(v, lang),
+      // the verdict's state, for the dashboard's counts
+      vstate: v.state,
       isIn: leftBy === null,
       // why the pane left a line out, said at its end; the person's own choices need no word
       why: leftBy === null || leftBy === 'hand' || leftBy === 'author' ? '' : t(lang, `why_${leftBy}`),
@@ -317,6 +319,10 @@ export function toViewModel(r: Round | null, o: Opts) {
       count: t(lang, 'in_of', picked, lines.length),
       merge: Boolean(cfgOf(repo)?.merge),
       prompt: cfgOf(repo)?.prompt ?? '',
+      // what its lines going to validation are, and how its verdicts stand
+      go: lines.filter(x => x.isIn).map(x => x.url),
+      issues: lines.filter(x => x.vstate === 'issues').length,
+      passed: lines.filter(x => x.vstate === 'pass').length,
     }
   })
 
@@ -372,6 +378,10 @@ export function toViewModel(r: Round | null, o: Opts) {
     groups,
     clear,
     picks,
+    // the dashboard's cards: every PR with nothing pending, ready to validate in one tap, and how
+    // many verdicts found problems
+    clean: free.filter(x => !x.hasReason).map(x => x.url),
+    issues: rows.filter(x => x.vstate === 'issues').length,
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
     rework: reworkRows.map(x => x.url),
     run: showRun ? run : null,

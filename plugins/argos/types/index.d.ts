@@ -93,8 +93,8 @@ declare module 'claude-code' {
       announced: string | null
       // the connected repos as repos.json keeps them (auto-merge, prompt)
       repos: RepoCfg[]
-      // the repo whose Settings fold is open
-      settingsOpen: string | null
+      // the page the pane shows: home (the dashboard), settings, or a repo by name
+      page: string
       // the repo whose auto-merge waits for the person's confirmation
       confirmMerge: string | null
       // the validating agents the mod started, by agent id, each with its PRs
