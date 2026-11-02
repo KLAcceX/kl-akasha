@@ -484,17 +484,16 @@ export const register: Register = (on, options) => {
     }
     const line = (x: Row) => (
       <Box key={x.key} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" hover={{ backgroundColor: HOVER }}>
-        {/* the box column keeps one width, so a running line's mark lines up with the boxes */}
-        <Box flexDirection="row" justifyContent="center" flexShrink={0} width={2}>
-          {x.isRunning ? (
-            <Text color={C.brand}>⠿</Text>
-          ) : (
-            // an author left out is brought back from Who, so their box opens it
-            <Button key={`pick:${x.key}`} plain={true} dimColor={!x.canToggle} onPress={() => (x.canToggle ? toggle(x) : void update($, authorsOpen, () => true))}>
-              {x.isIn ? BOX.on : BOX.off}
-            </Button>
-          )}
-        </Box>
+        {/* every line's mark is the same native button, unboxed (a width clips it), so they all line
+            up: a running line's ⠿ does nothing, an author left out opens Who, where they come back */}
+        <Button
+          key={`pick:${x.key}`}
+          plain={true}
+          dimColor={!x.canToggle}
+          onPress={() => (x.canToggle ? toggle(x) : x.isRunning ? undefined : void update($, authorsOpen, () => true))}
+        >
+          {x.isRunning ? '⠿' : x.isIn ? BOX.on : BOX.off}
+        </Button>
         {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
         <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
           {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
