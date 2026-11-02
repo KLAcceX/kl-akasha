@@ -19,6 +19,7 @@ export const HEX = {
   grey: '#8A8880',
   error: '#F07A72',
   success: '#3A9D66',
+  warning: '#D9A441',
   meter: '#4A4945',
 } as const
 // Spacing tokens: space goes between Boxes, never between lines of Text. Each step has one job,
@@ -96,12 +97,13 @@ export const I = {
       16,
       `<circle cx="4" cy="3.5" r="1.75" ${st(c)}/><circle cx="4" cy="12.5" r="1.75" ${st(c)}/><circle cx="12" cy="12.5" r="1.75" ${st(c)}/><path d="M4 5.25v5.5M12 10.75V6.5a2 2 0 0 0-2-2H7.5M9 3 7.5 4.5 9 6" ${st(c)}/>`,
     ),
-  // how a PR stands in a run: queued, Argos at work (it turns where the surface animates), done,
+  // how a PR stands in a run: queued, Argos at work (it turns where the surface animates, and
+  // stands still for reduced motion), done,
   // failed; the words beside them say the same
   queued: S(16, `<circle cx="8" cy="8" r="4.5" ${st(HEX.grey, 1.5)}/>`),
   spin: S(
     16,
-    `<g><circle cx="8" cy="8" r="5.5" fill="none" stroke="${HEX.brand}" stroke-opacity=".3" stroke-width="2"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" ${st(HEX.brand, 2)}/><animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="0.9s" repeatCount="indefinite"/></g>`,
+    `<style>@keyframes s{to{transform:rotate(360deg)}}g{transform-origin:8px 8px;animation:s .9s linear infinite}@media (prefers-reduced-motion:reduce){g{animation:none}}</style><g><circle cx="8" cy="8" r="5.5" fill="none" stroke="${HEX.brand}" stroke-opacity=".3" stroke-width="2"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" ${st(HEX.brand, 2)}/></g>`,
   ),
   check: S(16, `<path d="M3.5 8.5l3 3 6-7" ${st(HEX.success, 1.8)}/>`),
   cross: S(16, `<path d="M4.5 4.5l7 7M11.5 4.5l-7 7" ${st(HEX.error, 1.8)}/>`),

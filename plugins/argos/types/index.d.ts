@@ -93,6 +93,8 @@ declare module 'claude-code' {
       announced: string | null
       // the connected repos as repos.json keeps them (auto-merge, prompt)
       repos: RepoCfg[]
+      // the presses still at work, by key, so their buttons say so
+      pending: string[]
       // the page the pane shows: home (the dashboard), settings, or a repo by name
       page: string
       // the repo whose auto-merge waits for the person's confirmation

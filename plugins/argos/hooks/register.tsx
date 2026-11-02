@@ -44,23 +44,46 @@ const verdicts = atom(VERDICTS, null)
 // fold is open, or asking to confirm auto-merge
 const repos = atom(REPOS, [] as RepoCfg[])
 const page = atom({ plugin: 'argos', key: 'page' } as const, 'home')
+// the presses still at work (Turning on…, Saving…), so their buttons say so
+const pending = atom({ plugin: 'argos', key: 'pending' } as const, [] as string[])
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
 // what was typed in each repo's prompt field, by repo; outside the atoms so typing redraws nothing
 const promptDrafts = new Map<string, string>()
+// how each repo's last prompt save went (true saved, false failed), and why turning auto-merge on
+// failed, by repo; shown until the next edit or try
+const promptSaved = new Map<string, boolean>()
+const mergeErrors = new Map<string, string>()
+// A press runs once: a second press while the first is still at work is dropped.
+const inflight = new Set<string>()
+const once = (key: string, fn: () => Promise<unknown>) => () => {
+  if (inflight.has(key)) return
+  inflight.add(key)
+  void fn().finally(() => inflight.delete(key))
+}
+// A native button cannot cut its text: a long name is cut before it gets there.
+const clip = (s: string, n = 28) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 15),
   account: String(options.account ?? '').trim(),
-  qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
+  qualifiers: String(options.qualifiers ?? '')
+    .split(/\s+/)
+    .filter(Boolean),
   lang: String(options.language ?? 'en'),
   // minutes a PR may stay "validating" before it counts as failed
   limit: Math.max(2, Number(options.runLimitMinutes) || 10),
   // the prompts behind Validate and Fix: Argos's own, the person's, or both
   prompts: {
-    validate: { mode: promptMode(options.validatePromptMode), text: String(options.validatePrompt ?? '').trim() },
-    fix: { mode: promptMode(options.fixPromptMode), text: String(options.fixPrompt ?? '').trim() },
+    validate: {
+      mode: promptMode(options.validatePromptMode),
+      text: String(options.validatePrompt ?? '').trim(),
+    },
+    fix: {
+      mode: promptMode(options.fixPromptMode),
+      text: String(options.fixPrompt ?? '').trim(),
+    },
   },
 })
 type Prompt = { mode: 'argos+mine' | 'argos' | 'mine'; text: string }
@@ -136,9 +159,18 @@ async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
   for (const [cwd, group] of byClone(list, urls))
     for (let i = 0; i < group.length; i += 10) {
       const part = group.slice(i, i + 10)
-      const rules = new Map(part.map(u => repoOf(list, u)).filter(r => r && promptOf(r)).map(r => [r!.repo, promptOf(r)]))
+      const rules = new Map(
+        part
+          .map(u => repoOf(list, u))
+          .filter(r => r && promptOf(r))
+          .map(r => [r!.repo, promptOf(r)]),
+      )
       const lines = [...ask, `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
-      const { agentId } = await $.agent.spawn({ prompt: lines.join('\n'), description: `Argos validate · ${part.length} PRs`, ...(cwd && { cwd }) })
+      const { agentId } = await $.agent.spawn({
+        prompt: lines.join('\n'),
+        description: `Argos validate · ${part.length} PRs`,
+        ...(cwd && { cwd }),
+      })
       if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
     }
 }
@@ -153,7 +185,11 @@ async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
   const ask = compose(prompt, [t(lang, 'b_fix'), `Job: ${$.plugin.root}/references/mine.md (Job 2, in the background)`], text => [text, t(lang, 'b_fix_rules')])
   for (const [cwd, group] of byClone(list, urls)) {
     const lines = [...ask, `Scripts: ${$.plugin.root}/scripts`, ...group.map(u => (cwd ? `- ${u} (clone: ${cwd})` : `- ${u}`))]
-    const { agentId } = await $.agent.spawn({ prompt: lines.join('\n'), description: `Argos fix · ${group.length} PRs`, ...(cwd && { cwd }) })
+    const { agentId } = await $.agent.spawn({
+      prompt: lines.join('\n'),
+      description: `Argos fix · ${group.length} PRs`,
+      ...(cwd && { cwd }),
+    })
     if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: group }))
   }
 }
@@ -199,7 +235,12 @@ async function autoValidate($: any, r: Round | null, lang: string, prompt: Promp
 let sweeping: Promise<unknown> | null = null
 async function afterVerdicts($: any, lang: string, limit: number) {
   if ((await $.state.get(DEMO)).value) return
-  sweeping ??= $.process.run(['node', `${$.plugin.root}/scripts/merge.mjs`, 'sweep'], { timeoutMs: 120_000 }).catch(() => {}).finally(() => (sweeping = null))
+  sweeping ??= $.process
+    .run(['node', `${$.plugin.root}/scripts/merge.mjs`, 'sweep'], {
+      timeoutMs: 120_000,
+    })
+    .catch(() => {})
+    .finally(() => (sweeping = null))
   await sweeping
   const v = await loadVerdicts($)
   const run = runOf(v, await $.clock.now(), lang, limit)
@@ -261,7 +302,12 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     const fresh = await load($)
     if (!fresh?.error || Date.parse(fresh.at) < now) {
       const { value } = await $.state.get(ROUND)
-      await $.state.set(ROUND, { ...(value ?? {}), at: new Date(now).toISOString(), okAt: value?.okAt ?? null, error: String(err) })
+      await $.state.set(ROUND, {
+        ...(value ?? {}),
+        at: new Date(now).toISOString(),
+        okAt: value?.okAt ?? null,
+        error: String(err),
+      })
     }
   } finally {
     await $.state.set(RUNNING, false)
@@ -277,7 +323,11 @@ export const register: Register = (on, options) => {
     await loadVerdicts($)
     // authors left out outlive the session; with none saved yet, bots stay out
     const saved = await $.store.get('ignored').catch(() => undefined)
-    if (Array.isArray(saved)) await $.state.set(IGNORED, saved.filter((x): x is string => typeof x === 'string'))
+    if (Array.isArray(saved))
+      await $.state.set(
+        IGNORED,
+        saved.filter((x): x is string => typeof x === 'string'),
+      )
     // The plugin's skill already owns /argos (argos:argos); the hook below answers it. Registering
     // only matters where no skill holds the name, so a refusal is expected and harmless.
     await $.command.register({ name: 'argos', description: t(lang, 'ui_command') }).catch(() => {})
@@ -289,7 +339,9 @@ export const register: Register = (on, options) => {
   // A validating agent the person stopped gets every tool refused, so it ends at once.
   on('tool.call', async ($, e, next) => {
     if (e.agentId && (((await $.state.get(STOPPED)).value as string[] | undefined) ?? []).includes(e.agentId))
-      return { deny: 'Stopped by the user from the Argos pane. End now: make no more tool calls and report nothing.' }
+      return {
+        deny: 'Stopped by the user from the Argos pane. End now: make no more tool calls and report nothing.',
+      }
     return next(e)
   })
 
@@ -368,7 +420,7 @@ export const register: Register = (on, options) => {
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
-    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, where, confirming, fixing, validating] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, where, confirming, fixing, validating, busyKeys] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
@@ -381,11 +433,16 @@ export const register: Register = (on, options) => {
       read($, confirmMerge),
       read($, fixRuns),
       read($, agentRuns),
+      read($, pending),
     ])
     // the agents at work first: a line a fixing agent holds says so
     const working = (await $.agent.list().catch(() => []))
       .filter((a: { spawnedBy?: string; status: string }) => a.spawnedBy === 'argos' && ['pending', 'running', 'waiting'].includes(a.status))
-      .map((a: { id: string; description: string; status: string }) => ({ id: a.id, description: a.description, status: a.status }))
+      .map((a: { id: string; description: string; status: string }) => ({
+        id: a.id,
+        description: a.description,
+        status: a.status,
+      }))
     const vm = toViewModel(last, {
       now: await $.clock.now(),
       lang,
@@ -411,7 +468,7 @@ export const register: Register = (on, options) => {
     // when Argos last looked.
     const head = (withCheck: boolean) => (
       <Box key="head" flexDirection="column" gap={SPACE.line}>
-        <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
           {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
             <Text size="heading" weight="semibold" color={C.text}>
@@ -419,12 +476,12 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
           {withCheck && (
-            <Button key="check" plain={true} dimColor={running} onPress={checkNow}>
-              {t(lang, 'ui_check')}
+            <Button key="check" variant="secondary" dimColor={running} onPress={running ? () => undefined : checkNow}>
+              {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
             </Button>
           )}
           {vm.state === 'ok' && (
-            <Button key="settings-page" plain={true} onPress={() => void update($, page, () => 'settings')}>
+            <Button key="settings-page" variant="secondary" onPress={() => void update($, page, () => 'settings')}>
               {t(lang, 'settings')}
             </Button>
           )}
@@ -442,7 +499,7 @@ export const register: Register = (on, options) => {
           )}
         </Box>
         {vm.state === 'ok' && vm.mergeLine && (
-          <Text size="caption" weight="semibold" color={C.text}>
+          <Text size="caption" color={C.subtle}>
             {vm.mergeLine}
           </Text>
         )}
@@ -521,26 +578,47 @@ export const register: Register = (on, options) => {
     // Three pages: the dashboard (what stands, one tap per flow, the repos), a repo's own page (its
     // lines, picked one by one) and Settings (who goes, the schedule, each repo's auto-merge and
     // prompt). The dashboard stays short so the flow reads at a glance.
+    // Every control is a native button with its shape (primary or secondary): nothing pressable is
+    // bare text. A control never disappears while a run goes: it dims, says so ("Validating…") and
+    // does nothing until the run ends. A press runs once: a second press while the first one is
+    // still at work is dropped.
     const goTo = (to: string) => void update($, page, () => to)
     const repoCmd = async (...args: string[]) => {
-      await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
+      const r = await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
       await loadRepos($)
+      return r as { exitCode?: number; stderr?: string } | undefined
     }
     const setAuto = async (mode: string, every: number) => {
       await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
       await loadVerdicts($)
     }
-    // a page's path: "Pull requests / billing", the first part the way back to the dashboard. A
-    // control is one native button with words; an icon beside it would be a second object that
-    // does nothing when clicked, so drawings stay on what is not pressed.
+    const busy = Boolean(vm.run?.isRunning)
+    const noop = () => undefined
+    // a press that takes a while: once, and shown as at work until it ends
+    const work = (key: string, fn: () => Promise<unknown>) =>
+      once(key, async () => {
+        await update($, pending, list => [...list, key])
+        try {
+          await fn()
+        } finally {
+          await update($, pending, list => list.filter(k => k !== key))
+        }
+      })
+    const isWorking = (key: string) => busyKeys.includes(key)
+    // what the run holds: a Validate whose PRs are in it says Validating…, the rest only dim
+    const inRun = new Set(vm.run?.isRunning ? vm.run.urls : [])
+    const runs = (urls: string[]) => urls.some(u => inRun.has(u))
+    // a page's path: "Pull requests / billing", the first part the way back to the dashboard
     const bar = (title: string) => (
-      <Box key="bar" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
-        <Button key="back" plain={true} onPress={() => goTo('home')}>
+      <Box key="bar" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
+        <Button key="back" variant="secondary" onPress={() => goTo('home')}>
           {t(lang, 'in_title')}
         </Button>
-        <Text color={C.subtle}>/</Text>
-        <Text weight="semibold" color={C.text}>
-          {title}
+        <Text size="heading" color={C.subtle}>
+          /
+        </Text>
+        <Text size="heading" weight="semibold" color={C.text}>
+          {clip(title)}
         </Text>
       </Box>
     )
@@ -552,44 +630,58 @@ export const register: Register = (on, options) => {
       const urls = validating[id]
       if (!urls) return null
       const states = urls.map(u => judged?.prs[u]?.state)
-      return { done: states.filter(s => s === 'done' || s === 'failed').length, total: urls.length, failed: states.filter(s => s === 'failed').length }
+      return {
+        done: states.filter(s => s === 'done' || s === 'failed').length,
+        total: urls.length,
+        failed: states.filter(s => s === 'failed').length,
+      }
     }
     const isFixing = working.some(a => fixing[a.id])
     // the run line stays only when no validating agent stands for the run (a run the chat started)
     const runLine = vm.run?.isRunning && !working.some(a => validating[a.id]) && (
-      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
-        {icon(I.spin, '⠿', 14, 14, t(lang, 'st_validating', 1).replace(/ · .*/, ''))}
-        <Text size="caption" weight="semibold" color={C.text}>
-          {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
-        </Text>
-        {vm.run.failed > 0 && (
-          <Text size="caption" weight="semibold" color={C.error}>
-            {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+      <Box key="run" flexDirection="row" alignItems="center" gap={SPACE.row}>
+        {icon(I.spin, '⠿', 14, 14, t(lang, 'cd_validating'))}
+        <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.row}>
+          <Text size="caption" weight="semibold" color={C.text}>
+            {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
           </Text>
-        )}
+          {vm.run.failed > 0 && (
+            <Text size="caption" weight="semibold" color={C.error}>
+              {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+            </Text>
+          )}
+        </Box>
       </Box>
     )
-    // what the last run came to, until the next run or check, with Retry on the failed ones
+    // what the last run came to, until the next run or check; Retry on its own row under it
     const doneLine = vm.run && !vm.run.isRunning && (
-      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.row}>
-        {!vm.run.failed && icon(I.check, '✓', 14, 14)}
-        <Text size="caption" weight="semibold" color={C.text}>
-          {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
-        </Text>
-        {vm.run.failed > 0 && (
-          <Text size="caption" weight="semibold" color={C.error}>
-            {`· ${t(lang, 'run_failed', vm.run.failed)}`}
-          </Text>
-        )}
-        {(vm.run.merged > 0 || vm.run.approved > 0) && (
-          <Text size="caption" color={C.text}>
-            {['', vm.run.merged ? t(lang, 'run_merged', vm.run.merged) : '', vm.run.approved ? t(lang, 'run_approved', vm.run.approved) : ''].filter((x, i) => !i || x).join(' · ')}
-          </Text>
-        )}
+      <Box key="run" flexDirection="column" gap={SPACE.row}>
+        <Box flexDirection="row" alignItems="center" gap={SPACE.row}>
+          {!vm.run.failed && icon(I.check, '✓', 14, 14)}
+          <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.row}>
+            <Text size="caption" weight="semibold" color={C.text}>
+              {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
+            </Text>
+            {vm.run.failed > 0 && (
+              <Text size="caption" weight="semibold" color={C.error}>
+                {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+              </Text>
+            )}
+            {(vm.run.merged > 0 || vm.run.approved > 0) && (
+              <Text size="caption" color={C.text}>
+                {['', vm.run.merged ? t(lang, 'run_merged', vm.run.merged) : '', vm.run.approved ? t(lang, 'run_approved', vm.run.approved) : '']
+                  .filter((x, i) => !i || x)
+                  .join(' · ')}
+              </Text>
+            )}
+          </Box>
+        </Box>
         {vm.run.retry.length > 0 && (
-          <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, prompts.validate)}>
-            {t(lang, 'run_retry', vm.run.retry.length)}
-          </Button>
+          <Box flexDirection="row">
+            <Button key="retry" variant="secondary" onPress={once('retry', () => validate($, vm.run!.retry, lang, prompts.validate))}>
+              {t(lang, 'run_retry', vm.run.retry.length)}
+            </Button>
+          </Box>
         )}
       </Box>
     )
@@ -603,7 +695,7 @@ export const register: Register = (on, options) => {
         {working.map(a => {
           const p = progressOf(a.id)
           return (
-            <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
+            <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
               {icon(I.spin, '⠿', 14, 14, t(lang, `ag_${a.status}`))}
               <Text size="caption" color={C.text}>
                 {a.description}
@@ -621,7 +713,7 @@ export const register: Register = (on, options) => {
               <Text size="caption" color={C.subtle}>
                 {t(lang, `ag_${a.status}`)}
               </Text>
-              <Button key={`stop:${a.id}`} plain={true} onPress={() => void stopAgent($, a.id)}>
+              <Button key={`stop:${a.id}`} variant="secondary" onPress={once(`stop:${a.id}`, () => stopAgent($, a.id))}>
                 {t(lang, 'ag_stop')}
               </Button>
             </Box>
@@ -632,8 +724,16 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // A dashboard card: what stands, in a number and a line, and the one flow it starts.
-    const card = (key: string, title: string, body: string, btn?: { key: string; label: string; onPress: () => void; primary?: boolean }) => (
+    // A dashboard card: what stands, in a number and a line, and the one flow it starts. Its button
+    // stays while a run goes, dimmed, so nothing moves.
+    type Action = {
+      key: string
+      label: string
+      onPress: () => void
+      primary?: boolean
+      isOff?: boolean
+    }
+    const card = (key: string, title: string, body: string, btn?: Action) => (
       <Box key={key} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={24} {...PANEL}>
         <Box flexDirection="column" gap={SPACE.line}>
           <Text weight="semibold" color={C.text}>
@@ -645,73 +745,131 @@ export const register: Register = (on, options) => {
         </Box>
         {btn && (
           <Box flexDirection="row">
-            <Button key={btn.key} variant={btn.primary ? 'primary' : 'secondary'} onPress={btn.onPress}>
+            <Button key={btn.key} variant={btn.primary && !btn.isOff ? 'primary' : 'secondary'} dimColor={btn.isOff} onPress={btn.isOff ? noop : btn.onPress}>
               {btn.label}
             </Button>
           </Box>
         )}
       </Box>
     )
-    const busy = Boolean(vm.run?.isRunning)
+    type Group = (typeof vm.groups)[number]
+    const worst = [...vm.groups].sort((a, b) => b.issues - a.issues)[0]
     const cards = (
       <Box key="cards" flexDirection="row" flexWrap="wrap" gap={SPACE.block}>
         {card(
           'card:clean',
           t(lang, 'cd_clean_title', vm.clean.length),
           vm.clean.length ? t(lang, 'cd_clean_body') : t(lang, 'cd_clean_none'),
-          vm.clean.length && !busy ? { key: 'validate-clean', label: t(lang, 'in_validate_n', vm.clean.length), primary: true, onPress: () => void validate($, vm.clean, lang, prompts.validate) } : undefined,
+          vm.clean.length || busy
+            ? {
+                key: 'validate-clean',
+                label: runs(vm.clean) ? t(lang, 'cd_validating') : t(lang, 'in_validate_n', vm.clean.length),
+                primary: true,
+                isOff: busy,
+                onPress: once('validate-clean', () => validate($, vm.clean, lang, prompts.validate)),
+              }
+            : undefined,
         )}
         {card(
           'card:mine',
           t(lang, 'cd_mine_title', vm.rework.length),
           isFixing ? t(lang, 'cd_mine_fixing') : vm.rework.length ? t(lang, 'cd_mine_body') : t(lang, 'cd_mine_none'),
-          vm.rework.length && !isFixing ? { key: 'fix', label: t(lang, 'fix_n', vm.rework.length), onPress: () => void fix($, vm.rework, lang, prompts.fix) } : undefined,
+          vm.rework.length || isFixing
+            ? {
+                key: 'fix',
+                label: isFixing ? t(lang, 'cd_fixing') : t(lang, 'fix_n', vm.rework.length),
+                isOff: isFixing,
+                onPress: once('fix', () => fix($, vm.rework, lang, prompts.fix)),
+              }
+            : undefined,
         )}
-        {card('card:issues', t(lang, 'cd_issues_title', vm.issues), vm.issues ? t(lang, 'cd_issues_body') : t(lang, 'cd_issues_none'))}
+        {card(
+          'card:issues',
+          t(lang, 'cd_issues_title', vm.issues),
+          vm.issues ? t(lang, 'cd_issues_body') : t(lang, 'cd_issues_none'),
+          vm.issues && worst?.issues
+            ? {
+                key: 'open-issues',
+                label: t(lang, 'cd_issues_open', clip(worst.name), worst.issues),
+                onPress: () => goTo(worst.repo),
+              }
+            : undefined,
+        )}
         {card(
           'card:auto',
           t(lang, 'auto_label'),
           vm.auto.line,
           vm.auto.mode === 'off'
-            ? { key: 'auto-on', label: t(lang, 'cd_auto_on'), onPress: () => void setAuto('mine', vm.auto.every) }
-            : { key: 'auto-off', label: t(lang, 'cd_auto_off'), onPress: () => void setAuto('off', vm.auto.every) },
+            ? {
+                key: 'auto-on',
+                label: t(lang, 'cd_auto_on'),
+                onPress: once('auto', () => setAuto('mine', vm.auto.every)),
+              }
+            : {
+                key: 'auto-off',
+                label: t(lang, 'cd_auto_off'),
+                onPress: once('auto', () => setAuto('off', vm.auto.every)),
+              },
         )}
       </Box>
     )
 
-    // The repos, one line each: its name opens its page; Validate sends what it has picked.
-    type Group = (typeof vm.groups)[number]
+    // The repos: each its name (opens its page) and Validate on one line, its counts under it.
+    const sectionTitle = (title: string) => (
+      <Text size="heading" weight="semibold" color={C.text}>
+        {title}
+      </Text>
+    )
     const repoRows = (
-      <Box key="repos" flexDirection="column" gap={SPACE.row}>
-        <Text size="caption" weight="semibold" color={C.text}>
-          {t(lang, 'rl_title')}
-        </Text>
-        {vm.groups.map(g => (
-          <Box key={`repo-row:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap={SPACE.row} columnGap={SPACE.inline} paddingX="xs" hover={{ backgroundColor: HOVER }}>
-            <Button key={`open:${g.repo}`} plain={true} onPress={() => goTo(g.repo)}>
-              {g.name}
-            </Button>
-            <Text size="caption" color={C.subtle}>
-              {[t(lang, 'rl_prs', g.rows.length), g.go.length ? t(lang, 'rl_go', g.go.length) : '', g.issues ? t(lang, 'rl_issues', g.issues) : '', g.merge ? t(lang, 'rl_merge') : ''].filter(Boolean).join(' · ')}
-            </Text>
-            <Box flexGrow={1} />
-            {g.go.length > 0 && !busy && (
-              <Button key={`validate:${g.repo}`} plain={true} onPress={() => void validate($, g.go, lang, prompts.validate)}>
-                {t(lang, 'in_validate_n', g.go.length)}
-              </Button>
-            )}
-          </Box>
-        ))}
+      <Box key="repos" flexDirection="column" gap={SPACE.block}>
+        {sectionTitle(t(lang, 'rl_title'))}
+        <Box flexDirection="column" gap={SPACE.block}>
+          {vm.groups.map(g => (
+            <Box key={`repo-row:${g.repo}`} flexDirection="column" gap={SPACE.line}>
+              <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+                <Button key={`open:${g.repo}`} variant="secondary" onPress={() => goTo(g.repo)}>
+                  {t(lang, 'rl_open', clip(g.name))}
+                </Button>
+                <Box flexGrow={1} />
+                {(g.go.length > 0 || busy) && (
+                  <Button
+                    key={`validate:${g.repo}`}
+                    variant="secondary"
+                    dimColor={busy}
+                    onPress={busy ? noop : once(`validate:${g.repo}`, () => validate($, g.go, lang, prompts.validate))}
+                  >
+                    {runs(g.rows.map(x => x.url)) ? t(lang, 'cd_validating') : t(lang, 'in_validate_n', g.go.length)}
+                  </Button>
+                )}
+              </Box>
+              <Text size="caption" color={C.subtle}>
+                {[
+                  t(lang, 'rl_prs', g.rows.length),
+                  g.go.length ? t(lang, 'rl_go', g.go.length) : '',
+                  g.issues ? t(lang, 'rl_issues', g.issues) : '',
+                  g.merge ? t(lang, 'rl_merge') : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+            </Box>
+          ))}
+        </Box>
       </Box>
     )
 
     // A repo's page: one line per PR, packed to the left so the eye never crosses an empty middle:
-    // a box to leave it out (or bring back one the pane left out), its verdict, who opened it, the
-    // title with its number and why the pane left it out, all on one line. A running line shows
-    // ⠿: Argos holds it. The heading's box takes or leaves the whole repo.
+    // its box with its number (a button with its shape, so it reads as one and names its PR), its
+    // verdict, who opened it, the title, and why the pane left it out. A running line shows Argos's
+    // spinner instead of its box. The heading's box takes or leaves the whole repo.
     const VERDICT_W = 4
     // a line's mark in a run, as the view names it
-    const MARKS: Record<string, string> = { '○': I.queued, '⠿': I.spin, '✓': I.check, '✕': I.cross }
+    const MARKS: Record<string, string> = {
+      '○': I.queued,
+      '⠿': I.spin,
+      '✓': I.check,
+      '✕': I.cross,
+    }
     // Taking the repo brings back what the pane left out too; leaving it hands those back to the
     // pane (they keep their reason) and leaves the rest out by hand.
     const pickRepo = async (g: Group) => {
@@ -731,61 +889,53 @@ export const register: Register = (on, options) => {
       if (x.isAuto) void update($, back, list => [...list, x.key])
       else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
     }
-    // while a run goes every line is locked: its mark is text in a fixed column (text, unlike a
-    // Button, does not clip), so the column lines up
-    const line = (x: Row) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.row} paddingX="xs" hover={{ backgroundColor: HOVER }}>
-        {busy ? (
-          <Box flexShrink={0} width={2}>
-            {x.mark.glyph ? icon(MARKS[x.mark.glyph] ?? I.queued, x.mark.glyph, 14, 14) : <Text> </Text>}
-          </Box>
-        ) : (
-          // every line's box is the same native button, unboxed (a width clips it), so they all
-          // line up; an author left out opens Settings, where Who brings them back
-          x.isRunning ? (
-            <Box flexShrink={0} width={2}>
-              {icon(I.spin, '⠿', 14, 14)}
-            </Box>
-          ) : (
-            <Button
-              key={`pick:${x.key}`}
-              plain={true}
-              dimColor={!x.canToggle}
-              onPress={() => (x.canToggle ? toggle(x) : goTo('settings'))}
-            >
-              {x.isIn ? BOX.on : BOX.off}
-            </Button>
-          )
-        )}
-        {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
+    // the boxes' numbers padded to one width with figure spaces, so every box is as wide
+    const padNum = (num: string, w: number) => '\u2007'.repeat(Math.max(0, w - num.length)) + num
+    const line = (x: Row, numW: number) => (
+      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.inline} hover={{ backgroundColor: HOVER }}>
+        {/* the box names its PR and stays through a run, dimmed, so the focus and the column never
+            move; a line that cannot be picked here (its author left out in Who, or Argos at work
+            on it) keeps it dimmed too, and the line says why */}
+        <Button key={`pick:${x.key}`} variant="secondary" dimColor={busy || !x.canToggle || x.isRunning} onPress={busy || !x.canToggle || x.isRunning ? noop : () => toggle(x)}>
+          {`${x.isIn ? BOX.on : BOX.off} ${padNum(x.num, numW)}`}
+        </Button>
+        {/* the verdict keeps one width, filled or not, so the avatars and titles line up; in a run
+            the line's mark takes it */}
         <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
-          {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
-          {x.verdict?.count && (
+          {x.isRunning
+            ? icon(I.spin, '⠿', 14, 14, t(lang, 'cd_validating'))
+            : busy && x.mark.glyph
+              ? icon(MARKS[x.mark.glyph] ?? I.queued, x.mark.glyph, 14, 14)
+              : x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
+          {!x.isRunning && !(busy && x.mark.glyph) && x.verdict?.count && (
             <Text size="caption" weight="semibold" color={x.verdict.color}>
               {x.verdict.count}
             </Text>
           )}
         </Box>
         {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
-        {/* one line tall whatever the state: the title gives way, its number and reason stay */}
+        {/* one line tall whatever the state: the title gives way, its reason stays */}
         <Box flexDirection="row" alignItems="center" gap={SPACE.row} flexGrow={1} flexShrink={1} minWidth={0}>
           <Box flexShrink={1} minWidth={0}>
             <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
               {x.title}
             </Text>
           </Box>
-          <Box flexShrink={0}>
-            <Text size="caption" color={C.subtle}>
-              {x.status ? x.num : [x.num, x.why, x.mergeNote].filter(Boolean).join(' · ')}
-            </Text>
-          </Box>
           {/* in the last run, how it ended: the word first, its colour only repeats it */}
-          {x.status && (
+          {x.status ? (
             <Box flexShrink={0}>
               <Text size="caption" color={x.status.color}>
                 {`· ${x.status.text}`}
               </Text>
             </Box>
+          ) : (
+            (x.why || x.mergeNote) && (
+              <Box flexShrink={0}>
+                <Text size="caption" color={C.subtle}>
+                  {`· ${[x.why, x.mergeNote].filter(Boolean).join(' · ')}`}
+                </Text>
+              </Box>
+            )
           )}
         </Box>
       </Box>
@@ -795,51 +945,57 @@ export const register: Register = (on, options) => {
       return frame(
         bar(g.name),
         agents,
-        <Box key="repo-head" flexDirection="column" gap={SPACE.line}>
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} paddingX="xs">
-            {g.keys.length > 0 && !busy ? (
-              <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
-                {`${BOX[g.mark]} ${g.count}`}
-              </Button>
-            ) : (
-              <Text size="caption" color={C.subtle}>
-                {g.count}
-              </Text>
-            )}
+        <Box key="repo-head" flexDirection="column" gap={SPACE.block}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
+            <Button key={`repo:${g.repo}`} variant="secondary" dimColor={busy || !g.keys.length} onPress={busy || !g.keys.length ? noop : () => void pickRepo(g)}>
+              {`${BOX[g.mark]} ${t(lang, g.isAll ? 'rh_clear' : 'rh_select')} · ${g.count}`}
+            </Button>
             {g.merge && (
-              <Text size="caption" weight="semibold" color={C.text}>
-                {t(lang, 'mg_heading')}
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'rh_merge')}
               </Text>
             )}
           </Box>
-          <Box flexDirection="column" gap={SPACE.line}>
-            {g.rows.map(line)}
+          <Box flexDirection="column" gap={SPACE.row}>
+            {g.rows.map(x => line(x, Math.max(...g.rows.map(r => r.num.length))))}
           </Box>
         </Box>,
-        !busy && (
-          <Box key="repo-go" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
-            <Button
-              key="validate"
-              variant={going.length ? 'primary' : 'secondary'}
-              dimColor={!going.length}
-              onPress={() => (going.length ? void validate($, going.map(x => x.url), lang, prompts.validate) : undefined)}
-            >
-              {going.length ? t(lang, 'in_validate_n', going.length) : t(lang, 'in_validate')}
-            </Button>
-            {going.length > 0 && (
-              <Button key="clear" plain={true} onPress={() => void update($, out, list => [...new Set([...list, ...going.map(x => x.key)])])}>
-                {t(lang, 'in_clear')}
-              </Button>
-            )}
-          </Box>
-        ),
+        <Box key="repo-go" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
+          <Button
+            key="validate"
+            variant="primary"
+            dimColor={busy || !going.length}
+            onPress={
+              busy || !going.length
+                ? noop
+                : once(`validate:${g.repo}`, () =>
+                    validate(
+                      $,
+                      going.map(x => x.url),
+                      lang,
+                      prompts.validate,
+                    ),
+                  )
+            }
+          >
+            {busy ? t(lang, 'cd_validating') : going.length ? t(lang, 'in_validate_n', going.length) : t(lang, 'in_validate')}
+          </Button>
+          <Button
+            key="clear"
+            variant="secondary"
+            dimColor={busy || !going.length}
+            onPress={busy || !going.length ? noop : () => void update($, out, list => [...new Set([...list, ...going.map(x => x.key)])])}
+          >
+            {t(lang, 'in_clear')}
+          </Button>
+        </Box>,
       )
     }
 
     // Settings: who goes (presets leave whole kinds out, new bots too, and reset the people; an
-    // author's box takes or leaves that person, Only keeps just them; authors left out outlive the
-    // session), the automatic schedule, and per repo its auto-merge (two taps to turn on, the
-    // second naming what it will do on GitHub; one to turn off) and its own validation prompt.
+    // author's box takes or leaves that person; authors left out outlive the session), the
+    // automatic schedule, and per repo its auto-merge (two taps to turn on, the second naming what
+    // it will do on GitHub; one to turn off) and its own validation prompt.
     const setIgnored = async (fn: (list: string[]) => string[]) => {
       let next: string[] = []
       await update($, ignored, list => (next = fn(list)))
@@ -854,31 +1010,37 @@ export const register: Register = (on, options) => {
             ? [...list.filter(x => x !== `kind:${a.kind}`), ...vm.authors.filter(b => b.kind === a.kind && b.name !== a.name).map(b => b.name)]
             : [...list, a.name],
       )
+    // Turning auto-merge on acts on GitHub: the confirmation stays open until repos.mjs says it is
+    // done, and says why when it is not.
     const setMerge = async (repo: string, isOn: boolean) => {
-      await repoCmd('merge', repo, isOn ? 'on' : 'off')
+      const r = await repoCmd('merge', repo, isOn ? 'on' : 'off')
+      if (r && r.exitCode) return void mergeErrors.set(repo, (r.stderr ?? '').trim() || t(lang, 'mg_failed'))
+      mergeErrors.delete(repo)
       await update($, confirmMerge, () => null)
     }
     // what the person typed in a prompt field, kept outside the drawing so typing redraws nothing
     const drafts = promptDrafts
-    const savePrompt = (repo: string, text: string) => repoCmd('prompt', repo, text.trim())
+    const savePrompt = async (repo: string, text: string) => {
+      const r = await repoCmd('prompt', repo, text.trim())
+      promptSaved.set(repo, !r?.exitCode)
+      if (!r?.exitCode) drafts.delete(repo)
+    }
     const section = (key: string, title: string, ...body: any[]) => (
       <Box key={key} flexDirection="column" gap={SPACE.block}>
-        <Text weight="semibold" color={C.text}>
-          {title}
-        </Text>
+        {sectionTitle(title)}
         {body.filter(Boolean)}
       </Box>
     )
     const whoSection = section(
       'who',
       vm.who.label,
-      <Box key="presets" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
+      <Box key="presets" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
         <Text size="caption" color={C.subtle}>
           {t(lang, 'who_set')}
         </Text>
         {vm.who.presets.map(p => (
-          <Button key={`set:${p.id}`} plain={true} onPress={() => void setIgnored(() => p.kinds.map(k => `kind:${k}`))}>
-            {p.isOn ? `${p.label} ✓` : p.label}
+          <Button key={`set:${p.id}`} variant="secondary" onPress={() => void setIgnored(() => p.kinds.map(k => `kind:${k}`))}>
+            {p.isOn ? `✓ ${p.label}` : p.label}
           </Button>
         ))}
       </Box>,
@@ -886,38 +1048,53 @@ export const register: Register = (on, options) => {
         {vm.authors.map(a => (
           <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap={SPACE.row}>
             {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 16, 16, a.tip)}
-            <Button key={`who:${a.name}`} plain={true} onPress={() => void toggleAuthor(a)}>
-              {`${a.isOut ? BOX.off : BOX.on} ${a.name} ${a.count}`}
-            </Button>
-            <Button key={`only:${a.name}`} plain={true} onPress={() => void setIgnored(() => vm.authors.filter(b => b.name !== a.name).map(b => b.name))}>
-              {t(lang, 'in_only')}
+            <Button key={`who:${a.name}`} variant="secondary" onPress={once(`who:${a.name}`, () => toggleAuthor(a))}>
+              {`${a.isOut ? BOX.off : BOX.on} ${clip(a.name)} ${a.count}`}
             </Button>
           </Box>
         ))}
       </Box>,
     )
-    // Automatic mode: two native Selects (what goes, how often; the second only while on) and one
-    // line saying when the next round looks and what the last one did.
+    // Automatic mode: what goes and how often, each Select with its label, then when the next round
+    // looks and what the last one did.
     const autoSection = section(
       'auto',
       t(lang, 'auto_label'),
-      <Box key="auto-controls" flexDirection="column" gap={SPACE.line}>
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.row}>
+      <Box key="auto-controls" flexDirection="column" gap={SPACE.row}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.block} rowGap={SPACE.row}>
           {Select && (
-            <Select
-              key="auto-mode"
-              options={['off', 'mine', 'all'].map(m => ({ value: m, label: t(lang, `auto_mode_${m}`) }))}
-              value={vm.auto.mode}
-              onSelect={(m: string) => void setAuto(m, vm.auto.every)}
-            />
+            <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'auto_what')}
+              </Text>
+              <Select
+                key="auto-mode"
+                label={t(lang, 'auto_what')}
+                options={['off', 'mine', 'all'].map(m => ({
+                  value: m,
+                  label: t(lang, `auto_mode_${m}`),
+                }))}
+                value={vm.auto.mode}
+                onSelect={(m: string) => void setAuto(m, vm.auto.every)}
+              />
+            </Box>
           )}
           {Select && vm.auto.mode !== 'off' && (
-            <Select
-              key="auto-every"
-              options={[15, 30, 60].map(n => ({ value: String(n), label: t(lang, 'auto_every', n) }))}
-              value={String(vm.auto.every)}
-              onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
-            />
+            <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'auto_how_often')}
+              </Text>
+              <Select
+                key="auto-every"
+                label={t(lang, 'auto_how_often')}
+                options={[15, 30, 60].map(n => ({
+                  value: String(n),
+                  label: t(lang, 'auto_every', n),
+                }))}
+                value={String(vm.auto.every)}
+                onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
+              />
+            </Box>
           )}
         </Box>
         <Text size="caption" color={C.subtle}>
@@ -931,8 +1108,33 @@ export const register: Register = (on, options) => {
         <Text weight="semibold" color={C.text}>
           {g.repo}
         </Text>
-        {confirming === g.repo ? (
-          <Box flexDirection="column" gap={SPACE.block}>
+        <Box flexDirection="column" gap={SPACE.row}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
+            <Text size="caption" weight="semibold" color={C.text}>
+              {t(lang, g.merge ? 'mg_on' : 'mg_off')}
+            </Text>
+            <Button
+              key={`merge:${g.repo}`}
+              variant="secondary"
+              dimColor={confirming === g.repo || isWorking(`merge:${g.repo}`)}
+              onPress={
+                confirming === g.repo || isWorking(`merge:${g.repo}`)
+                  ? noop
+                  : g.merge
+                    ? work(`merge:${g.repo}`, () => setMerge(g.repo, false))
+                    : () => void update($, confirmMerge, () => g.repo)
+              }
+            >
+              {t(lang, g.merge ? 'mg_turn_off' : 'mg_turn_on')}
+            </Button>
+          </Box>
+          <Text size="caption" color={C.subtle}>
+            {g.merge ? t(lang, 'mg_on_note') : t(lang, 'mg_off_note', g.name)}
+          </Text>
+        </Box>
+        {confirming === g.repo && (
+          // an action on GitHub: the confirmation opens under its button, in the warning look
+          <Box flexDirection="column" gap={SPACE.block} padding="sm" borderStyle="round" borderColor={rgba(HEX.warning, 0.35)} backgroundColor={rgba(HEX.warning, TINT)}>
             <Box flexDirection="column" gap={SPACE.line}>
               <Text weight="semibold" color={C.text}>
                 {t(lang, 'mg_confirm_title', g.repo)}
@@ -945,8 +1147,8 @@ export const register: Register = (on, options) => {
               {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
                 <Box key={`rule:${i}`} flexDirection="row">
                   <Box flexShrink={0} width={2}>
-                    <Text size="caption" color={C.subtle}>
-                      ·
+                    <Text size="caption" color={C.text}>
+                      •
                     </Text>
                   </Box>
                   <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -960,63 +1162,69 @@ export const register: Register = (on, options) => {
             <Text size="caption" color={C.subtle}>
               {t(lang, 'mg_method')}
             </Text>
-            <Box flexDirection="row" gap={SPACE.inline}>
-              <Button key={`merge-yes:${g.repo}`} variant="primary" onPress={() => void setMerge(g.repo, true)}>
-                {t(lang, 'mg_yes', g.name)}
+            {mergeErrors.get(g.repo) && (
+              <Text size="caption" color={C.error}>
+                {mergeErrors.get(g.repo)}
+              </Text>
+            )}
+            <Box flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
+              <Button
+                key={`merge-yes:${g.repo}`}
+                variant={isWorking(`merge:${g.repo}`) ? 'secondary' : 'primary'}
+                dimColor={isWorking(`merge:${g.repo}`)}
+                onPress={isWorking(`merge:${g.repo}`) ? noop : work(`merge:${g.repo}`, () => setMerge(g.repo, true))}
+              >
+                {isWorking(`merge:${g.repo}`) ? t(lang, 'mg_turning_on') : t(lang, 'mg_yes', clip(g.name))}
               </Button>
-              <Button key={`merge-cancel:${g.repo}`} variant="secondary" onPress={() => void update($, confirmMerge, () => null)}>
+              <Button
+                key={`merge-cancel:${g.repo}`}
+                variant="secondary"
+                dimColor={isWorking(`merge:${g.repo}`)}
+                onPress={isWorking(`merge:${g.repo}`) ? noop : () => void update($, confirmMerge, () => null)}
+              >
                 {t(lang, 'cancel')}
               </Button>
             </Box>
           </Box>
-        ) : (
-          <Box flexDirection="column" gap={SPACE.line}>
-            <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
-              <Text size="caption" weight="semibold" color={C.text}>
-                {t(lang, g.merge ? 'mg_on' : 'mg_off')}
-              </Text>
-              <Button
-                key={`merge:${g.repo}`}
-                plain={true}
-                onPress={() => void (g.merge ? setMerge(g.repo, false) : update($, confirmMerge, () => g.repo))}
-              >
-                {t(lang, g.merge ? 'mg_turn_off' : 'mg_turn_on')}
-              </Button>
-            </Box>
-            <Text size="caption" color={C.subtle}>
-              {g.merge ? t(lang, 'mg_on_note') : t(lang, 'mg_off_note', g.name)}
-            </Text>
-          </Box>
         )}
-        <Box flexDirection="column" gap={SPACE.inline}>
-          <Box flexDirection="column" gap={SPACE.line}>
-            <Text size="caption" weight="semibold" color={C.text}>
-              {t(lang, 'rp_title')}
-            </Text>
-            <Text size="caption" color={C.subtle}>
-              {t(lang, prompts.validate.mode === 'mine' && prompts.validate.text ? 'rp_base_mine' : 'rp_base')}
-            </Text>
-          </Box>
-          <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>
-              {Input && (
-                <Input
-                  key={`prompt:${g.repo}`}
-                  label={t(lang, 'rp_label', g.name)}
-                  value={g.prompt}
-                  submitLabel={t(lang, 'rp_save')}
-                  onInput={(text: string) => void drafts.set(g.repo, text)}
-                  onSubmit={(text: string) => void savePrompt(g.repo, text)}
-                />
-              )}
-            </Box>
-            <Button key={`prompt-save:${g.repo}`} plain={true} onPress={() => void savePrompt(g.repo, drafts.get(g.repo) ?? g.prompt)}>
-              {t(lang, 'rp_save')}
-            </Button>
-          </Box>
+        <Box flexDirection="column" gap={SPACE.row}>
+          {Input && (
+            <Input
+              key={`prompt:${g.repo}`}
+              label={t(lang, 'rp_label', g.name)}
+              placeholder={t(lang, 'rp_placeholder')}
+              rows={3}
+              value={drafts.get(g.repo) ?? g.prompt}
+              submitLabel={t(lang, 'rp_save')}
+              onInput={(text: string) => void (drafts.set(g.repo, text), promptSaved.delete(g.repo))}
+              onSubmit={(text: string) => work(`prompt:${g.repo}`, () => savePrompt(g.repo, text))()}
+            />
+          )}
           <Text size="caption" color={C.subtle}>
             {t(lang, 'rp_note', g.name)}
           </Text>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
+            <Button
+              key={`prompt-save:${g.repo}`}
+              variant="secondary"
+              dimColor={isWorking(`prompt:${g.repo}`)}
+              onPress={isWorking(`prompt:${g.repo}`) ? noop : work(`prompt:${g.repo}`, () => savePrompt(g.repo, drafts.get(g.repo) ?? g.prompt))}
+            >
+              {isWorking(`prompt:${g.repo}`) ? t(lang, 'rp_saving') : t(lang, 'rp_save')}
+            </Button>
+            {promptSaved.has(g.repo) ? (
+              <Text size="caption" color={promptSaved.get(g.repo) ? C.success : C.error}>
+                {t(lang, promptSaved.get(g.repo) ? 'rp_saved' : 'rp_failed')}
+              </Text>
+            ) : (
+              drafts.has(g.repo) &&
+              drafts.get(g.repo) !== g.prompt && (
+                <Text size="caption" color={C.warning}>
+                  {t(lang, 'rp_unsaved')}
+                </Text>
+              )
+            )}
+          </Box>
         </Box>
       </Box>
     )
@@ -1025,7 +1233,14 @@ export const register: Register = (on, options) => {
         bar(t(lang, 'settings')),
         whoSection,
         autoSection,
-        section('repo-settings', t(lang, 'rl_title'), ...vm.groups.map(repoSettings)),
+        section(
+          'repo-settings',
+          t(lang, 'rl_title'),
+          <Text key="rp-base" size="caption" color={C.subtle}>
+            {t(lang, prompts.validate.mode === 'mine' && prompts.validate.text ? 'rp_base_mine' : 'rp_base')}
+          </Text>,
+          ...vm.groups.map(repoSettings),
+        ),
         <Text key="prompts-note" size="caption" color={C.subtle}>
           {t(lang, 'se_prompts')}
         </Text>,

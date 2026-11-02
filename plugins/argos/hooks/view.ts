@@ -245,7 +245,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       vstate: v.state,
       isIn: leftBy === null,
       // why the pane left a line out, said at its end; the person's own choices need no word
-      why: leftBy === null || leftBy === 'hand' || leftBy === 'author' ? '' : t(lang, `why_${leftBy}`),
+      why: leftBy === 'author' ? t(lang, 'why_author') : leftBy === null || leftBy === 'hand' ? '' : t(lang, `why_${leftBy}`),
       // what auto-merge did with a passing verdict: approved (others must still review), or why not
       mergeNote: merged ? t(lang, `st_${merged.state}`, merged.why) : '',
       // in the last run: how it ended, in words and the colour of its tone; its mark while it runs

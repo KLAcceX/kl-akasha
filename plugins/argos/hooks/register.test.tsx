@@ -85,7 +85,7 @@ test('leaving out never moves a line: an author, a line by hand, one the pane le
   expect(keys(noMe)).toEqual(keys(all))
   expect(noMe.validate.count).toBe(3)
   const mine = noMe.rows.find(x => x.key === 'acme/portal#220')!
-  expect([mine.isIn, mine.canToggle, mine.why]).toEqual([false, false, ''])
+  expect([mine.isIn, mine.canToggle, mine.why]).toEqual([false, false, 'author out'])
   expect(noMe.authors[0]?.isOut).toBe(true)
   const hand = ok(vmOf(round, { out: ['acme/web#7'] }))
   expect([hand.validate.count, hand.rows.find(x => x.key === 'acme/web#7')?.isIn]).toEqual([4, false])
@@ -191,13 +191,13 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   expect([await text('validate-clean'), await text('fix'), await text('open:acme/portal'), await text('validate:acme/portal')]).toEqual([
     'Validate 5',
     'Fix my 1 with Argos',
-    'portal',
+    'Open portal',
     'Validate 2',
   ])
   // no line is on the dashboard: a repo's own page holds them
   expect(await ui.find({ key: 'pick:acme/web#7' })).toBeUndefined()
   await ui.press({ key: 'open:acme/web' })
-  expect([await text('pick:acme/web#7'), await text('validate')]).toEqual(['☑', 'Validate 2'])
+  expect([await text('pick:acme/web#7'), await text('validate')]).toEqual(['☑ #7', 'Validate 2'])
   await ui.press({ key: 'pick:acme/web#7' })
   expect(await text('validate')).toBe('Validate 1')
   await ui.press({ key: 'back' })
@@ -208,10 +208,10 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   expect([await text('who:me'), (await ui.find({ type: 'Text', text: /^Who:/ }))?.text]).toEqual(['☐ me 4', 'Who: Everyone but bots · me out'])
   await ui.press({ key: 'back' })
   expect(await text('validate-clean')).toBe('Validate 3')
-  // the box of an author left out opens Settings, where Who brings them back
+  // an author left out: their box dims and does nothing, the line says why
   await ui.press({ key: 'open:acme/portal' })
   await ui.press({ key: 'pick:acme/portal#220' })
-  expect(await text('who:me')).toBe('☐ me 4')
+  expect([await text('pick:acme/portal#220'), (await ui.find({ type: 'Text', text: /author out/ }))?.text]).toEqual(['☐ #220', '· author out'])
   await ui.unmount()
 })
 test('Validate N marks them running and hands them to background subagents, ten each', async ($, on) => {
@@ -279,17 +279,17 @@ test('on a repo page its box takes or leaves the whole repo; Validate and Clear 
   const text = async (key: string) => (await ui.find({ key }))?.text
   await ui.press({ key: 'open:acme/portal' })
   // portal goes 2 of 4 (a draft and a change request left out): its box takes those too
-  expect(await text('repo:acme/portal')).toBe('◩ 2 of 4')
+  expect(await text('repo:acme/portal')).toBe('◩ Select all · 2 of 4')
   await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑ 4 of 4', 'Validate 4'])
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑ Clear all · 4 of 4', 'Validate 4'])
   // and leaves them: the draft and the change request go back to the pane, the rest out by hand
   await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☐ 0 of 4', 'Validate'])
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☐ Select all · 0 of 4', 'Validate'])
   await ui.press({ key: 'pick:acme/portal#220' })
   await ui.press({ key: 'pick:acme/portal#221' })
   expect(await text('validate')).toBe('Validate 2')
   await ui.press({ key: 'clear' })
-  expect([await text('validate'), await text('clear')]).toEqual(['Validate', undefined])
+  expect([await text('validate'), await text('clear')]).toEqual(['Validate', 'Clear selection'])
   // the other repos keep their picks
   await ui.press({ key: 'back' })
   expect(await text('validate:acme/web')).toBe('Validate 2')
@@ -343,13 +343,14 @@ test('while a run goes the lines are locked and say how each stands; Validate wa
   on('state.get', stored(seeded))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect([await ui.find({ key: 'validate-clean' }), await ui.find({ key: 'validate:acme/api' })]).toEqual([undefined, undefined])
+  // the buttons stay where they are, dimmed, saying the run goes
+  expect([(await ui.find({ key: 'validate-clean' }))?.text, (await ui.find({ key: 'validate:acme/api' }))?.text]).toEqual(['Validating…', 'Validating…'])
   expect((await ui.find({ type: 'Text', text: /^Validating/ }))?.text).toBe('Validating 2 of 3')
   await ui.unmount()
   // a repo page: no box to tap, each line says how it stands
   seeded.page = 'acme/api'
   const api = await $.ui.mount(PANE)
-  expect([await api.find({ key: 'validate' }), await api.find({ key: 'pick:acme/api#9' })]).toEqual([undefined, undefined])
+  expect([(await api.find({ key: 'validate' }))?.text, (await api.find({ key: 'pick:acme/api#9' }))?.text]).toEqual(['Validating…', '☐ #9'])
   expect((await api.find({ type: 'Text', text: /validating · / }))?.text).toBe('· validating · 3m')
   await api.unmount()
   seeded.page = 'acme/portal'
@@ -407,10 +408,10 @@ test('the agents at work are listed with Stop; Fix my PRs runs in the background
   expect(spawned.at(-1)?.prompt.split('\n').at(-1)).toBe('- u219')
   await fix.unmount()
 
-  // while it works, its line says fixing and the button is gone
+  // while it works, its button stays, dimmed, saying so
   seeded.fixRuns = { a1: ['u219'] }
   const busy = await $.ui.mount(PANE)
-  expect(await busy.find({ key: 'fix' })).toBeFalsy()
+  expect((await busy.find({ key: 'fix' }))?.text).toBe('Fixing…')
   expect(await busy.find({ type: 'Text', text: /fixing/ })).toBeTruthy()
   await busy.unmount()
 })
@@ -436,11 +437,9 @@ test('who: presets leave kinds out, the label always says the whole state', asyn
   expect(await who()).toBe('Who: Everyone but bots')
   await ui.press({ key: 'who:dev3' })
   expect(await who()).toBe('Who: Everyone but bots · dev3 out')
-  await ui.press({ key: 'only:dev5' })
-  expect(await who()).toBe('Who: only dev5')
   // a preset resets the people
   await ui.press({ key: 'set:people' })
-  expect([await who(), await text('set:people')]).toEqual(['Who: People only', 'People ✓'])
+  expect([await who(), await text('set:people')]).toEqual(['Who: People only', '✓ People'])
   // an author out with their kind comes back alone; the rest of the preset stays
   await ui.press({ key: 'who:Copilot' })
   expect(await who()).toBe('Who: Everyone but bots')
@@ -453,8 +452,8 @@ test('the terminal draws the boxes in brackets', async ($, on) => {
   on('state.get', stored({ round, page: 'acme/portal' }))
   on('clock.now', clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', viewport: { columns: 60, rows: 30 } })
-  expect((await ui.find({ key: 'pick:acme/portal#220' }))?.text).toBe('[x]')
-  expect((await ui.find({ key: 'pick:acme/portal#222' }))?.text).toBe('[ ]')
+  expect((await ui.find({ key: 'pick:acme/portal#220' }))?.text).toBe('[x] #220')
+  expect((await ui.find({ key: 'pick:acme/portal#222' }))?.text).toBe('[ ] #222')
   await ui.unmount()
 })
 
