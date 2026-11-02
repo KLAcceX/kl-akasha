@@ -51,6 +51,8 @@ export type Verdicts = {
   // the last automatic round: when it looked, and how many PRs it sent
   lastAuto?: { at: string; count: number } | null
   batch: { urls: string[]; at: string | null }
+  // the PRs left to humans: neither auto-validate nor auto-merge touches them
+  human?: string[]
   prs: Record<string, Verdict>
 }
 // A connected repo as repos.json keeps it: auto-merge and its own validation prompt (skills is
@@ -99,14 +101,14 @@ declare module 'claude-code' {
       back: string[]
       // authors left out everywhere, or a whole kind as kind:bot / kind:agent (kept in $.store)
       ignored: string[]
-      // the author switches unfolded
-      authorsOpen: boolean
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null
       // the run whose end was already told in a toast (its batch's start time)
       announced: string | null
       // the connected repos as repos.json keeps them (auto-merge, prompt)
       repos: RepoCfg[]
+      // how the last fixing agent ended, in its last line
+      fixResult: string | null
       // what setup.mjs found on the first run
       setup: SetupInfo | null
       // whether the first setup was finished

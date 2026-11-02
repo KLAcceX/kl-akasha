@@ -2,7 +2,7 @@
 // open PR across the connected repos is one line, and all of them go to validation unless the
 // person leaves some out (an author, or one PR) or the PR is not ready for it. Nothing reorders
 // when something is left out: it dims in place. No mod runtime, so Node can import this file.
-import { t } from '../scripts/i18n.mjs'
+import { label, t } from '../scripts/i18n.mjs'
 import type { Item, RepoCfg, Round, Verdict, Verdicts } from '../types'
 import { AVATAR, C, MOSAIC, STARS, type Tag } from './look'
 
@@ -42,7 +42,8 @@ export function verdictOf(p: Item, v?: Verdict, now?: number, limit = 10): { sta
 export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   const more = v.attention ? `+${v.attention}` : ''
   if (v.state === 'pass') return { k: 'sig', svg: STARS.done, w: 16, count: `✓${more}`, color: C.success, text: `✦✓${more}`, tip: t(lang, 'tip_v_pass', v.attention) }
-  if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, color: C.warning, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
+  if (v.state === 'issues')
+    return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, color: C.warning, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
   if (v.state === 'partial') return { k: 'sig', svg: STARS.stale, w: 16, count: '½', color: C.subtle, text: '☆½', tip: t(lang, 'tip_v_partial', v.attention) }
   if (v.state === 'run' || v.state === 'queued') return { k: 'sig', svg: STARS.run, w: 16, text: '◌', tip: t(lang, 'tip_v_run') }
   if (v.state === 'failed') return { k: 'sig', svg: STARS.stale, w: 16, count: '✕', color: C.error, text: '☆✕', tip: t(lang, 'tip_v_failed', v.finding) }
@@ -130,8 +131,24 @@ const kindsOut = (out: Set<string>) => [...out].filter(x => x.startsWith('kind:'
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(x => b.includes(x))
 export const UI: Ui = { out: [], back: [] }
 // limit: minutes a PR may stay "validating"; repos: auto-merge and prompt per repo (repos.json)
-type Opts = { now: number; lang: string; minutes: number; running: boolean; ui?: Partial<Ui>; verdicts?: Verdicts | null; ignored?: string[]; limit?: number; repos?: RepoCfg[]; fixing?: string[] }
+type Opts = {
+  now: number
+  lang: string
+  minutes: number
+  running: boolean
+  ui?: Partial<Ui>
+  verdicts?: Verdicts | null
+  ignored?: string[]
+  limit?: number
+  repos?: RepoCfg[]
+  fixing?: string[]
+}
 // 14:30, the person's own clock: times instead of "in 12 min", so nothing on screen ticks
+// How long, short: 45m, 5h, 3d.
+export const ageOf = (ms: number) => {
+  const m = Math.max(0, Math.floor(ms / 6e4))
+  return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`
+}
 export const hhmm = (ms: number) => {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -160,7 +177,11 @@ export function toViewModel(r: Round | null, o: Opts) {
   const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])]
     .filter(p => !seen.has(p.url) && Boolean(seen.add(p.url)))
     .sort((a, b) => a.repo.localeCompare(b.repo) || a.number - b.number)
-  const names = [...new Set(all.map(p => p.repo))]
+  // every connected repo, with or without open PRs: one with none must not vanish from the list or
+  // from Settings
+  const names = [...new Map([...all.map(p => p.repo), ...(r.repos ?? []), ...(o.repos ?? []).map(c => c.repo)].map(n => [n.toLowerCase(), n])).values()].sort((a, b) =>
+    a.localeCompare(b),
+  )
   const short = (repo: string) => (names.filter(n => shortRepo(n) === shortRepo(repo)).length > 1 ? repo : shortRepo(repo))
   const authorsOut = new Set(o.ignored ?? [])
   // an author is out by name, or with their whole kind (kind:bot, kind:agent)
@@ -190,7 +211,8 @@ export function toViewModel(r: Round | null, o: Opts) {
   // ended ("validated · passed", "failed · no access", "merged · squash") instead of their reason.
   const limit = o.limit ?? 10
   const run = runOf(o.verdicts, now, lang, limit)
-  const showRun = Boolean(run && (run.isRunning || run.doneAt > Date.parse(okAt ?? '')))
+  // what failed stays on screen until it is handled, not until the next check
+  const showRun = Boolean(run && (run.isRunning || run.failed > 0 || run.doneAt > Date.parse(okAt ?? '')))
   const inRun = new Set(showRun ? run!.urls : [])
   // the person's PRs a fixing agent holds right now
   const fixingSet = new Set(o.fixing ?? [])
@@ -203,12 +225,15 @@ export function toViewModel(r: Round | null, o: Opts) {
     if (v.state === 'queued') return { text: t(lang, 'st_queued'), tone: 'subtle' }
     if (v.state === 'run') return { text: t(lang, 'st_validating', Math.max(1, Math.floor((now - Date.parse(raw.at)) / 6e4))), tone: 'subtle' }
     if (v.state === 'failed') return { text: t(lang, 'st_failed', v.finding), tone: 'error' }
-    if (raw.merge) return { text: t(lang, `st_${raw.merge.state}`, raw.merge.why), tone: raw.merge.state === 'skipped' ? 'warning' : 'success' }
     // commits landed after the verdict: it no longer speaks for the head
     if (v.state === 'stale') return cfgOf(p.repo)?.merge ? { text: t(lang, 'st_skipped', t(lang, 'mg_new')), tone: 'warning' } : { text: t(lang, 'st_stale'), tone: 'subtle' }
+    if (raw.merge) return { text: t(lang, `st_${raw.merge.state}`, raw.merge.why), tone: raw.merge.state === 'skipped' ? 'warning' : 'success' }
     // a repo with auto-merge says why a verdict that did not pass was not merged
     if (cfgOf(p.repo)?.merge && (v.state !== 'pass' || v.attention))
-      return { text: t(lang, 'st_skipped', v.issues ? t(lang, 'mg_blockers', v.issues) : v.attention ? t(lang, 'mg_attention', v.attention) : t(lang, 'mg_partial')), tone: 'warning' }
+      return {
+        text: t(lang, 'st_skipped', v.issues ? t(lang, 'mg_blockers', v.issues) : v.attention ? t(lang, 'mg_attention', v.attention) : t(lang, 'mg_partial')),
+        tone: 'warning',
+      }
     if (v.state === 'issues') return { text: t(lang, 'st_issues', v.issues), tone: 'warning' }
     return v.state === 'partial' ? { text: t(lang, 'st_partial'), tone: 'subtle' } : { text: t(lang, 'st_passed'), tone: 'success' }
   }
@@ -243,9 +268,27 @@ export function toViewModel(r: Round | null, o: Opts) {
       verdict: v.state === 'none' ? null : verdictTag(v, lang),
       // the verdict's state, for the dashboard's counts
       vstate: v.state,
+      finding: v.finding,
+      // how long it has waited on whoever holds it
+      age: ageOf(now - Date.parse(p.since ?? p.createdAt)),
+      // what stands, in words, each in the colour that repeats it: why the pane left it out, what
+      // the verdict said (a blocker with what it found), what auto-merge did
+      said: [
+        // what is asked, as the dashboard says it, so a PR found from Needs you reads the same here
+        ...p.signals.map(code => ({ text: label(lang, code), color: C.subtle })),
+        ...(leftBy === 'done' || leftBy === null
+          ? []
+          : [{ text: leftBy === 'author' ? t(lang, 'why_author') : leftBy === 'hand' ? t(lang, 'why_human') : t(lang, `why_${leftBy}`), color: C.subtle }]),
+        ...(v.state === 'issues' ? [{ text: `${t(lang, 'vn_blockers', v.issues)}${v.finding ? `: ${v.finding}` : ''}`, color: C.warning }] : []),
+        ...(v.state === 'pass' ? [{ text: t(lang, 'vn_passed'), color: C.success }] : []),
+        ...(v.state === 'partial' ? [{ text: t(lang, 'vn_partial'), color: C.subtle }] : []),
+        ...(v.state === 'stale' ? [{ text: t(lang, 'st_stale'), color: C.subtle }] : []),
+        ...(v.attention ? [{ text: t(lang, 'vn_attention', v.attention), color: C.warning }] : []),
+        ...(merged ? [{ text: t(lang, `st_${merged.state}`, merged.why), color: merged.state === 'skipped' ? C.warning : C.success }] : []),
+      ],
       isIn: leftBy === null,
       // why the pane left a line out, said at its end; the person's own choices need no word
-      why: leftBy === 'author' ? t(lang, 'why_author') : leftBy === null || leftBy === 'hand' ? '' : t(lang, `why_${leftBy}`),
+      why: leftBy === 'author' ? t(lang, 'why_author') : leftBy === 'hand' ? t(lang, 'why_human') : leftBy === null ? '' : t(lang, `why_${leftBy}`),
       // what auto-merge did with a passing verdict: approved (others must still review), or why not
       mergeNote: merged ? t(lang, `st_${merged.state}`, merged.why) : '',
       // in the last run: how it ended, in words and the colour of its tone; its mark while it runs
@@ -293,13 +336,6 @@ export function toViewModel(r: Round | null, o: Opts) {
           : t(lang, 'who_some', inAuthors.length, authors.length)
   const who = { label: t(lang, 'who', whoText), presets }
 
-  // What the pane left out by itself, in one line.
-  const autoOut = (['changes', 'draft', 'done'] as const)
-    .map(why => [why, rows.filter(x => x.isAuto && x.why === t(lang, `why_${why}`)).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([why, n]) => t(lang, `out_${why}`, n))
-    .join(' · ')
-
   // Lines under their repo, whose heading box says how many go (all, some, none: "5 of 7") and
   // takes every line that can be picked in one tap, drafts and validated ones too, or leaves them
   // all out once all go. A running line and an author left out are not picked from here.
@@ -322,31 +358,15 @@ export function toViewModel(r: Round | null, o: Opts) {
       // what its lines going to validation are, and how its verdicts stand
       go: lines.filter(x => x.isIn).map(x => x.url),
       issues: lines.filter(x => x.vstate === 'issues').length,
-      passed: lines.filter(x => x.vstate === 'pass').length,
+      failed: lines.filter(x => x.vstate === 'failed').length,
     }
   })
 
   const toGo = rows.filter(x => x.isIn)
   const goingRepos = [...new Set(toGo.map(x => x.repo))]
-  // Clear leaves every line out; once nothing is left, Restore goes back to the pane's own pick.
-  const clear = toGo.length
-    ? { label: t(lang, 'in_clear'), keys: toGo.map(x => x.key) }
-    : ui.out.length || ui.back.length
-      ? { label: t(lang, 'in_restore'), keys: null }
-      : null
-  // Quick picks, one tap each, the selection becoming exactly that set: every PR with nothing
-  // pending (no change asked, no comment open, not a draft, not validated since its last commit),
-  // or my PRs with something asked of me, to validate again once reworked. ✓ marks the one in use.
   const free = rows.filter(x => x.canToggle)
-  const going = new Set(toGo.map(x => x.key))
-  const pick = (id: string, keys: string[]) => {
-    const isOn = keys.length > 0 && keys.length === going.size && keys.every(k => going.has(k))
-    return { id, keys, label: `${t(lang, `pick_${id}`)} ${keys.length}${isOn ? ' ✓' : ''}` }
-  }
   // my PRs a fixing agent does not hold yet: the pick and Fix count the same lines
-  const reworkRows = free.filter(x => x.isRework && !fixingSet.has(x.url))
-  const rework = reworkRows.map(x => x.key)
-  const picks = [pick('clean', free.filter(x => !x.hasReason).map(x => x.key)), ...(rework.length ? [pick('rework', rework)] : [])]
+  const reworkRows = free.filter(x => x.isRework && !fixingSet.has(x.url) && !byHand.has(x.key))
   // Automatic mode in one line: off, or when the next round looks and what the last one did.
   const vs = o.verdicts
   const every = vs?.autoEvery ?? 30
@@ -358,7 +378,11 @@ export function toViewModel(r: Round | null, o: Opts) {
       : run && Math.abs(Date.parse(run.at ?? '') - Date.parse(last.at)) < 6e4
         ? run.label
         : t(lang, 'auto_sent', last.count)
-  const next = run?.isRunning ? t(lang, 'auto_after_run') : t(lang, 'auto_next', hhmm(last ? Date.parse(last.at) + every * 6e4 : Date.parse(okAt ?? '') + o.minutes * 6e4))
+  const next = run?.isRunning
+    ? t(lang, 'auto_after_run')
+    : ((at: number) => (at > now ? t(lang, 'auto_next', hhmm(at)) : t(lang, 'auto_next_check')))(
+        last ? Date.parse(last.at) + every * 6e4 : Date.parse(okAt ?? '') + o.minutes * 6e4,
+      )
   const auto = {
     mode: vs?.auto ?? 'off',
     every,
@@ -371,20 +395,30 @@ export function toViewModel(r: Round | null, o: Opts) {
     ...head,
     state: 'ok' as const,
     summary: t(lang, 'in_to_validate', toGo.length, goingRepos.length),
-    autoLine: autoOut ? t(lang, 'in_auto_out', autoOut) : '',
     authors,
     who,
     rows,
     groups,
-    clear,
-    picks,
+    // what waits on the person, oldest first: their PRs with something asked, PRs waiting on their review
+    needs: [...new Map((r.pending ?? []).map(p => [p.url, p])).values()]
+      .sort((a, b) => Date.parse(a.since ?? a.createdAt) - Date.parse(b.since ?? b.createdAt))
+      .map(p => ({
+        key: keyOf(p),
+        url: p.url,
+        title: p.title,
+        line: [`${short(p.repo)} #${p.number}`, ...p.signals.map(code => label(lang, code)), ageOf(now - Date.parse(p.since ?? p.createdAt))].join(' · '),
+      })),
+    // what failed in the last run, by PR, with why
+    failedLines: rows.filter(x => inRun.has(x.url) && x.vstate === 'failed').map(x => ({ key: x.key, where: `${short(x.repo)} ${x.num}`, why: x.finding })),
     // the dashboard's cards: every PR with nothing pending, ready to validate in one tap, and how
     // many verdicts found problems
-    clean: free.filter(x => !x.hasReason).map(x => x.url),
+    // (never one the person left to humans)
+    clean: toGo.filter(x => !x.hasReason).map(x => x.url),
     issues: rows.filter(x => x.vstate === 'issues').length,
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
     rework: reworkRows.map(x => x.url),
-    run: showRun ? run : null,
+    // Retry never sends what the person left to humans
+    run: showRun && run ? { ...run, retry: run.retry.filter(u => !rows.some(x => x.url === u && byHand.has(x.key))) } : null,
     auto,
     mergeLine: merging.length ? t(lang, 'mg_line', merging.join(', ')) : '',
     // all of it in one repo of several says which ("Validate 4 · billing"), so a tap on Only

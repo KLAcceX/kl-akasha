@@ -3,9 +3,9 @@
 // logged in, and which repos the chosen account has open PRs in (to suggest connecting them).
 //
 // Usage:
-//   node setup.mjs [--account <gh login>] --json
+//   node setup.mjs [--account <gh login>] [--cwd <folder>] --json
 //       { gh: "ok" | "missing" | "none" | "error", accounts: [{ login, active }], account, suggestions: [{ repo, prs }], here, error? }
-//       here: the current folder's GitHub repo (from its git origin), or null
+//       here: the session folder's GitHub repo (from its git origin), or null
 //   node setup.mjs --self-test
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -28,27 +28,30 @@ export const reposOf = (items) => {
   return [...counts].map(([repo, prs]) => ({ repo, prs })).sort((a, b) => b.prs - a.prs || a.repo.localeCompare(b.repo));
 };
 
-// the current folder's repo, from its git origin
-const hereRepo = () => {
+// the session folder's repo, from its git origin
+const hereRepo = (cwd) => {
   try {
-    return repoFromRemote(execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })) ?? null;
+    return repoFromRemote(execFileSync("git", [...(cwd ? ["-C", cwd] : []), "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })) ?? null;
   } catch {
     return null;
   }
 };
 
-export function check(wanted) {
-  const here = hereRepo();
+export function check(wanted, cwd) {
+  const here = hereRepo(cwd);
   let status;
   try {
     status = JSON.parse(run(["auth", "status", "--json", "hosts"]));
   } catch (e) {
-    // no gh at all, or gh with nobody logged in (it exits non-zero then)
+    // no gh at all, or gh with nobody logged in (it exits non-zero then); anything else is said as
+    // it is, never as a state it is not
     if (e.code === "ENOENT") return { gh: "missing", accounts: [], account: null, suggestions: [], here };
     try {
       status = JSON.parse(String(e.stdout ?? ""));
     } catch {
-      return { gh: "none", accounts: [], account: null, suggestions: [], here };
+      const said = String(e.stderr ?? e.message ?? "").trim();
+      if (/not logged in/i.test(said)) return { gh: "none", accounts: [], account: null, suggestions: [], here };
+      return { gh: "error", accounts: [], account: null, suggestions: [], here, error: said.split("\n")[0] };
     }
   }
   const accounts = accountsOf(status);
@@ -90,7 +93,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   if (args.includes("--self-test")) selfTest();
   else {
-    const i = args.indexOf("--account");
-    console.log(JSON.stringify(check(i >= 0 ? args[i + 1] : undefined)));
+    const of = (name) => {
+      const i = args.indexOf(`--${name}`);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    console.log(JSON.stringify(check(of("account"), of("cwd"))));
   }
 }

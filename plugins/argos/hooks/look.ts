@@ -17,7 +17,7 @@ export const HEX = {
   bg: '#1f1f1e',
   brand: '#8E6CD2',
   grey: '#8A8880',
-  error: '#F07A72',
+  error: '#DC4F46',
   success: '#3A9D66',
   warning: '#D9A441',
   meter: '#4A4945',
@@ -48,8 +48,6 @@ export const PANEL = {
 // a warning or error banner's border, over its tint
 export const EDGE = 0.35
 export const SKELETON = 'rgba(128,128,128,0.18)'
-// a row under the pointer: a faint brand tint, readable under text in both themes
-export const HOVER = 'rgba(126,92,192,0.10)'
 
 // The Argos mark. MARK is the app icon (256, used at 28px and up): the brand's own frame
 // (ground rx 56, frame rx 40, stroke 18) around the mark the design recentred (58% of the inner

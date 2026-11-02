@@ -182,7 +182,7 @@ function selfTest() {
   // notification stays short, in either language
   const many = { mine: Array.from({ length: 30 }, (_, i) => mine(`u${i}`, ["changes_requested"])), toReview: [] };
   assert.ok(notification(news({}, many)).length <= 190);
-  assert.equal(notification([rev("r")], "pt-BR"), "Argos: 1 novidade(s): web#2 pede sua revisão");
+  assert.equal(notification([rev("r")], "pt-BR"), "Argos: 1 novidade: web#2 pede sua revisão");
   assert.equal(notification([rev("r")], "en"), "Argos: 1 new: web#2 asks for your review");
   // a review request turning late is news once, then quiet
   const late = { ...queue, toReview: [{ ...rev("r"), signals: ["late"] }] };

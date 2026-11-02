@@ -8,7 +8,7 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, STARS, TINT, rgba, titled } from './look'
+import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, TINT, rgba, titled } from './look'
 import { UI, authorOf, hhmm, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
 import type { RepoCfg, Round, SetupInfo, Verdicts } from '../types'
 
@@ -28,22 +28,27 @@ const AGENT_RUNS = { plugin: 'argos', key: 'agentRuns' } as const
 const STOPPED = { plugin: 'argos', key: 'stopped' } as const
 // the fixing agents this mod started, each with the person's PRs it fixes
 const FIX_RUNS = { plugin: 'argos', key: 'fixRuns' } as const
+// how the last fixing agent ended, in its own last line
+const FIX_RESULT = { plugin: 'argos', key: 'fixResult' } as const
+const fixResult = atom(FIX_RESULT, null as string | null)
 const round = atom(ROUND, null)
 const isRunning = atom(RUNNING, false)
-// PRs the person left out by hand, and PRs left out by the pane that the person brought back
-const out = atom({ plugin: 'argos', key: 'out' } as const, UI.out)
+// PRs the person left out by hand, which stay with humans: no validation, no auto-merge, across
+// sessions ($.store, and verdicts.json for merge.mjs). And PRs the pane left out that they brought back
+const OUT = { plugin: 'argos', key: 'out' } as const
+const out = atom(OUT, UI.out)
 const back = atom({ plugin: 'argos', key: 'back' } as const, UI.back)
 // authors left out everywhere, kept across sessions in $.store
 // update bots stay out of validation until the person lets them in (Who, in Settings)
 const NO_BOTS = ['kind:bot']
 const ignored = atom(IGNORED, NO_BOTS)
-const authorsOpen = atom({ plugin: 'argos', key: 'authorsOpen' } as const, false)
 // what verdicts.mjs last wrote: the AI's validations, read by the lines
 const verdicts = atom(VERDICTS, null)
 // the connected repos as repos.json keeps them (auto-merge, prompt), and which repo's Settings
 // fold is open, or asking to confirm auto-merge
 const repos = atom(REPOS, [] as RepoCfg[])
-const page = atom({ plugin: 'argos', key: 'page' } as const, 'home')
+const PAGE = { plugin: 'argos', key: 'page' } as const
+const page = atom(PAGE, 'home')
 // the presses still at work (Turning on…, Saving…), so their buttons say so
 const pending = atom({ plugin: 'argos', key: 'pending' } as const, [] as string[])
 // what setup.mjs found: gh, its accounts, repos to suggest
@@ -68,6 +73,41 @@ const connectErrors = new Map<string, string>()
 const copiedLogin = new Set<boolean>()
 const otherDraft = new Map<string, string>()
 const wantedAccount: string[] = []
+// why changing the schedule failed; repos waiting for the second tap on Disconnect
+const autoErrors = new Map<string, string>()
+const confirmDisconnect = new Set<string>()
+const humanErrors = new Map<string, string>()
+// The PRs nothing automatic may touch, as merge.mjs reads them: left to humans by hand, or by an
+// author left out in Who.
+function humanUrls(r: Round | null, hand: string[], ignored: string[]) {
+  const left = new Set(hand)
+  const skip = new Set(ignored)
+  const all = [...(r?.pending ?? []), ...(r?.mine ?? []), ...(r?.others ?? [])]
+  return [...new Set(all.filter(p => left.has(`${p.repo}#${p.number}`) || skip.has(authorOf(p)) || skip.has(`kind:${kindOf(p)}`)).map(p => p.url))]
+}
+// Writes that list; says why when it could not.
+async function writeHuman($: any, urls: string[]) {
+  try {
+    const r = await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'human', ...urls])
+    return r.exitCode ? (r.stderr ?? '').trim() || 'verdicts.mjs failed' : ''
+  } catch (err) {
+    return String((err as Error)?.message ?? err).split('\n')[0] ?? ''
+  }
+}
+// one box at a time: two ticks in a row must not overwrite each other
+let outChain: Promise<unknown> = Promise.resolve()
+// what is left to humans, as kept: another session may have changed it since this one loaded
+async function freshOut($: any): Promise<string[]> {
+  const kept = await $.store.get('out').catch(() => undefined)
+  if (Array.isArray(kept)) return kept.filter((x): x is string => typeof x === 'string')
+  return ((await $.state.get(OUT)).value as string[] | undefined) ?? []
+}
+// the sample round from /argos demo acts on nothing: no agent, no write, no token spent
+async function demoBlocks($: any, lang: string) {
+  if (!(await $.state.get(DEMO)).value) return false
+  $.ui.toast(`Argos: ${t(lang, 'demo_blocked')}`)
+  return true
+}
 // A press runs once: a second press while the first is still at work is dropped.
 const inflight = new Set<string>()
 const once = (key: string, fn: () => Promise<unknown>) => () => {
@@ -163,8 +203,12 @@ const byClone = (list: RepoCfg[], urls: string[]) => {
 // The person's own prompt replaces Argos's job only in what to look for: the verdicts are still
 // recorded with verdicts.mjs, or the pane could not show them.
 async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
-  if (!urls.length) return
-  await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'queue', ...urls])
+  if (!urls.length || (await demoBlocks($, lang))) return
+  const queued = await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'queue', ...urls])
+  if (queued?.exitCode) {
+    $.ui.toast(`Argos: ${t(lang, 'queue_failed', (queued.stderr ?? '').trim())}`)
+    return
+  }
   await loadVerdicts($)
   const list = await loadRepos($)
   const scripts = `${$.plugin.root}/scripts`
@@ -179,12 +223,19 @@ async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
           .map(r => [r!.repo, promptOf(r)]),
       )
       const lines = [...ask, `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
-      const { agentId } = await $.agent.spawn({
-        prompt: lines.join('\n'),
-        description: `Argos validate · ${part.length} PRs`,
-        ...(cwd && { cwd }),
-      })
-      if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
+      try {
+        const { agentId } = await $.agent.spawn({
+          prompt: lines.join('\n'),
+          description: `Argos validate · ${part.length} PRs`,
+          ...(cwd && { cwd }),
+        })
+        if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
+      } catch (err) {
+        // no agent will reach them: they fail now, with why, instead of waiting an hour
+        const why = String((err as Error)?.message ?? err).split('\n')[0]
+        for (const u of part) await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'fail', u, '--reason', why]).catch(() => {})
+        await loadVerdicts($)
+      }
     }
 }
 
@@ -193,17 +244,22 @@ async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
 // skips a PR it cannot fix safely (no clone, uncommitted work, conflicts). It ends with one line
 // the pane shows as a toast. The person's own prompt replaces Argos's job only in how to fix.
 async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
-  if (!urls.length) return
+  if (!urls.length || (await demoBlocks($, lang))) return
+  await $.state.set(FIX_RESULT, null)
   const list = await loadRepos($)
   const ask = compose(prompt, [t(lang, 'b_fix'), `Job: ${$.plugin.root}/references/mine.md (Job 2, in the background)`], text => [text, t(lang, 'b_fix_rules')])
   for (const [cwd, group] of byClone(list, urls)) {
     const lines = [...ask, `Scripts: ${$.plugin.root}/scripts`, ...group.map(u => (cwd ? `- ${u} (clone: ${cwd})` : `- ${u}`))]
-    const { agentId } = await $.agent.spawn({
-      prompt: lines.join('\n'),
-      description: `Argos fix · ${group.length} PRs`,
-      ...(cwd && { cwd }),
-    })
-    if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: group }))
+    try {
+      const { agentId } = await $.agent.spawn({
+        prompt: lines.join('\n'),
+        description: `Argos fix · ${group.length} PRs`,
+        ...(cwd && { cwd }),
+      })
+      if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: group }))
+    } catch (err) {
+      await $.state.set(FIX_RESULT, t(lang, 'fix_failed', String((err as Error)?.message ?? err).split('\n')[0]))
+    }
   }
 }
 
@@ -230,7 +286,10 @@ async function autoValidate($: any, r: Round | null, lang: string, prompt: Promp
   const now = await $.clock.now()
   if (v.lastAuto && now - Date.parse(v.lastAuto.at) < (v.autoEvery ?? 30) * 6e4 - 3e4) return
   const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? NO_BOTS)
-  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)) && !skip.has(`kind:${kindOf(p)}`))
+  const humanOnly = new Set(await freshOut($))
+  const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(
+    p => !skip.has(authorOf(p)) && !skip.has(`kind:${kindOf(p)}`) && !humanOnly.has(`${p.repo}#${p.number}`),
+  )
   const mine = (p: (typeof all)[number]) => p.kind === 'mine' || (Boolean(r.me) && p.author === r.me)
   const changed = (p: (typeof all)[number]) => {
     const verdict = verdictOf(p, v.prs[p.url], now)
@@ -279,14 +338,10 @@ async function load($: any): Promise<Round | null> {
 
 // Puts "/argos repos add " in the prompt for the person to finish with a folder or
 // owner/name, unless it is already there.
-async function addRepo($: any) {
-  const { text } = await $.prompt.read()
-  if (!text.includes('/argos repos add')) await $.prompt.fill({ text: '/argos repos add ', mode: 'replace' })
-}
-
 // First setup's facts (setup.mjs): gh, its accounts, repos to suggest. Run when the pane opens with
 // no repo connected, and from the setup page's buttons; never while drawing.
 async function checkSetup($: any, account?: string, lang = 'en') {
+  if ((await $.state.get(DEMO)).value) return
   if (account) wantedAccount.push(account)
   if (inflight.has('setup-check')) return
   inflight.add('setup-check')
@@ -299,7 +354,10 @@ async function checkSetup($: any, account?: string, lang = 'en') {
       asked = wantedAccount.at(-1) ?? account
       const at = new Date(await $.clock.now()).toISOString()
       try {
-        const r = await $.process.run(['node', `${$.plugin.root}/scripts/setup.mjs`, ...(asked ? ['--account', asked] : []), '--json'], { timeoutMs: 60_000 })
+        const cwd = await $.session.cwd().catch(() => '')
+        const r = await $.process.run(['node', `${$.plugin.root}/scripts/setup.mjs`, ...(asked ? ['--account', asked] : []), ...(cwd ? ['--cwd', cwd] : []), '--json'], {
+          timeoutMs: 60_000,
+        })
         info = { ...JSON.parse(r.stdout), at }
       } catch (e) {
         // a check that failed says so; it never claims gh is missing
@@ -325,6 +383,8 @@ async function openPane($: any) {
   const list = await loadRepos($)
   const done = (await $.store.get('setupDone').catch(() => undefined)) === true
   await $.state.set(SETUP_DONE, done)
+  // a first run stays on the setup page through its steps, even once a repo is connected
+  if (!list.length && !done) await $.state.set(PAGE, 'setup')
   if (!list.length && !done && !(await $.state.get(SETUP)).value) void checkSetup($)
   await $.ui.open({ id: PANE, title: 'Argos' })
 }
@@ -339,11 +399,13 @@ async function tick($: any, options: PluginOptions, force: boolean) {
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
   await $.state.set(RUNNING, true)
   try {
+    await $.state.set(OUT, await freshOut($))
     const argv = ['node', `${$.plugin.root}/scripts/round.mjs`, ...qualifiers, '--lang', lang, '--json']
     if (account) argv.push('--account', account)
     await $.process.run(argv, { timeoutMs: 120_000 })
     const fresh = await load($)
     if (fresh?.notify) $.ui.toast(fresh.notify)
+    await writeHuman($, humanUrls(fresh, await freshOut($), ((await $.state.get(IGNORED)).value as string[] | undefined) ?? NO_BOTS))
     await autoValidate($, fresh, lang, prompts.validate).catch(() => {})
     await afterVerdicts($, lang, limit).catch(() => {})
   } catch (err) {
@@ -373,6 +435,12 @@ export const register: Register = (on, options) => {
     await load($)
     await loadVerdicts($)
     // authors left out outlive the session; with none saved yet, bots stay out
+    const human = await $.store.get('out').catch(() => undefined)
+    if (Array.isArray(human))
+      await $.state.set(
+        OUT,
+        human.filter((x): x is string => typeof x === 'string'),
+      )
     const saved = await $.store.get('ignored').catch(() => undefined)
     if (Array.isArray(saved))
       await $.state.set(
@@ -430,8 +498,9 @@ export const register: Register = (on, options) => {
     if (e.agentId && runs[e.agentId]) {
       const { [e.agentId]: _, ...rest } = runs
       await $.state.set(FIX_RUNS, rest)
-      const last = e.answer.trim().split('\n').at(-1)?.trim()
-      $.ui.toast(`Argos: ${last || t(config(options).lang, 'fix_ended')}`)
+      const said = e.answer.trim().split('\n').at(-1)?.trim() || t(config(options).lang, 'fix_ended')
+      await $.state.set(FIX_RESULT, said)
+      $.ui.toast(`Argos: ${said}`)
     }
     return next(e)
   })
@@ -486,7 +555,8 @@ export const register: Register = (on, options) => {
     if ((await $.state.get(DEMO)).value) {
       await $.state.set(ROUND, null)
       await $.state.set(VERDICTS, null)
-      await update($, out, () => [])
+      const kept = await freshOut($)
+      await update($, out, () => kept)
       await update($, back, () => [])
     }
     await $.state.set(DEMO, false)
@@ -503,14 +573,13 @@ export const register: Register = (on, options) => {
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
-    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, where, confirming, fixing, validating, busyKeys, setupData, setupDone] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, repoList, where, confirming, fixing, validating, busyKeys, setupData, setupDone, lastFix] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
       read($, back),
       read($, verdicts),
       read($, ignored),
-      read($, authorsOpen),
       read($, repos),
       read($, page),
       read($, confirmMerge),
@@ -519,6 +588,7 @@ export const register: Register = (on, options) => {
       read($, pending),
       read($, setupInfo),
       read($, setupDoneAtom),
+      read($, fixResult),
     ])
     // the agents at work first: a line a fixing agent holds says so
     const working = (await $.agent.list().catch(() => []))
@@ -640,10 +710,6 @@ export const register: Register = (on, options) => {
         vm.error.isAuth ? { label: t(lang, 'in_fix_auth'), onPress: () => void fixAuth() } : { label: t(lang, 'in_retry'), onPress: checkNow },
       )
 
-    const setAuto = async (mode: string, every: number) => {
-      await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
-      await loadVerdicts($)
-    }
     const noop = () => undefined
     // a press that takes a while: once, and shown as at work until it ends
     const work = (key: string, fn: () => Promise<unknown>) =>
@@ -656,6 +722,18 @@ export const register: Register = (on, options) => {
         }
       })
     const isWorking = (key: string) => busyKeys.includes(key)
+    const setAuto = async (mode: string, every: number) => {
+      if (await demoBlocks($, lang)) return
+      autoErrors.delete('auto')
+      try {
+        const r = await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
+        if (r.exitCode) autoErrors.set('auto', (r.stderr ?? '').trim())
+      } catch (err) {
+        autoErrors.set('auto', String((err as Error)?.message ?? err).split('\n')[0])
+      }
+      await loadVerdicts($)
+    }
+    const autoSays = () => (autoErrors.has('auto') ? t(lang, 'auto_failed', autoErrors.get('auto') ?? '') : vm.state === 'ok' ? vm.auto.line : '')
 
     // First setup: with no repo connected and the setup never finished, the pane opens on three
     // steps (the GitHub CLI, the account, the repos), each saying where it stands and the one thing
@@ -672,10 +750,14 @@ export const register: Register = (on, options) => {
       const connected = new Set(repoList.map(r => r.repo.toLowerCase()))
       const connect = (target: string, key: string) =>
         work(key, async () => {
+          // the first connection must not drop the page: the steps after it are still to come
+          await update($, page, () => 'setup')
           const r = await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, 'add', target, ...(account ? ['--account', account] : []), '--lang', lang])
           await loadRepos($)
-          if (r.exitCode) connectErrors.set(key, (r.stderr || r.stdout || '').trim() || t(lang, 'su_connect_failed_why'))
-          else connectErrors.delete(key)
+          if (r.exitCode) {
+            connectErrors.set(key, (r.stderr || r.stdout || '').trim() || t(lang, 'su_connect_failed_why'))
+            $.ui.toast(`Argos: ${connectErrors.get(key)}`)
+          } else connectErrors.delete(key)
         })
       // another repo by name: only owner/name goes to repos.mjs; anything else says how to write it
       const connectOther = (text: string) => {
@@ -740,7 +822,7 @@ export const register: Register = (on, options) => {
                 <Box flexDirection="row">
                   <Button
                     key="copy-login"
-                    variant="secondary"
+                    variant={copiedLogin.size ? 'secondary' : 'primary'}
                     onPress={work('copy-login', async () => {
                       await $.ui.copy({ text: 'gh auth login' })
                       copiedLogin.add(true)
@@ -754,7 +836,12 @@ export const register: Register = (on, options) => {
             )}
             <Box flexDirection="column" gap={SPACE.line}>
               <Box flexDirection="row">
-                <Button key="check-gh" variant="secondary" dimColor={checking} onPress={checking ? noop : () => void checkSetup($, account || undefined, lang)}>
+                <Button
+                  key="check-gh"
+                  variant={ghProblem !== 'none' || copiedLogin.size ? 'primary' : 'secondary'}
+                  dimColor={checking}
+                  onPress={checking ? noop : () => void checkSetup($, account || undefined, lang)}
+                >
                   {checking ? t(lang, 'su_gh_checking') : t(lang, 'su_check_gh')}
                 </Button>
               </Box>
@@ -829,7 +916,8 @@ export const register: Register = (on, options) => {
                 key="connect-here"
                 variant="secondary"
                 dimColor={checking || connected.has(here.toLowerCase()) || isWorking('connect-here')}
-                onPress={checking || connected.has(here.toLowerCase()) || isWorking('connect-here') ? noop : connect(here, 'connect-here')}
+                // by folder, not by name: the repo then knows its clone, which agents run in
+                onPress={checking || connected.has(here.toLowerCase()) || isWorking('connect-here') ? noop : async () => connect(await $.session.cwd(), 'connect-here')()}
               >
                 {connected.has(here.toLowerCase())
                   ? t(lang, 'su_here_connected')
@@ -872,7 +960,7 @@ export const register: Register = (on, options) => {
           <Text weight="semibold" color={C.text}>
             {t(lang, 'su_defaults')}
           </Text>
-          <Box flexDirection="column" gap={SPACE.inline} marginLeft={3}>
+          <Box flexDirection="column" gap={SPACE.inline}>
             {note(`${t(lang, 'su_who')}: ${vm.state === 'ok' ? vm.who.label.replace(/^[^:]+:\s*/, '') : t(lang, 'su_who_default')}`)}
             {note(`${t(lang, 'auto_label')}: ${autoOn ? t(lang, 'su_auto_on') : t(lang, 'su_auto_off')}`)}
             <Box flexDirection="row">
@@ -932,7 +1020,7 @@ export const register: Register = (on, options) => {
         head(false),
         banner('norepo', { bg: PANEL.backgroundColor, border: PANEL.borderColor }, I.pr(HEX.grey), t(lang, 'in_norepo_title'), t(lang, 'in_norepo_body'), {
           label: t(lang, 'in_setup'),
-          onPress: () => void addRepo($),
+          onPress: () => void (update($, page, () => 'setup'), checkSetup($, undefined, lang)),
         }),
       )
     if (vm.state !== 'ok') return frame(head(true))
@@ -944,11 +1032,35 @@ export const register: Register = (on, options) => {
     // bare text. A control never disappears while a run goes: it dims, says so ("Validating…") and
     // does nothing until the run ends. A press runs once: a second press while the first one is
     // still at work is dropped.
-    const goTo = (to: string) => void update($, page, () => to)
+    const focus = (key: string) => void $.ui.focus({ requestId: PANE, key }).catch(() => {})
+    const goTo = (to: string) => void update($, page, () => to).then(() => focus(to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back'))
+    // a box unticked by hand leaves the PR to humans: nothing automatic touches it, and it stays so
+    const setOut = (fn: (list: string[]) => string[]) =>
+      (outChain = outChain.then(async () => {
+        if ((await $.state.get(DEMO)).value) return void (await update($, out, list => fn(list)))
+        // another session may have changed it: start from what is kept
+        const before = await freshOut($)
+        const next = fn(before)
+        await update($, out, () => next)
+        await $.store.set('out', next).catch(() => {})
+        const failed = await writeHuman($, humanUrls(last, next, authorsOut))
+        if (!failed) return void humanErrors.delete('human')
+        // merge.mjs would not know: the box goes back to what it was, and says why
+        await update($, out, () => before)
+        await $.store.set('out', before).catch(() => {})
+        humanErrors.set('human', failed)
+        $.ui.toast(`Argos: ${t(lang, 'human_failed', failed)}`)
+      }))
     const repoCmd = async (...args: string[]) => {
-      const r = await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
+      if (await demoBlocks($, lang)) return { exitCode: 0 }
+      let r: { exitCode?: number; stderr?: string } | undefined
+      try {
+        r = await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
+      } catch (err) {
+        r = { exitCode: 1, stderr: String((err as Error)?.message ?? err) }
+      }
       await loadRepos($)
-      return r as { exitCode?: number; stderr?: string } | undefined
+      return r
     }
     const busy = Boolean(vm.run?.isRunning)
     // what the run holds: a Validate whose PRs are in it says Validating…, the rest only dim
@@ -984,43 +1096,72 @@ export const register: Register = (on, options) => {
     const isFixing = working.some(a => fixing[a.id])
     // the run line stays only when no validating agent stands for the run (a run the chat started)
     const runLine = vm.run?.isRunning && !working.some(a => validating[a.id]) && (
-      <Box key="run" flexDirection="row" alignItems="center" gap={SPACE.row}>
-        {icon(I.spin, '⠿', 14, 14, t(lang, 'cd_validating'))}
-        <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.row}>
+      <Box key="run" flexDirection="column" gap={SPACE.row}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
+          {icon(I.spin, '⠿', 14, 14, t(lang, 'cd_validating'))}
           <Text size="caption" weight="semibold" color={C.text}>
             {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
           </Text>
           {vm.run.failed > 0 && (
             <Text size="caption" weight="semibold" color={C.error}>
-              {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+              {t(lang, 'run_failed', vm.run.failed)}
             </Text>
           )}
         </Box>
+        {/* no agent holds this run (it died with its session): the way out of the wait */}
+        <Box flexDirection="row">
+          <Button
+            key="stop-run"
+            variant="secondary"
+            dimColor={isWorking('stop-run')}
+            onPress={
+              isWorking('stop-run')
+                ? noop
+                : work('stop-run', async () => {
+                    for (const u of vm.run!.urls.filter(u => ['queued', 'running'].includes(judged?.prs[u]?.state ?? '')))
+                      await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'fail', u, '--reason', t(lang, 'run_stopped')]).catch(() => {})
+                    await loadVerdicts($)
+                  })
+            }
+          >
+            {isWorking('stop-run') ? t(lang, 'run_stopping') : t(lang, 'run_stop')}
+          </Button>
+        </Box>
       </Box>
     )
-    // what the last run came to, until the next run or check; Retry on its own row under it
+    // what the last run came to, until the next run; what failed stays, with why, until handled
     const doneLine = vm.run && !vm.run.isRunning && (
       <Box key="run" flexDirection="column" gap={SPACE.row}>
-        <Box flexDirection="row" alignItems="center" gap={SPACE.row}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
           {!vm.run.failed && icon(I.check, '✓', 14, 14)}
-          <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.row}>
-            <Text size="caption" weight="semibold" color={C.text}>
-              {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
+          <Text size="caption" weight="semibold" color={C.text}>
+            {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
+          </Text>
+          {vm.run.failed > 0 && (
+            <Text size="caption" weight="semibold" color={C.error}>
+              {t(lang, 'run_failed', vm.run.failed)}
             </Text>
-            {vm.run.failed > 0 && (
-              <Text size="caption" weight="semibold" color={C.error}>
-                {`· ${t(lang, 'run_failed', vm.run.failed)}`}
-              </Text>
-            )}
-            {(vm.run.merged > 0 || vm.run.approved > 0) && (
-              <Text size="caption" color={C.text}>
-                {['', vm.run.merged ? t(lang, 'run_merged', vm.run.merged) : '', vm.run.approved ? t(lang, 'run_approved', vm.run.approved) : '']
-                  .filter((x, i) => !i || x)
-                  .join(' · ')}
-              </Text>
-            )}
-          </Box>
+          )}
+          {vm.run.merged > 0 && (
+            <Text size="caption" color={C.text}>
+              {t(lang, 'run_merged', vm.run.merged)}
+            </Text>
+          )}
+          {vm.run.approved > 0 && (
+            <Text size="caption" color={C.text}>
+              {t(lang, 'run_approved', vm.run.approved)}
+            </Text>
+          )}
         </Box>
+        {vm.failedLines.length > 0 && (
+          <Box flexDirection="column" gap={SPACE.line}>
+            {vm.failedLines.map(x => (
+              <Text key={`failed:${x.key}`} size="caption" color={C.error}>
+                {`${x.where}: ${x.why}`}
+              </Text>
+            ))}
+          </Box>
+        )}
         {vm.run.retry.length > 0 && (
           <Box flexDirection="row">
             <Button
@@ -1091,7 +1232,7 @@ export const register: Register = (on, options) => {
       working?: string
     }
     const card = (key: string, title: string, body: string, btn?: Action) => (
-      <Box key={key} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={24} {...PANEL}>
+      <Box key={key} flexDirection="column" flexGrow={1} flexShrink={1} width="48%" minWidth={28} {...PANEL}>
         <Box flexDirection="column" gap={SPACE.line}>
           <Text weight="semibold" color={C.text}>
             {title}
@@ -1136,7 +1277,7 @@ export const register: Register = (on, options) => {
         {card(
           'card:mine',
           t(lang, 'cd_mine_title', vm.rework.length),
-          isFixing ? t(lang, 'cd_mine_fixing') : vm.rework.length ? t(lang, 'cd_mine_body') : t(lang, 'cd_mine_none'),
+          isFixing ? t(lang, 'cd_mine_fixing') : lastFix ? lastFix : vm.rework.length ? t(lang, 'cd_mine_body') : t(lang, 'cd_mine_none'),
           vm.rework.length || isFixing
             ? {
                 key: 'fix',
@@ -1162,7 +1303,7 @@ export const register: Register = (on, options) => {
         {card(
           'card:auto',
           t(lang, 'auto_label'),
-          vm.auto.line,
+          autoSays(),
           vm.auto.mode === 'off'
             ? {
                 key: 'auto-on',
@@ -1180,15 +1321,40 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // The repos, as a list: each row its name in semibold with its counts under it, always in one
-    // order (PRs, to validate, with issues, zeros left out), and on the right one button that opens
-    // its page. The button's words never change during a run, so the target stays still; only the
-    // counts move. A Box cannot be pressed, so the button is the row's one target.
     const sectionTitle = (title: string) => (
       <Text weight="semibold" color={C.text}>
         {title}
       </Text>
     )
+    // What waits on the person, oldest first: the first thing the dashboard answers. The title opens
+    // the PR; sending it to the AI comes after, from the cards and the repo pages.
+    const NEEDS_SHOWN = 6
+    const needs = (
+      <Box key="needs" flexDirection="column" gap={SPACE.block}>
+        {sectionTitle(t(lang, 'nd_title', vm.needs.length))}
+        {vm.needs.length === 0 && (
+          <Text size="caption" color={C.subtle}>
+            {t(lang, 'nd_none')}
+          </Text>
+        )}
+        {vm.needs.slice(0, NEEDS_SHOWN).map(x => (
+          <Box key={`need:${x.key}`} flexDirection="column" gap={SPACE.line}>
+            <ui.Link href={x.url}>{x.title}</ui.Link>
+            <Text size="caption" color={C.subtle}>
+              {x.line}
+            </Text>
+          </Box>
+        ))}
+        {vm.needs.length > NEEDS_SHOWN && (
+          <Text size="caption" color={C.subtle}>
+            {t(lang, 'nd_more', vm.needs.length - NEEDS_SHOWN)}
+          </Text>
+        )}
+      </Box>
+    )
+    // The repos, as a list: each its name in semibold with its counts under it, always in one order
+    // (PRs, to validate, with issues, zeros left out), and on the right the button that opens its
+    // page. Its words never change during a run, so the target stays still; only the counts move.
     const repoRows = (
       <Box key="repos" flexDirection="column" gap={SPACE.block}>
         {sectionTitle(t(lang, 'rl_title'))}
@@ -1199,13 +1365,23 @@ export const register: Register = (on, options) => {
                 <Text weight="semibold" color={C.text} wrap="truncate">
                   {g.name}
                 </Text>
-                <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.row}>
+                <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.inline}>
                   <Text size="caption" color={C.subtle}>
-                    {[t(lang, 'rl_prs', g.rows.length), g.go.length ? t(lang, 'rl_go', g.go.length) : ''].filter(Boolean).join(' · ')}
+                    {g.rows.length ? t(lang, 'rl_prs', g.rows.length) : t(lang, 'rl_none')}
                   </Text>
+                  {g.go.length > 0 && (
+                    <Text size="caption" color={C.subtle}>
+                      {t(lang, 'rl_go', g.go.length)}
+                    </Text>
+                  )}
                   {g.issues > 0 && (
                     <Text size="caption" color={C.warning}>
-                      {`· ${t(lang, 'rl_issues', g.issues)}`}
+                      {t(lang, 'rl_issues', g.issues)}
+                    </Text>
+                  )}
+                  {g.failed > 0 && (
+                    <Text size="caption" color={C.error}>
+                      {t(lang, 'run_failed', g.failed)}
                     </Text>
                   )}
                 </Box>
@@ -1239,10 +1415,10 @@ export const register: Register = (on, options) => {
       const keys = new Set(g.keys)
       const reasons = new Set(g.reasonKeys)
       if (g.isAll) {
-        await update($, out, list => [...new Set([...list, ...g.keys.filter(k => !reasons.has(k))])])
+        await setOut(list => [...new Set([...list, ...g.keys.filter(k => !reasons.has(k))])])
         await update($, back, list => list.filter(k => !reasons.has(k)))
       } else {
-        await update($, out, list => list.filter(k => !keys.has(k)))
+        await setOut(list => list.filter(k => !keys.has(k)))
         await update($, back, list => [...new Set([...list, ...g.reasonKeys])])
       }
     }
@@ -1250,17 +1426,17 @@ export const register: Register = (on, options) => {
     const toggle = (x: Row) => {
       if (!x.canToggle) return
       if (x.isAuto) void update($, back, list => [...list, x.key])
-      else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
+      else void setOut(list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
     }
     // the boxes' numbers padded to one width with figure spaces, so every box is as wide
     const padNum = (num: string, w: number) => '\u2007'.repeat(Math.max(0, w - num.length)) + num
     const line = (x: Row, numW: number) => (
-      <Box key={x.key} flexDirection="row" alignItems="center" gap={SPACE.inline}>
+      <Box key={x.key} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
         {/* the box names its PR and stays through a run, dimmed, so the focus and the column never
             move; a line that cannot be picked here (its author left out in Who, or Argos at work
             on it) keeps it dimmed too, and the line says why */}
         <Button key={`pick:${x.key}`} variant="secondary" dimColor={busy || !x.canToggle || x.isRunning} onPress={busy || !x.canToggle || x.isRunning ? noop : () => toggle(x)}>
-          {`${x.isIn ? BOX.on : BOX.off} ${padNum(x.num, numW)}`}
+          {`${x.isIn ? BOX.on : x.isAuto ? BOX.mixed : BOX.off} ${padNum(x.num, numW)}`}
         </Button>
         {/* the verdict keeps one width, filled or not, so the avatars and titles line up; in a run
             the line's mark takes it */}
@@ -1277,29 +1453,28 @@ export const register: Register = (on, options) => {
           )}
         </Box>
         {icon(x.avatar, x.author.slice(0, 1).toUpperCase(), 16, 16, x.authorTip)}
-        {/* one line tall whatever the state: the title gives way, its reason stays */}
-        <Box flexDirection="row" alignItems="center" gap={SPACE.row} flexGrow={1} flexShrink={1} minWidth={0}>
-          <Box flexShrink={1} minWidth={0}>
-            <Text size="caption" color={x.isIn || x.isRunning ? C.text : C.subtle} wrap="truncate">
-              {x.title}
+        {/* two lines, whatever the state, so the row never changes height: the title opens the PR;
+            under it its age, then how it stands in words, its colour only repeating them */}
+        <Box flexDirection="column" gap={SPACE.line} flexGrow={1} flexShrink={1} width="40%" minWidth={24}>
+          <Text size="caption" color={x.isIn || x.isRunning || x.vstate === 'issues' ? C.text : C.subtle}>
+            <ui.Link href={x.url}>{x.title}</ui.Link>
+          </Text>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.inline}>
+            <Text size="caption" color={C.subtle}>
+              {x.age}
             </Text>
-          </Box>
-          {/* in the last run, how it ended: the word first, its colour only repeats it */}
-          {x.status ? (
-            <Box flexShrink={0}>
+            {x.status ? (
               <Text size="caption" color={x.status.color}>
-                {`· ${x.status.text}`}
+                {x.status.text}
               </Text>
-            </Box>
-          ) : (
-            (x.why || x.mergeNote) && (
-              <Box flexShrink={0}>
-                <Text size="caption" color={C.subtle}>
-                  {`· ${[x.why, x.mergeNote].filter(Boolean).join(' · ')}`}
+            ) : (
+              x.said.map(n => (
+                <Text key={n.text} size="caption" color={n.color}>
+                  {n.text}
                 </Text>
-              </Box>
-            )
-          )}
+              ))
+            )}
+          </Box>
         </Box>
       </Box>
     )
@@ -1308,6 +1483,11 @@ export const register: Register = (on, options) => {
       return frame(
         bar(g.name),
         agents,
+        humanErrors.has('human') && (
+          <Text key="human-failed" size="caption" color={C.error}>
+            {t(lang, 'human_failed', humanErrors.get('human') ?? '')}
+          </Text>
+        ),
         <Box key="repo-head" flexDirection="column" gap={SPACE.block}>
           <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
             <Button key={`repo:${g.repo}`} variant="secondary" dimColor={busy || !g.keys.length} onPress={busy || !g.keys.length ? noop : () => void pickRepo(g)}>
@@ -1320,6 +1500,11 @@ export const register: Register = (on, options) => {
             )}
           </Box>
           <Box flexDirection="column" gap={SPACE.row}>
+            {g.rows.length === 0 && (
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'rl_none')}
+              </Text>
+            )}
             {g.rows.map(x => line(x, Math.max(...g.rows.map(r => r.num.length))))}
           </Box>
         </Box>,
@@ -1353,9 +1538,9 @@ export const register: Register = (on, options) => {
             key="clear"
             variant="secondary"
             dimColor={busy || !going.length}
-            onPress={busy || !going.length ? noop : () => void update($, out, list => [...new Set([...list, ...going.map(x => x.key)])])}
+            onPress={busy || !going.length ? noop : () => void setOut(list => [...new Set([...list, ...going.map(x => x.key)])])}
           >
-            {t(lang, 'in_clear')}
+            {t(lang, 'in_clear', going.length)}
           </Button>
         </Box>,
       )
@@ -1369,6 +1554,9 @@ export const register: Register = (on, options) => {
       let next: string[] = []
       await update($, ignored, list => (next = fn(list)))
       await $.store.set('ignored', next).catch(() => {})
+      if ((await $.state.get(DEMO)).value) return
+      const failed = await writeHuman($, humanUrls(last, left, next))
+      if (failed) $.ui.toast(`Argos: ${t(lang, 'human_failed', failed)}`)
     }
     // an author out with their whole kind comes back alone: the kind turns into its other names
     const toggleAuthor = (a: (typeof vm.authors)[number]) =>
@@ -1383,7 +1571,10 @@ export const register: Register = (on, options) => {
     // done, and says why when it is not.
     const setMerge = async (repo: string, isOn: boolean) => {
       const r = await repoCmd('merge', repo, isOn ? 'on' : 'off')
-      if (r && r.exitCode) return void mergeErrors.set(repo, (r.stderr ?? '').trim() || t(lang, 'mg_failed'))
+      if (r && r.exitCode) {
+        mergeErrors.set(repo, (r.stderr ?? '').trim())
+        return void $.ui.toast(`Argos: ${t(lang, isOn ? 'mg_failed_off' : 'mg_failed_on')}`)
+      }
       mergeErrors.delete(repo)
       await update($, confirmMerge, () => null)
     }
@@ -1392,8 +1583,10 @@ export const register: Register = (on, options) => {
     const savePrompt = async (repo: string, text: string) => {
       const r = await repoCmd('prompt', repo, text.trim())
       promptSaved.set(repo, !r?.exitCode)
-      if (r?.exitCode) promptErrors.set(repo, (r.stderr ?? '').trim() || t(lang, 'rp_cmd_failed'))
-      else drafts.delete(repo), promptErrors.delete(repo)
+      if (r?.exitCode) {
+        promptErrors.set(repo, (r.stderr ?? '').trim() || t(lang, 'rp_cmd_failed'))
+        $.ui.toast(`Argos: ${t(lang, 'rp_failed', promptErrors.get(repo) ?? '')}`)
+      } else drafts.delete(repo), promptErrors.delete(repo)
     }
     const section = (key: string, title: string, ...body: any[]) => (
       <Box key={key} flexDirection="column" gap={SPACE.block}>
@@ -1433,42 +1626,32 @@ export const register: Register = (on, options) => {
       <Box key="auto-controls" flexDirection="column" gap={SPACE.row}>
         <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.block} rowGap={SPACE.row}>
           {Select && (
-            <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
-              <Text size="caption" color={C.subtle}>
-                {t(lang, 'auto_what')}
-              </Text>
-              <Select
-                key="auto-mode"
-                label={t(lang, 'auto_what')}
-                options={['off', 'mine', 'all'].map(m => ({
-                  value: m,
-                  label: t(lang, `auto_mode_${m}`),
-                }))}
-                value={vm.auto.mode}
-                onSelect={(m: string) => work('auto-schedule', () => setAuto(m, vm.auto.every))()}
-              />
-            </Box>
+            <Select
+              key="auto-mode"
+              label={t(lang, 'auto_what')}
+              options={['off', 'mine', 'all'].map(m => ({
+                value: m,
+                label: t(lang, `auto_mode_${m}`),
+              }))}
+              value={vm.auto.mode}
+              onSelect={(m: string) => work('auto-schedule', () => setAuto(m, vm.auto.every))()}
+            />
           )}
           {Select && vm.auto.mode !== 'off' && (
-            <Box flexDirection="row" alignItems="center" gap={SPACE.inline}>
-              <Text size="caption" color={C.subtle}>
-                {t(lang, 'auto_how_often')}
-              </Text>
-              <Select
-                key="auto-every"
-                label={t(lang, 'auto_how_often')}
-                options={[15, 30, 60].map(n => ({
-                  value: String(n),
-                  label: t(lang, 'auto_every', n),
-                }))}
-                value={String(vm.auto.every)}
-                onSelect={(n: string) => work('auto-schedule', () => setAuto(vm.auto.mode, Number(n)))()}
-              />
-            </Box>
+            <Select
+              key="auto-every"
+              label={t(lang, 'auto_how_often')}
+              options={[15, 30, 60].map(n => ({
+                value: String(n),
+                label: t(lang, 'auto_every', n),
+              }))}
+              value={String(vm.auto.every)}
+              onSelect={(n: string) => work('auto-schedule', () => setAuto(vm.auto.mode, Number(n)))()}
+            />
           )}
         </Box>
-        <Text size="caption" color={C.subtle}>
-          {isWorking('auto-schedule') ? t(lang, 'auto_saving') : vm.auto.line}
+        <Text size="caption" color={autoErrors.has('auto') ? C.error : C.subtle}>
+          {isWorking('auto-schedule') ? t(lang, 'auto_saving') : autoSays()}
         </Text>
       </Box>,
     )
@@ -1492,16 +1675,28 @@ export const register: Register = (on, options) => {
                   ? noop
                   : g.merge
                     ? work(`merge:${g.repo}`, () => setMerge(g.repo, false))
-                    : () => void update($, confirmMerge, () => g.repo)
+                    : () => void update($, confirmMerge, () => g.repo).then(() => focus(`merge-yes:${g.repo}`))
               }
             >
-              {t(lang, g.merge ? 'mg_turn_off' : 'mg_turn_on')}
+              {isWorking(`merge:${g.repo}`) ? t(lang, g.merge ? 'mg_turning_off' : 'mg_turning_on') : t(lang, g.merge ? 'mg_turn_off' : 'mg_turn_on', clip(g.name, 16))}
             </Button>
           </Box>
           {g.merge && (
             <Text size="caption" color={C.subtle}>
               {t(lang, 'mg_on_note')}
             </Text>
+          )}
+          {mergeErrors.get(g.repo) !== undefined && (
+            <Box flexDirection="column" gap={SPACE.line}>
+              {mergeErrors.get(g.repo) && (
+                <Text size="caption" color={C.error}>
+                  {mergeErrors.get(g.repo)}
+                </Text>
+              )}
+              <Text size="caption" color={C.text}>
+                {t(lang, g.merge ? 'mg_failed_on' : 'mg_failed_off')}
+              </Text>
+            </Box>
           )}
         </Box>
         {confirming === g.repo && (
@@ -1534,16 +1729,6 @@ export const register: Register = (on, options) => {
             <Text size="caption" color={C.subtle}>
               {t(lang, 'mg_method')}
             </Text>
-            {mergeErrors.get(g.repo) && (
-              <Box flexDirection="column" gap={SPACE.line}>
-                <Text size="caption" color={C.error}>
-                  {mergeErrors.get(g.repo)}
-                </Text>
-                <Text size="caption" color={C.text}>
-                  {t(lang, 'mg_failed')}
-                </Text>
-              </Box>
-            )}
             <Box flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
               <Button
                 key={`merge-yes:${g.repo}`}
@@ -1557,7 +1742,7 @@ export const register: Register = (on, options) => {
                 key={`merge-cancel:${g.repo}`}
                 variant="secondary"
                 dimColor={isWorking(`merge:${g.repo}`)}
-                onPress={isWorking(`merge:${g.repo}`) ? noop : () => void update($, confirmMerge, () => null)}
+                onPress={isWorking(`merge:${g.repo}`) ? noop : () => void update($, confirmMerge, () => null).then(() => focus(`merge:${g.repo}`))}
               >
                 {t(lang, 'cancel')}
               </Button>
@@ -1572,7 +1757,7 @@ export const register: Register = (on, options) => {
               placeholder={t(lang, 'rp_placeholder')}
               rows={3}
               value={drafts.get(g.repo) ?? g.prompt}
-              submitLabel={t(lang, 'rp_save')}
+              submitLabel={t(lang, 'rp_save', clip(g.name, 16))}
               onInput={(text: string) => void (drafts.set(g.repo, text), promptSaved.delete(g.repo))}
               onSubmit={(text: string) => work(`prompt:${g.repo}`, () => savePrompt(g.repo, text))()}
             />
@@ -1587,7 +1772,7 @@ export const register: Register = (on, options) => {
               dimColor={isWorking(`prompt:${g.repo}`)}
               onPress={isWorking(`prompt:${g.repo}`) ? noop : work(`prompt:${g.repo}`, () => savePrompt(g.repo, drafts.get(g.repo) ?? g.prompt))}
             >
-              {isWorking(`prompt:${g.repo}`) ? t(lang, 'rp_saving') : t(lang, 'rp_save')}
+              {isWorking(`prompt:${g.repo}`) ? t(lang, 'rp_saving') : t(lang, 'rp_save', clip(g.name, 16))}
             </Button>
             {promptSaved.has(g.repo) ? (
               <Text size="caption" color={promptSaved.get(g.repo) ? C.success : C.error}>
@@ -1602,6 +1787,26 @@ export const register: Register = (on, options) => {
               )
             )}
           </Box>
+        </Box>
+        <Box flexDirection="row">
+          <Button
+            key={`disconnect:${g.repo}`}
+            variant="secondary"
+            dimColor={isWorking(`disconnect:${g.repo}`)}
+            onPress={
+              isWorking(`disconnect:${g.repo}`)
+                ? noop
+                : confirmDisconnect.has(g.repo)
+                  ? work(`disconnect:${g.repo}`, async () => {
+                      confirmDisconnect.delete(g.repo)
+                      await repoCmd('remove', g.repo)
+                      await tick($, options, true)
+                    })
+                  : work(`ask:${g.repo}`, async () => void confirmDisconnect.add(g.repo))
+            }
+          >
+            {isWorking(`disconnect:${g.repo}`) ? t(lang, 'rp_disconnecting') : t(lang, confirmDisconnect.has(g.repo) ? 'rp_disconnect_sure' : 'rp_disconnect', clip(g.name, 16))}
+          </Button>
         </Box>
       </Box>
     )
@@ -1624,6 +1829,6 @@ export const register: Register = (on, options) => {
     const opened = vm.groups.find(g => g.repo === where)
     if (where === 'settings') return settingsPage()
     if (opened) return repoPage(opened)
-    return frame(head(true), failedBanner, agents, cards, repoRows)
+    return frame(head(true), failedBanner, needs, agents, cards, repoRows)
   })
 }

@@ -56,11 +56,12 @@ test('one list: every open PR in a fixed order, all going to validation but what
   // a repo with a draft or a change request left out is not "all": its heading box is mixed
   expect(vm.groups.map(g => [g.name, g.rows.length, g.count, g.mark])).toEqual([
     ['api', 1, '1 of 1', 'on'],
+    // connected, no open PR: it keeps its row
+    ['docs', 0, '0 of 0', 'off'],
     ['portal', 4, '2 of 4', 'mixed'],
     ['web', 2, '2 of 2', 'on'],
   ])
   expect(vm.summary).toBe('5 to validate · 3 repos')
-  expect(vm.autoLine).toBe('Left out by itself: 1 change request · 1 draft')
   expect(vm.authors.map(a => [a.name, a.kind, a.count])).toEqual([
     ['me', 'human', 4],
     ['bia', 'human', 1],
@@ -155,8 +156,8 @@ test('a run: failed ones say why and go again; a line stuck past the limit count
   expect([row.isIn, row.verdict?.count, row.status?.text, row.status?.color]).toEqual([true, '✕', 'failed · timed out after 10 min', 'error'])
   // its verdict is on an older commit than the head, and says so
   expect(stuck.rows.find(x => x.key === 'acme/api#9')?.status?.text).toBe('validated · new commits since')
-  // a newer check takes the run line and the words off
-  expect(ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) })).run).toBe(null)
+  // a newer check does not take away what failed: it stays until handled
+  expect(ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) })).run?.failed).toBe(1)
   const merged = ok(
     toViewModel(before as never, {
       now: NOW,
@@ -183,6 +184,7 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
   )
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('clock.now', clock)
   on('store.set', () => ({ value: undefined }))
   const ui = await $.ui.mount(PANE)
@@ -197,17 +199,19 @@ test('the dashboard: what stands in cards, one line per repo; a repo page has it
   await ui.press({ key: 'pick:acme/web#7' })
   expect(await text('validate')).toBe('Validate 1 PR')
   await ui.press({ key: 'back' })
+  // what was unticked by hand stays with humans: the dashboard's Validate does not send it
+  expect(await text('validate-clean')).toBe('Validate 4 PRs')
   // Settings: Who leaves an author out everywhere; the line stays, unpicked
   await ui.press({ key: 'settings-page' })
   expect(await text('who:me')).toBe('☑ me 4')
   await ui.press({ key: 'who:me' })
   expect([await text('who:me'), (await ui.find({ type: 'Text', text: /^Who:/ }))?.text]).toEqual(['☐ me 4', 'Who: Everyone but bots · me out'])
   await ui.press({ key: 'back' })
-  expect(await text('validate-clean')).toBe('Validate 3 PRs')
+  expect(await text('validate-clean')).toBe('Validate 2 PRs')
   // an author left out: their box dims and does nothing, the line says why
   await ui.press({ key: 'open:acme/portal' })
   await ui.press({ key: 'pick:acme/portal#220' })
-  expect([await text('pick:acme/portal#220'), (await ui.find({ type: 'Text', text: /author out/ }))?.text]).toEqual(['☐ #220', '· author out · see Settings'])
+  expect([await text('pick:acme/portal#220'), (await ui.find({ type: 'Text', text: /author out/ }))?.text]).toEqual(['☐ #220', 'author out · see Settings'])
   await ui.unmount()
 })
 test('Validate N marks them running and hands them to background subagents, ten each', async ($, on) => {
@@ -269,6 +273,7 @@ test('on a repo page its box takes or leaves the whole repo; Validate and Clear 
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
     e.key === 'round' ? { value: { value: round, version: 1 } } : next(e),
   )
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('clock.now', clock)
   on('store.set', () => ({ value: undefined }))
   const ui = await $.ui.mount(PANE)
@@ -277,7 +282,7 @@ test('on a repo page its box takes or leaves the whole repo; Validate and Clear 
   // portal goes 2 of 4 (a draft and a change request left out): its box takes those too
   expect(await text('repo:acme/portal')).toBe('◩ Select all · 2 of 4')
   await ui.press({ key: 'repo:acme/portal' })
-  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑ Clear all · 4 of 4', 'Validate 4 PRs'])
+  expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☑ Leave all to humans · 4 of 4', 'Validate 4 PRs'])
   // and leaves them: the draft and the change request go back to the pane, the rest out by hand
   await ui.press({ key: 'repo:acme/portal' })
   expect([await text('repo:acme/portal'), await text('validate')]).toEqual(['☐ Select all · 0 of 4', 'Validate PRs'])
@@ -285,7 +290,7 @@ test('on a repo page its box takes or leaves the whole repo; Validate and Clear 
   await ui.press({ key: 'pick:acme/portal#221' })
   expect(await text('validate')).toBe('Validate 2 PRs')
   await ui.press({ key: 'clear' })
-  expect([await text('validate'), await text('clear')]).toEqual(['Validate PRs', 'Clear selection'])
+  expect([await text('validate'), await text('clear')]).toEqual(['Validate PRs', 'Leave PRs to humans'])
   // the other repos keep their picks
   await ui.press({ key: 'back' })
   expect(await text('open:acme/web')).toBe('Open web')
@@ -315,10 +320,10 @@ test('automatic mode, a repo\'s auto-merge (two taps on, one off) and its own pr
   await ui.select({ key: 'auto-mode', value: 'all' })
   expect(runs.at(-1)).toEqual(['auto', 'all', '--every', '30'])
   // auto-merge, on the Settings page: Turn on asks first, naming what it will do on GitHub
-  expect(await text('merge:acme/web')).toBe('Turn on auto-merge')
+  expect(await text('merge:acme/web')).toBe('Turn on auto-merge for web')
   await ui.press({ key: 'merge:acme/web' })
   expect([await text('merge-yes:acme/web'), (await ui.find({ type: 'Text', text: /^Argos will approve/ }))?.text]).toEqual([
-    'Turn on auto-merge for web',
+    'Confirm auto-merge for web',
     'Argos will approve and merge PRs on GitHub as you (@me), only when all of these hold:',
   ])
   await ui.press({ key: 'merge-cancel:acme/web' })
@@ -347,11 +352,11 @@ test('while a run goes the lines are locked and say how each stands; Validate wa
   seeded.page = 'acme/api'
   const api = await $.ui.mount(PANE)
   expect([(await api.find({ key: 'validate' }))?.text, (await api.find({ key: 'pick:acme/api#9' }))?.text]).toEqual(['Validating PRs…', '☐ #9'])
-  expect((await api.find({ type: 'Text', text: /validating · / }))?.text).toBe('· validating · 3m')
+  expect((await api.find({ type: 'Text', text: /^validating · / }))?.text).toBe('validating · 3m')
   await api.unmount()
   seeded.page = 'acme/portal'
   const portal = await $.ui.mount(PANE)
-  expect((await portal.find({ type: 'Text', text: /· queued/ }))?.text).toBe('· queued')
+  expect((await portal.find({ type: 'Text', text: /^queued/ }))?.text).toBe('queued')
   await portal.unmount()
 })
 test('a prompt: the Argos one, it plus your own, or yours alone (the Argos one when you wrote none)', () => {
@@ -449,7 +454,7 @@ test('the terminal draws the boxes in brackets', async ($, on) => {
   on('clock.now', clock)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', viewport: { columns: 60, rows: 30 } })
   expect((await ui.find({ key: 'pick:acme/portal#220' }))?.text).toBe('[x] #220')
-  expect((await ui.find({ key: 'pick:acme/portal#222' }))?.text).toBe('[ ] #222')
+  expect((await ui.find({ key: 'pick:acme/portal#222' }))?.text).toBe('[-] #222')
   await ui.unmount()
 })
 
@@ -467,7 +472,7 @@ test('no connected repo after setup: one sentence, one button', async ($, on) =>
   on('state.get', stored({ round: { at: round.at, okAt: round.at, repos: [], pending: [], others: [], needsRepos: true }, setupDone: true }))
   on('clock.now', clock)
   const ui = await $.ui.mount(PANE)
-  expect((await ui.find({ type: 'Text', text: 'No GitHub repo here' }))?.text).toBe('No GitHub repo here')
+  expect((await ui.find({ type: 'Text', text: 'No repo connected' }))?.text).toBe('No repo connected')
   expect((await ui.find({ key: 'norepo-btn' }))?.text).toBe('Connect a repo')
   await ui.unmount()
 })
@@ -531,6 +536,64 @@ test('/argos stats answers from the history script', async ($, on) => {
   expect(answer.text).toBe('Argos: last 30 days')
 })
 
+test('the dashboard says first what waits on the person, oldest first; a repo with no open PR keeps its row', async ($, on) => {
+  const seeded: Record<string, unknown> = { round: { ...round, repos: [...round.repos, 'acme/quiet'] } }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /^Needs you/ }))?.text).toBe('Needs you · 3')
+  // oldest first: the S3 migration has waited 54 days
+  const needs = ok(vmOf({ ...round, repos: [...round.repos, 'acme/quiet'] })).needs
+  expect(needs.map(x => x.key)).toEqual(['acme/portal#219', 'acme/portal#220', 'acme/web#7'])
+  expect(needs[0]?.line).toBe('portal #219 · conflict · 2 unanswered threads · 54d')
+  expect((await ui.find({ type: 'Text', text: 'No open PRs' }))?.text).toBe('No open PRs')
+  expect((await ui.find({ key: 'open:acme/quiet' }))?.text).toBe('Open quiet')
+  await ui.unmount()
+})
+
+test('a PR left to humans is kept across sessions and handed to merge.mjs', async ($, on) => {
+  const runs: string[][] = []
+  const kept: unknown[] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key === 'round' ? { value: { value: round, version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('store.set', (_: unknown, e: { key: string; value: unknown }) => {
+    if (e.key === 'out') kept.push(e.value)
+    return { value: undefined }
+  })
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'open:acme/web' })
+  await ui.press({ key: 'pick:acme/web#7' })
+  expect(kept.at(-1)).toEqual(['acme/web#7'])
+  expect(runs.at(-1)).toEqual(['human', 'u7'])
+  expect((await ui.find({ type: 'Text', text: 'human only' }))?.text).toBe('human only')
+  await ui.unmount()
+})
+
+test('the demo acts on nothing: Validate spawns no agent and spends no token', async ($, on) => {
+  const spawns: unknown[] = []
+  const toasts: string[] = []
+  const seeded: Record<string, unknown> = { round, isDemo: true }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('ui.toast', (_: unknown, e: { text: string }) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('agent.spawn', (_: unknown, e: unknown) => {
+    spawns.push(e)
+    return { agentId: 'a1', model: 'm' }
+  })
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'validate-clean' })
+  expect(spawns).toHaveLength(0)
+  expect(toasts.at(-1)).toMatch(/demo/)
+  await ui.unmount()
+})
+
 test('a bare /argos repos add connects the session folder', async ($, on) => {
   const runs: string[][] = []
   // each add starts a round; a round already running makes it return at once
@@ -557,7 +620,7 @@ test('a failed round shows the reason round.mjs wrote, not the wrapper', async (
   const failed = { ...round, at: new Date(NOW + 1000).toISOString(), error: 'gh: not logged into any GitHub hosts' }
   on('clock.now', clock)
   on('env.get', () => ({ value: 'C:/home' }))
-  on('fs.read', () => ({ value: JSON.stringify(failed) }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: e.path.endsWith('repos.json') ? JSON.stringify([{ repo: 'acme/web' }]) : JSON.stringify(failed) }))
   on('process.run', () => {
     throw new Error('exit code 1')
   })
@@ -615,6 +678,52 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
   expect(spawns).toHaveLength(1)
   expect(spawns[0]?.prompt).toContain('references/validate.md')
   expect(spawns[0]?.prompt).toContain('- u220')
+})
+
+test('auto-validate leaves a PR left to humans alone', async ($, on) => {
+  const fresh = { ...vround, at: new Date(NOW + 1000).toISOString(), okAt: new Date(NOW + 1000).toISOString() }
+  const files: Record<string, string> = {
+    'last-round.json': JSON.stringify(fresh),
+    'verdicts.json': JSON.stringify({ ...judged, auto: 'mine', batch: { urls: [], at: null }, prs: {} }),
+  }
+  const runs: string[][] = []
+  let settle = () => {}
+  const over = new Promise<void>(r => (settle = r))
+  on('store.get', (_: unknown, e: { key: string }) => ({ value: e.key === 'out' ? ['acme/portal#220'] : undefined }))
+  on('state.set', async ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+    const done = await next(e)
+    if (e.key === 'isRunning' && e.value === false) settle()
+    return done
+  })
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key === 'out' ? { value: { value: ['acme/portal#220'], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: files[e.path.split(/[\\/]/).at(-1)!] }))
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('agent.spawn', () => ({ agentId: 'a1', model: 'm' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'argos', args: '' })
+  await over
+  expect(runs.find(a => a.includes('queue'))?.slice(2)).toEqual(['queue', 'u221'])
+})
+
+test('an author left out in Who is out of auto-merge too', async ($, on) => {
+  const runs: string[][] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key === 'round' ? { value: { value: round, version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('store.set', () => ({ value: undefined }))
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'settings-page' })
+  await ui.press({ key: 'who:bia' })
+  expect(runs.at(-1)).toEqual(['human', 'u7'])
+  await ui.unmount()
 })
 
 test('every button shows on a desktop the text it holds', async ($, on) => {

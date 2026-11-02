@@ -19,19 +19,27 @@
 // Usage:
 //   node merge.mjs sweep          every passing verdict in an opted-in repo with no outcome yet
 //   node merge.mjs --self-test
-// Each outcome lands on the verdict (merge: { state: merged | approved | skipped, why, sha, at }),
-// once per head commit. Env: ARGOS_STATE, as the other scripts.
+// Each outcome lands on the verdict (merge: { state: merged | approved | skipped, why, sha, at }).
+// A commit is looked at again each round until its outcome stands: CI still running, more reviews
+// needed or a network error may change; a fork or a merged PR will not. It is approved only once.
+// A PR left to humans (verdicts.mjs human) is never touched. Env: ARGOS_STATE, as the other scripts.
 import { execFileSync } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import { read as readRepos } from "./repos.mjs";
 import { onlyUpkeep } from "./upkeep.mjs";
-import { read, write } from "./verdicts.mjs";
+import { read, withLock, write } from "./verdicts.mjs";
 
 const repoOf = (url) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
 const sameSha = (a = "", b = "") => Boolean(a && b) && (a.startsWith(b) || b.startsWith(a));
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const WRITERS = new Set(["admin", "write"]);
+// Skips that no later round can change, for this commit.
+const FINAL = new Set(["not open", "your PR", "from a fork", "author cannot write", "coding agent"]);
+const running = (c) => c.state === "PENDING" || c.state === "EXPECTED" || (Boolean(c.status) && c.status !== "COMPLETED");
 
 // A passing verdict: the only ones this script looks at; the rest show their own verdict.
 export const passes = (v) => v?.state === "done" && v.issues === 0 && !v.attention && !v.partial;
@@ -50,30 +58,58 @@ export function gate(pr, verdict, me, access) {
   if (pr.mergeable !== "MERGEABLE") return pr.mergeable === "CONFLICTING" ? "conflicts" : "mergeability unknown";
   const checks = pr.statusCheckRollup ?? [];
   if (!checks.length) return "no CI";
-  const red = checks.some((c) => !GREEN.has(c.conclusion ?? c.state ?? ""));
-  return red ? "CI red" : null;
+  if (checks.some((c) => !running(c) && !GREEN.has(c.conclusion ?? c.state ?? ""))) return "CI red";
+  return checks.some(running) ? "CI pending" : null;
 }
+
+// Whether this commit's outcome stands, so no round needs to look at it again.
+export const settled = (verdict) => {
+  const m = verdict.merge;
+  return m?.sha === verdict.sha && (m.state === "merged" || FINAL.has(m.why));
+};
 
 // The repo's first allowed method, as a gh pr merge flag.
 export const method = (r) => (r.allow_squash_merge ? "--squash" : r.allow_merge_commit ? "--merge" : r.allow_rebase_merge ? "--rebase" : null);
 
+// One sweep at a time, across sessions: two would both approve. Held past 5 minutes, it is stale.
+const SWEEP_LOCK = join(dirname(process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json")), "merge.lock");
 function sweep() {
+  try {
+    mkdirSync(dirname(SWEEP_LOCK), { recursive: true });
+    if (existsSync(SWEEP_LOCK) && Date.now() - statSync(SWEEP_LOCK).mtimeMs > 300_000) rmSync(SWEEP_LOCK, { force: true });
+    closeSync(openSync(SWEEP_LOCK, "wx"));
+  } catch {
+    return [];
+  }
+  try {
+    return sweepAll();
+  } finally {
+    rmSync(SWEEP_LOCK, { force: true });
+  }
+}
+
+function sweepAll() {
   const repos = readRepos().filter((r) => r.merge);
   if (!repos.length) return [];
   const v = read();
   const done = [];
   for (const [url, verdict] of Object.entries(v.prs)) {
     const cfg = repos.find((r) => r.repo.toLowerCase() === repoOf(url).toLowerCase());
-    if (!cfg || !passes(verdict) || verdict.merge?.sha === verdict.sha) continue;
-    const env = cfg.account ? { ...process.env, GH_TOKEN: gh(["auth", "token", "-u", cfg.account]) } : process.env;
-    const run = (args) => gh(args, env);
+    if (!cfg || !passes(verdict) || settled(verdict) || v.human?.includes(url)) continue;
+    let approved = verdict.merge?.sha === verdict.sha && verdict.merge.state === "approved";
     let outcome;
     try {
+      const env = cfg.account ? { ...process.env, GH_TOKEN: gh(["auth", "token", "-u", cfg.account]) } : process.env;
+      const run = (args) => gh(args, env);
       const pr = JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,files,mergeable,statusCheckRollup"]));
       const why = gate(pr, verdict, run(["api", "user", "-q", ".login"]), pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login));
-      if (why) outcome = { state: "skipped", why };
+      // approved stays on the record, so no later round approves again
+      if (why) outcome = { state: approved ? "approved" : "skipped", why };
       else {
-        run(["pr", "review", url, "--approve", "--body", "Argos: validated with no blockers and nothing needing attention."]);
+        if (!approved) {
+          run(["pr", "review", url, "--approve", "--body", "Argos: validated with no blockers and nothing needing attention."]);
+          approved = true;
+        }
         const after = JSON.parse(run(["pr", "view", url, "--json", "mergeStateStatus"]));
         const how = method(JSON.parse(run(["api", `repos/${repoOf(url)}`])));
         if (after.mergeStateStatus !== "CLEAN" || !how) outcome = { state: "approved", why: how ? "needs more reviews" : "no merge method allowed" };
@@ -83,11 +119,14 @@ function sweep() {
         }
       }
     } catch (err) {
-      outcome = { state: "skipped", why: String(err.message ?? err).split("\n")[0].slice(0, 80) };
+      // once approved it stays approved in the record, even when the merge after it failed
+      outcome = { state: approved ? "approved" : "skipped", why: String(err.message ?? err).split("\n")[0].slice(0, 80) };
     }
     // read again: a validation may have landed while GitHub answered
-    const now = read();
-    if (now.prs[url]?.sha === verdict.sha) write({ ...now, prs: { ...now.prs, [url]: { ...now.prs[url], merge: { ...outcome, sha: verdict.sha, at: new Date().toISOString() } } } });
+    withLock(() => {
+      const now = read();
+      if (now.prs[url]?.sha === verdict.sha) write({ ...now, prs: { ...now.prs, [url]: { ...now.prs[url], merge: { ...outcome, sha: verdict.sha, at: new Date().toISOString() } } } });
+    });
     done.push({ url, ...outcome });
   }
   return done;
@@ -123,7 +162,19 @@ function selfTest() {
   assert.equal(gate({ ...ok, statusCheckRollup: [] }, v, "me", "write"), "no CI");
   assert.equal(gate({ ...ok, statusCheckRollup: [{ conclusion: "FAILURE" }] }, v, "me", "write"), "CI red");
   // a check still running is not green either
-  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me", "write"), "CI red");
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me", "write"), "CI pending");
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ state: "PENDING" }] }, v, "me", "write"), "CI pending");
+  // a failed check beats one still running
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS" }, { status: "COMPLETED", conclusion: "FAILURE" }] }, v, "me", "write"), "CI red");
+  // what a later round can change is looked at again; what it cannot, is not
+  const merge = (state, why, sha = v.sha) => ({ ...v, merge: { state, why, sha } });
+  assert.equal(settled(v), false);
+  assert.equal(settled(merge("merged", "squash")), true);
+  assert.equal(settled(merge("skipped", "from a fork")), true);
+  assert.equal(settled(merge("skipped", "CI pending")), false);
+  assert.equal(settled(merge("approved", "needs more reviews")), false);
+  assert.equal(settled(merge("merged", "squash", "other00")), false);
+  assert.equal(settled(merge("approved", "from a fork")), true);
   // who opened it: a fork never, even with write access; a person needs write access; no answer
   // counts against; an app passes only when it touches nothing but upkeep files
   assert.equal(gate({ ...ok, isCrossRepository: true }, v, "me", "write"), "from a fork");
