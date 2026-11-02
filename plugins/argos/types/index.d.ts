@@ -33,7 +33,7 @@ export type Item = {
 // merge.mjs's outcome on a passing verdict, once per head commit, in a repo with auto-merge on
 export type MergeOutcome = { state: 'merged' | 'approved' | 'skipped'; why: string; sha: string; at: string }
 export type Verdict = {
-  state: 'running' | 'done' | 'failed'
+  state: 'queued' | 'running' | 'done' | 'failed'
   sha?: string
   issues?: number
   attention?: number
@@ -44,7 +44,17 @@ export type Verdict = {
   merge?: MergeOutcome
   at: string
 }
-export type Verdicts = { auto: 'off' | 'mine' | 'all'; batch: { urls: string[]; at: string | null }; prs: Record<string, Verdict> }
+export type Verdicts = {
+  auto: 'off' | 'mine' | 'all'
+  // minutes between automatic rounds (15, 30 or 60)
+  autoEvery?: number
+  // the last automatic round: when it looked, and how many PRs it sent
+  lastAuto?: { at: string; count: number } | null
+  batch: { urls: string[]; at: string | null }
+  prs: Record<string, Verdict>
+}
+// A connected repo as repos.json keeps it: auto-merge and its own validation skills.
+export type RepoCfg = { repo: string; account?: string; path?: string; merge?: boolean; skills?: string[] }
 // What round.mjs writes to last-round.json.
 export type Round = {
   at: string
@@ -80,6 +90,12 @@ declare module 'claude-code' {
       verdicts: Verdicts | null
       // the run whose end was already told in a toast (its batch's start time)
       announced: string | null
+      // the connected repos as repos.json keeps them (auto-merge, skills)
+      repos: RepoCfg[]
+      // the repo whose Settings fold is open
+      settingsOpen: string | null
+      // the repo whose auto-merge waits for the person's confirmation
+      confirmMerge: string | null
     }
   }
 }

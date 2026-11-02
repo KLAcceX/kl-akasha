@@ -3,13 +3,15 @@
 // so the pane shows it on every row. The AI writes them while it validates; the pane reads them.
 //
 // Usage:
-//   node verdicts.mjs start <pr-url>...                          marks them as being validated
+//   node verdicts.mjs queue <pr-url>...                          a run asked for them: waiting
+//   node verdicts.mjs start <pr-url>...                          marks them as being validated now
 //   node verdicts.mjs set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial]
 //                         [--finding "<top finding>"]
 //     issues: blockers only, each with file:line and how it fails; attention: risks that do
 //     not block (deploy, a weak test); partial: not all of it was read, so it never passes
 //   node verdicts.mjs fail <pr-url> --reason "<why>"              it could not be validated
-//   node verdicts.mjs auto <off|mine|all>                        validate new PRs and new commits by itself
+//   node verdicts.mjs auto <off|mine|all> [--every <minutes>]   validate new PRs and new commits by itself
+//   node verdicts.mjs ran <count>                                an automatic round sent that many
 //   node verdicts.mjs list                                       prints the file as JSON
 //   node verdicts.mjs --self-test
 // Env: ARGOS_STATE overrides the state file path (verdicts.json sits beside it).
@@ -22,7 +24,9 @@ import assert from "node:assert/strict";
 const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "verdicts.json");
 export const AUTO = ["off", "mine", "all"];
-const EMPTY = { auto: "off", batch: { urls: [], at: null }, prs: {} };
+const EMPTY = { auto: "off", autoEvery: 30, lastAuto: null, batch: { urls: [], at: null }, prs: {} };
+export const EVERY = [15, 30, 60];
+const busy = (state) => state === "running" || state === "queued";
 
 export const read = (file = FILE) => {
   try {
@@ -37,15 +41,18 @@ export const write = (v, file = FILE) => {
 };
 const isPr = (url) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(url);
 
-// A new batch replaces the last one once nothing of it is still running, so the pane counts
-// "9 of 22" for what was asked together.
-export function start(v, urls, now) {
-  const running = v.batch.urls.some((u) => v.prs[u]?.state === "running");
-  const batch = running ? { ...v.batch, urls: [...new Set([...v.batch.urls, ...urls])] } : { urls, at: now };
+// A new batch replaces the last one once nothing of it is still waiting or running, so the pane
+// counts "9 of 22" for what was asked together. The mod queues a run; the agent starts each PR as
+// it reaches it, so the time limit counts from then.
+function mark(v, urls, state, now) {
+  const open = v.batch.urls.some((u) => busy(v.prs[u]?.state));
+  const batch = open ? { ...v.batch, urls: [...new Set([...v.batch.urls, ...urls])] } : { urls, at: now };
   const prs = { ...v.prs };
-  for (const u of urls) prs[u] = { ...prs[u], state: "running", at: now };
+  for (const u of urls) prs[u] = { ...prs[u], state, at: now };
   return { ...v, batch, prs };
 }
+export const queue = (v, urls, now) => mark(v, urls, "queued", now);
+export const start = (v, urls, now) => mark(v, urls, "running", now);
 
 export function set(v, url, { sha, issues, attention = 0, partial = false, finding = "" }, now) {
   return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, issues, attention, partial, finding: finding.trim().slice(0, 160), at: now } } };
@@ -67,11 +74,11 @@ function main(args) {
   const now = new Date().toISOString();
   const v = read();
   if (cmd === "list") return console.log(JSON.stringify(v, null, 2));
-  if (cmd === "start") {
+  if (cmd === "start" || cmd === "queue") {
     const urls = rest.filter((a) => !a.startsWith("--"));
-    if (!urls.length || !urls.every(isPr)) throw new Error("start takes PR URLs: https://github.com/<owner>/<repo>/pull/<n>");
-    write(start(v, urls, now));
-    return console.log(`validating ${urls.length}`);
+    if (!urls.length || !urls.every(isPr)) throw new Error(`${cmd} takes PR URLs: https://github.com/<owner>/<repo>/pull/<n>`);
+    write((cmd === "start" ? start : queue)(v, urls, now));
+    return console.log(`${cmd === "start" ? "validating" : "queued"} ${urls.length}`);
   }
   if (cmd === "set") {
     const url = rest[0];
@@ -92,13 +99,21 @@ function main(args) {
     return console.log(`${url}: failed`);
   }
   if (cmd === "auto") {
-    if (!AUTO.includes(rest[0])) throw new Error(`auto takes ${AUTO.join(" | ")}`);
-    write({ ...v, auto: rest[0] });
-    return console.log(`auto-validate: ${rest[0]}`);
+    const every = flag(rest, "every") === undefined ? v.autoEvery : Number(flag(rest, "every"));
+    if (!AUTO.includes(rest[0]) || !EVERY.includes(every)) throw new Error(`auto takes ${AUTO.join(" | ")} [--every ${EVERY.join(" | ")}]`);
+    write({ ...v, auto: rest[0], autoEvery: every });
+    return console.log(`auto-validate: ${rest[0]}${rest[0] === "off" ? "" : `, every ${every} min`}`);
   }
-  throw new Error("usage: verdicts.mjs start|set|fail|auto|list (see the file head)");
+  if (cmd === "ran") {
+    const count = Number(rest[0]);
+    if (!Number.isInteger(count) || count < 0) throw new Error("ran <count>");
+    write({ ...v, lastAuto: { at: now, count } });
+    return console.log(`auto round: ${count}`);
+  }
+  throw new Error("usage: verdicts.mjs queue|start|set|fail|auto|ran|list (see the file head)");
 }
 
+const EMPTYv = () => structuredClone(EMPTY);
 function selfTest() {
   const a = "https://github.com/acme/web/pull/1";
   const b = "https://github.com/acme/web/pull/2";
@@ -109,6 +124,9 @@ function selfTest() {
   v = set(v, a, { sha: "abc1234", issues: 2, finding: "  no backoff cap  " }, "t2");
   assert.deepEqual(v.prs[a], { state: "done", sha: "abc1234", issues: 2, attention: 0, partial: false, finding: "no backoff cap", at: "t2" });
   assert.equal(set(v, a, { sha: "abc1234", issues: 0, attention: 2, partial: true }, "t2").prs[a].partial, true);
+  // a queued PR keeps the batch open too
+  assert.equal(queue(EMPTYv(), [a], "q").prs[a].state, "queued");
+  assert.deepEqual(start(queue(EMPTYv(), [a], "q"), [b], "q2").batch.urls, [a, b]);
   // b still runs: a new start joins the same batch
   v = start(v, [a], "t3");
   assert.deepEqual(v.batch.urls, [a, b]);

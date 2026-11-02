@@ -140,21 +140,42 @@ test('a PR validated with no commit since is left out; a running one cannot be p
   expect([at('acme/api#9').isIn, at('acme/api#9').verdict?.text, at('acme/api#9').verdict?.count]).toEqual([true, '☆', undefined])
   // blockers are amber, a pass green: purple only says Argos looked
   expect([at('acme/web#7').verdict?.color, verdictTag(verdictOf(shaOn(item({})), V({}) as never), 'en').color]).toEqual(['warning', 'success'])
-  expect(vm.run?.label).toBe('Validating 1 of 2')
+  // both started: one done, one validating
+  expect(vm.run?.label).toBe('Validating 2 of 2')
 })
 
 test('a run: failed ones say why and go again; a line stuck past the limit counts as failed', () => {
   const vs = (prs: Record<string, unknown>) => ({ ...judged, batch: { urls: ['u8', 'u9', 'u7'], at: round.at }, prs: { ...judged.prs, ...prs } }) as never
-  const stuck = ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) }))
-  expect([stuck.run?.isRunning, stuck.run?.label, stuck.run?.failed.map(f => [f.title, f.why])]).toEqual([false, '2 validated · 1 failed', [['T', 'timed out']]])
-  // a failed line is picked again by default, its verdict a red ✕ that says why on hover
+  // the run line stays until the next check: this round looked before the run ended
+  const before = { ...vround, okAt: ago(2) }
+  const stuck = ok(toViewModel(before as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) }))
+  expect([stuck.run?.isRunning, stuck.run?.label, stuck.run?.retry]).toEqual([false, '2 validated · 1 failed', ['u8']])
+  // a failed line is picked again by default, says why on its line, its verdict a red ✕
   const row = stuck.rows.find(x => x.key === 'acme/web#8')!
-  expect([row.isIn, row.verdict?.count, row.verdict?.tip]).toEqual([true, '✕', 'AI validation failed: timed out'])
-  const merged = ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: { ...V({ state: 'failed', reason: 'no access' }) }, u7: { ...V({ issues: 0 }), merge: { state: 'approved', why: 'needs other reviews', sha: 'abc1234', at: round.at } } }) }))
-  expect([merged.run?.label, merged.run?.retry, merged.rows.find(x => x.key === 'acme/web#7')?.mergeNote]).toEqual([
+  expect([row.isIn, row.verdict?.count, row.status?.text, row.status?.color]).toEqual([true, '✕', 'failed · timed out after 10 min', 'error'])
+  // its verdict is on an older commit than the head, and says so
+  expect(stuck.rows.find(x => x.key === 'acme/api#9')?.status?.text).toBe('validated · new commits since')
+  // a newer check takes the run line and the words off
+  expect(ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) })).run).toBe(null)
+  const merged = ok(
+    toViewModel(before as never, {
+      now: NOW,
+      lang: 'en',
+      minutes: 60,
+      running: false,
+      repos: [{ repo: 'acme/web', merge: true }, { repo: 'acme/api', merge: true }],
+      verdicts: vs({ u8: V({ state: 'failed', reason: 'no access' }), u7: { ...V({ issues: 0 }), merge: { state: 'approved', why: 'needs more reviews', sha: 'abc1234', at: round.at } }, u9: V({ attention: 1 }) }),
+    }),
+  )
+  const status = (k: string) => merged.rows.find(x => x.key === k)?.status?.text
+  expect([merged.run?.label, merged.run?.retry, status('acme/web#7'), status('acme/web#8'), status('acme/api#9'), merged.mergeLine]).toEqual([
     '2 validated · 1 failed · 1 approved, awaiting reviews',
     ['u8'],
-    'approved · needs other reviews',
+    'approved · needs more reviews',
+    'failed · no access',
+    // a repo with auto-merge says why a verdict that did not pass was not merged
+    'skipped · attention 1',
+    'Auto-merge on in api, web',
   ])
 })
 
@@ -213,7 +234,7 @@ test('Validate N marks them running and hands them to background subagents, ten 
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ key: 'validate' }))?.text).toBe('Validate 12')
   await ui.press({ key: 'validate' })
-  expect(runs.find(a => a.includes('start'))?.length).toBe(3 + 12)
+  expect(runs.find(a => a.includes('queue'))?.length).toBe(3 + 12)
   expect(spawns.map(s => s.prompt.split('\n').filter(l => l.startsWith('- ')).length)).toEqual([10, 2])
   await ui.unmount()
 })
@@ -260,6 +281,57 @@ test('quick picks: everything with nothing pending, or my PRs with something ask
   expect([await text('validate'), await text('quick:rework'), await text('quick:clean')]).toEqual(['Validate 1 · portal', 'My PRs to rework 1 ✓', 'Nothing pending 5'])
   await ui.press({ key: 'quick:clean' })
   expect([await text('validate'), await text('pick:acme/portal#219')]).toEqual(['Validate 5', '☐'])
+  await ui.unmount()
+})
+
+test('automatic mode, a repo\'s auto-merge (two taps on, one off) and its skills, from the pane', async ($, on) => {
+  const runs: string[][] = []
+  // the seeded values, and the pane's own writes read back
+  const seeded: Record<string, unknown> = { round, verdicts: { ...judged, auto: 'off', batch: { urls: [], at: null } }, repos: [{ repo: 'acme/web' }] }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const ui = await $.ui.mount(PANE)
+  const text = async (key: string) => (await ui.find({ key }))?.text
+  expect((await ui.find({ type: 'Text', text: /^Off ·/ }))?.text).toBe('Off · no rounds scheduled')
+  await ui.select({ key: 'auto-mode', value: 'mine' })
+  expect(runs.at(-1)).toEqual(['auto', 'mine', '--every', '30'])
+  // auto-merge: Settings opens the fold; Turn on asks first, naming what it will do on GitHub
+  await ui.press({ key: 'settings:acme/web' })
+  expect(await text('merge:acme/web')).toBe('Turn on…')
+  await ui.press({ key: 'merge:acme/web' })
+  expect([await text('merge-yes:acme/web'), (await ui.find({ type: 'Text', text: /^Argos will approve/ }))?.text]).toEqual([
+    'Yes, auto-merge web',
+    'Argos will approve and merge PRs on GitHub as you (@me), only when all of these hold:',
+  ])
+  await ui.press({ key: 'merge-cancel:acme/web' })
+  expect(runs.some(a => a.includes('merge'))).toBe(false)
+  await ui.press({ key: 'merge:acme/web' })
+  await ui.press({ key: 'merge-yes:acme/web' })
+  expect(runs.at(-1)).toEqual(['merge', 'acme/web', 'on', '--lang', 'en'])
+  // skills for this repo, saved on Enter
+  await ui.input({ key: 'skills:acme/web', text: 'api-style, billing-ledger' })
+  expect(runs.at(-1)).toEqual(['skills', 'acme/web', 'api-style', 'billing-ledger', '--lang', 'en'])
+  await ui.unmount()
+})
+
+test('while a run goes the lines are locked and say how each stands; Validate waits', async ($, on) => {
+  const at = (m: number) => new Date(NOW - m * 6e4).toISOString()
+  const going = { ...judged, batch: { urls: ['u9', 'u220', 'u7'], at: at(5) }, prs: { u9: V({ state: 'running', at: at(3) }), u220: { state: 'queued', at: at(5) }, u7: V({ state: 'failed', reason: 'no access', at: at(2) }) } }
+  on('state.get', stored({ round: vround, verdicts: going }))
+  on('clock.now', clock)
+  const ui = await $.ui.mount(PANE)
+  expect([await ui.find({ key: 'validate' }), await ui.find({ key: 'pick:acme/api#9' })]).toEqual([undefined, undefined])
+  expect((await ui.find({ type: 'Text', text: /^Validating/ }))?.text).toBe('Validating 2 of 3')
+  expect((await ui.find({ type: 'Text', text: /validating · / }))?.text).toBe('· validating · 3m')
+  expect((await ui.find({ type: 'Text', text: /· queued/ }))?.text).toBe('· queued')
   await ui.unmount()
 })
 
@@ -409,7 +481,7 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
   await over
   // only what changed among my PRs with nothing pending: two with no verdict yet; the old one has
   // open threads (pending), the draft waits, the teammate's old verdict waits for "all"
-  expect(runs.find(a => a.includes('start'))?.slice(2)).toEqual(['start', 'u220', 'u221'])
+  expect(runs.find(a => a.includes('queue'))?.slice(2)).toEqual(['queue', 'u220', 'u221'])
   expect(spawns).toHaveLength(1)
   expect(spawns[0]?.prompt).toContain('references/validate.md')
   expect(spawns[0]?.prompt).toContain('- u220')

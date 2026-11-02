@@ -10,7 +10,7 @@ import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
 import { C, HEX, HOVER, I, LOGO, STARS, TINT, rgba, titled } from './look'
 import { UI, authorOf, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
-import type { Round, Verdicts } from '../types'
+import type { RepoCfg, Round, Verdicts } from '../types'
 
 export { outOf, reason, toViewModel, verdictOf, verdictTag } from './view'
 
@@ -22,6 +22,7 @@ const DEMO = { plugin: 'argos', key: 'isDemo' } as const
 const VERDICTS = { plugin: 'argos', key: 'verdicts' } as const
 const IGNORED = { plugin: 'argos', key: 'ignored' } as const
 const ANNOUNCED = { plugin: 'argos', key: 'announced' } as const
+const REPOS = { plugin: 'argos', key: 'repos' } as const
 const round = atom(ROUND, null)
 const isRunning = atom(RUNNING, false)
 // PRs the person left out by hand, and PRs left out by the pane that the person brought back
@@ -32,6 +33,13 @@ const ignored = atom(IGNORED, [] as string[])
 const authorsOpen = atom({ plugin: 'argos', key: 'authorsOpen' } as const, false)
 // what verdicts.mjs last wrote: the AI's validations, read by the lines
 const verdicts = atom(VERDICTS, null)
+// the connected repos as repos.json keeps them (auto-merge, skills), and which repo's Settings
+// fold is open, or asking to confirm auto-merge
+const repos = atom(REPOS, [] as RepoCfg[])
+const settingsOpen = atom({ plugin: 'argos', key: 'settingsOpen' } as const, null as string | null)
+const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
+// what was typed in each repo's skills field, by repo; outside the atoms so typing redraws nothing
+const skillDrafts = new Map<string, string>()
 
 const config = (options: PluginOptions) => ({
   minutes: Math.max(5, Number(options.intervalMinutes) || 15),
@@ -39,6 +47,8 @@ const config = (options: PluginOptions) => ({
   qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
   lang: String(options.language ?? 'en'),
   skills: String(options.skills ?? '').split(',').map(s => s.trim()).filter(Boolean),
+  // minutes a PR may stay "validating" before it counts as failed
+  limit: Math.max(2, Number(options.runLimitMinutes) || 10),
 })
 
 async function stateDir($: any) {
@@ -60,25 +70,34 @@ async function loadVerdicts($: any): Promise<Verdicts | null> {
   }
 }
 
-// The skills a PR's validation reads as references: the plugin's own list, then its repo's
-// (repos.mjs skills), from repos.json beside the vigil's state.
-async function skillsOf($: any, global: string[]) {
-  let repos: { repo: string; skills?: string[] }[] = []
+// The connected repos as repos.json keeps them, read into the pane's state.
+async function loadRepos($: any): Promise<RepoCfg[]> {
   try {
-    repos = JSON.parse(await $.fs.read(`${await stateDir($)}/repos.json`))
-  } catch {}
+    const list: RepoCfg[] = JSON.parse(await $.fs.read(`${await stateDir($)}/repos.json`))
+    if (!Array.isArray(list)) throw new Error('not a repos file')
+    await $.state.set(REPOS, list)
+    return list
+  } catch {
+    return (await $.state.get(REPOS)).value ?? []
+  }
+}
+
+// The skills a PR's validation reads as references: the plugin's own list, then its repo's.
+async function skillsOf($: any, global: string[]) {
+  const list = await loadRepos($)
   return (url: string) => {
-    const own = repos.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))?.skills ?? []
+    const own = list.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))?.skills ?? []
     return [...new Set([...global, ...own])]
   }
 }
 
-// Validates PRs in the background: marks them running, then hands them to subagents with the
-// validate job, ten each so a long list runs side by side; no chat is opened, the verdicts land on
-// the lines as each one finishes. Each PR carries the skills its validation reads.
+// Validates PRs in the background: queues them, then hands them to subagents with the validate
+// job, ten each so a long list runs side by side; each agent marks a PR started as it reaches it.
+// No chat is opened, the verdicts land on the lines as each one finishes. Each PR carries the
+// skills its validation reads.
 async function validate($: any, urls: string[], lang: string, skills: string[]) {
   if (!urls.length) return
-  await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'start', ...urls])
+  await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'queue', ...urls])
   await loadVerdicts($)
   const of = await skillsOf($, skills)
   const line = (u: string) => (of(u).length ? `- ${u} (skills: ${of(u).join(', ')})` : `- ${u}`)
@@ -89,15 +108,18 @@ async function validate($: any, urls: string[], lang: string, skills: string[]) 
     })
 }
 
-// Auto-validate: after a round, only what changed goes, in the background: PRs with no verdict
-// yet or with commits after theirs, among those with nothing pending (no change asked, not a
-// draft), the user's own with "mine", every watched PR with "all"; authors left out stay out. A
-// failed one waits for Retry. ponytail: ten per round, so a burst never spends a fortune at once.
+// Auto-validate: after a round, once its interval has passed since the last automatic round, only
+// what changed goes, in the background: PRs with no verdict yet or with commits after theirs,
+// among those with nothing pending (no change asked, not a draft), the user's own with "mine",
+// every watched PR with "all"; authors left out stay out. A failed one waits for Retry. Each round
+// is recorded, sent or not, so the pane can say when it looked. ponytail: ten per round, so a
+// burst never spends a fortune at once.
 async function autoValidate($: any, r: Round | null, lang: string, skills: string[]) {
   const v = await loadVerdicts($)
   if (!r || !v || v.auto === 'off') return
-  const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? [])
   const now = await $.clock.now()
+  if (v.lastAuto && now - Date.parse(v.lastAuto.at) < (v.autoEvery ?? 30) * 6e4 - 3e4) return
+  const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? [])
   const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)) && !skip.has(`kind:${kindOf(p)}`))
   const mine = (p: (typeof all)[number]) => p.kind === 'mine' || (Boolean(r.me) && p.author === r.me)
   const changed = (p: (typeof all)[number]) => {
@@ -106,19 +128,20 @@ async function autoValidate($: any, r: Round | null, lang: string, skills: strin
   }
   const urls = [...new Set(all.filter(p => (v.auto === 'all' || mine(p)) && changed(p)).map(p => p.url))].slice(0, 10)
   await validate($, urls, lang, skills)
+  await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'ran', String(urls.length)])
+  await loadVerdicts($)
 }
 
 // After verdicts land: auto-merge looks at the passing ones (merge.mjs does nothing for a repo
 // that did not opt in), and once a run has nothing left running, one toast says what it came to.
 // One sweep at a time: verdicts landing together would otherwise approve the same PR twice.
 let sweeping: Promise<unknown> | null = null
-async function afterVerdicts($: any, lang: string) {
+async function afterVerdicts($: any, lang: string, limit: number) {
   if ((await $.state.get(DEMO)).value) return
   sweeping ??= $.process.run(['node', `${$.plugin.root}/scripts/merge.mjs`, 'sweep'], { timeoutMs: 120_000 }).catch(() => {}).finally(() => (sweeping = null))
   await sweeping
   const v = await loadVerdicts($)
-  const r: Round | null = (await $.state.get(ROUND)).value ?? null
-  const run = runOf(v, await $.clock.now(), lang, [...(r?.pending ?? []), ...(r?.mine ?? []), ...(r?.others ?? [])])
+  const run = runOf(v, await $.clock.now(), lang, limit)
   if (!run || run.isRunning || (await $.state.get(ANNOUNCED)).value === run.at) return
   await $.state.set(ANNOUNCED, run.at)
   $.ui.toast(`Argos: ${run.label}`)
@@ -149,6 +172,7 @@ async function addRepo($: any) {
 async function openPane($: any) {
   await load($)
   await loadVerdicts($)
+  await loadRepos($)
   await $.ui.open({ id: PANE, title: 'Argos' })
 }
 
@@ -156,7 +180,7 @@ async function openPane($: any) {
 // when another one ran it within the interval, and only shows it.
 async function tick($: any, options: PluginOptions, force: boolean) {
   if ((await $.state.get(RUNNING)).value || (await $.state.get(DEMO)).value) return
-  const { minutes, account, qualifiers, lang, skills } = config(options)
+  const { minutes, account, qualifiers, lang, skills, limit } = config(options)
   const last = await load($)
   const now = await $.clock.now()
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
@@ -168,7 +192,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     const fresh = await load($)
     if (fresh?.notify) $.ui.toast(fresh.notify)
     await autoValidate($, fresh, lang, skills).catch(() => {})
-    await afterVerdicts($, lang).catch(() => {})
+    await afterVerdicts($, lang, limit).catch(() => {})
   } catch (err) {
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
     // this attempt's. Only a run that died before writing (killed at the time limit) gets the
@@ -184,7 +208,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
 }
 
 export const register: Register = (on, options) => {
-  const { lang, minutes, account, skills } = config(options)
+  const { lang, minutes, account, skills, limit } = config(options)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -207,7 +231,7 @@ export const register: Register = (on, options) => {
     // the lines follow at once; merging asks GitHub, so it never holds the agent's command
     if (e.command.includes('verdicts.mjs')) {
       await loadVerdicts($)
-      void afterVerdicts($, lang).catch(() => {})
+      void afterVerdicts($, lang, limit).catch(() => {})
     }
     return result
   })
@@ -259,9 +283,12 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
-    // the terminal is the one surface without Svg: icons fall back to their text marks
+    // the terminal is the one surface without Svg: icons fall back to their text marks; the mobile
+    // app has no fields, so there the automatic mode and the skills are only said
     const hasSvg = e.surface !== 'terminal'
-    const [running, last, left, brought, judged, authorsOut, isOpen] = await Promise.all([
+    const Select = 'Select' in ui ? ui.Select : null
+    const Input = 'Input' in ui ? ui.Input : null
+    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, openSettings, confirming] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
@@ -269,8 +296,21 @@ export const register: Register = (on, options) => {
       read($, verdicts),
       read($, ignored),
       read($, authorsOpen),
+      read($, repos),
+      read($, settingsOpen),
+      read($, confirmMerge),
     ])
-    const vm = toViewModel(last, { now: await $.clock.now(), lang, minutes, running, ui: { out: left, back: brought }, verdicts: judged, ignored: authorsOut })
+    const vm = toViewModel(last, {
+      now: await $.clock.now(),
+      lang,
+      minutes,
+      running,
+      ui: { out: left, back: brought },
+      verdicts: judged,
+      ignored: authorsOut,
+      limit,
+      repos: repoList,
+    })
     // a box per line, per author and per repo; the terminal draws them in brackets
     const BOX = hasSvg ? { on: '☑', mixed: '◩', off: '☐' } : { on: '[x]', mixed: '[-]', off: '[ ]' }
     // tick returns at once while a round runs, so pressing twice does nothing
@@ -397,6 +437,40 @@ export const register: Register = (on, options) => {
             ? [...list.filter(x => x !== `kind:${a.kind}`), ...vm.authors.filter(b => b.kind === a.kind && b.name !== a.name).map(b => b.name)]
             : [...list, a.name],
       )
+    // Automatic mode: two native Selects (what goes, how often; the second only while on) and one
+    // line saying whether it is on, when the next round looks and what the last one did.
+    const setAuto = async (mode: string, every: number) => {
+      await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'auto', mode, '--every', String(every)])
+      await loadVerdicts($)
+    }
+    const auto = (
+      <Box key="auto" flexDirection="column" gap="xs">
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+          <Text size="caption" color={C.text}>
+            {t(lang, 'auto_label')}
+          </Text>
+          {Select && (
+            <Select
+              key="auto-mode"
+              options={['off', 'mine', 'all'].map(m => ({ value: m, label: t(lang, `auto_mode_${m}`) }))}
+              value={vm.auto.mode}
+              onSelect={(m: string) => void setAuto(m, vm.auto.every)}
+            />
+          )}
+          {Select && vm.auto.mode !== 'off' && (
+            <Select
+              key="auto-every"
+              options={[15, 30, 60].map(n => ({ value: String(n), label: t(lang, 'auto_every', n) }))}
+              value={String(vm.auto.every)}
+              onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
+            />
+          )}
+        </Box>
+        <Text size="caption" color={C.subtle}>
+          {vm.auto.line}
+        </Text>
+      </Box>
+    )
     const who = (
       <Box key="who-box" flexDirection="column" gap="xs">
         <Box flexDirection="row">
@@ -431,6 +505,12 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         )}
+        {auto}
+        {vm.mergeLine && (
+          <Text size="caption" weight="semibold" color={C.text}>
+            {vm.mergeLine}
+          </Text>
+        )}
         {vm.autoLine && (
           <Text size="caption" color={C.subtle}>
             {vm.autoLine}
@@ -455,61 +535,71 @@ export const register: Register = (on, options) => {
     // One button validates everything left in, in the background; the stars fill in on the lines.
     const go = (
       <Box key="go" flexDirection="column" gap="xs">
-        {/* the last run: how far it got or what it came to, and the ones that failed, with why */}
-        {vm.run && (
-          <Box key="run" flexDirection="column" gap="xs">
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
-              {icon(vm.run.isRunning ? STARS.run : STARS.done, '✦', 14, 14)}
-              <Text size="caption" weight="semibold" color={vm.run.isRunning ? C.brand : C.text}>
-                {vm.run.label}
+        {/* The last run, in words: while it goes, how far ("Validating 4 of 10 · 1 failed") in
+            place of the picks and Validate; once done, what it came to, above them, until the next
+            run or check, with Retry on the failed ones. How each line ended is on its line. */}
+        {vm.run?.isRunning && (
+          <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
+            <Text color={C.brand}>⠿</Text>
+            <Text size="caption" weight="semibold" color={C.text}>
+              {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
+            </Text>
+            {vm.run.failed > 0 && (
+              <Text size="caption" weight="semibold" color={C.error}>
+                {`· ${t(lang, 'run_failed', vm.run.failed)}`}
               </Text>
-              {vm.run.retry.length > 0 && !vm.run.isRunning && (
-                <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills)}>
-                  {t(lang, 'run_retry')}
+            )}
+          </Box>
+        )}
+        {vm.run && !vm.run.isRunning && (
+          <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
+            {!vm.run.failed && <Text color={C.success}>✓</Text>}
+            <Text size="caption" weight="semibold" color={C.text}>
+              {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
+            </Text>
+            {vm.run.failed > 0 && (
+              <Text size="caption" weight="semibold" color={C.error}>
+                {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+              </Text>
+            )}
+            {(vm.run.merged > 0 || vm.run.approved > 0) && (
+              <Text size="caption" color={C.text}>
+                {['', vm.run.merged ? t(lang, 'run_merged', vm.run.merged) : '', vm.run.approved ? t(lang, 'run_approved', vm.run.approved) : ''].filter((x, i) => !i || x).join(' · ')}
+              </Text>
+            )}
+            {vm.run.retry.length > 0 && (
+              <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills)}>
+                {t(lang, 'run_retry', vm.run.retry.length)}
+              </Button>
+            )}
+          </Box>
+        )}
+        {!vm.run?.isRunning && (
+          <Box flexDirection="column" gap="xs">
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
+              {vm.picks.map(p => (
+                <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
+                  {p.label}
+                </Button>
+              ))}
+            </Box>
+            <Box flexDirection="row" alignItems="center" gap="sm">
+              <Button
+                key="validate"
+                variant={vm.validate.count ? 'primary' : 'secondary'}
+                dimColor={!vm.validate.count}
+                onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills) : undefined)}
+              >
+                {vm.validate.label}
+              </Button>
+              {vm.clear && (
+                <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
+                  {vm.clear.label}
                 </Button>
               )}
             </Box>
-            {vm.run.failed.map(f => (
-              <Box key={`failed:${f.url}`} flexDirection="row" gap="xs" paddingX="xs" minWidth={0}>
-                <Text size="caption" color={C.error}>
-                  ✕
-                </Text>
-                <Box flexShrink={1} minWidth={0}>
-                  <Text size="caption" color={C.text} wrap="truncate">
-                    {f.title}
-                  </Text>
-                </Box>
-                <Box flexShrink={0}>
-                  <Text size="caption" color={C.subtle}>
-                    {f.why}
-                  </Text>
-                </Box>
-              </Box>
-            ))}
           </Box>
         )}
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
-          {vm.picks.map(p => (
-            <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
-              {p.label}
-            </Button>
-          ))}
-        </Box>
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          <Button
-            key="validate"
-            variant={vm.validate.count ? 'primary' : 'secondary'}
-            dimColor={!vm.validate.count}
-            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills) : undefined)}
-          >
-            {vm.validate.label}
-          </Button>
-          {vm.clear && (
-            <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
-              {vm.clear.label}
-            </Button>
-          )}
-        </Box>
       </Box>
     )
     // One line per PR, packed to the left so the eye never crosses an empty middle: a box to leave
@@ -542,7 +632,7 @@ export const register: Register = (on, options) => {
     }
     const MARK = { on: BOX.on, mixed: BOX.mixed, off: BOX.off }
     const header = (g: Group) => (
-      <Box key={`group:${g.repo}`} flexDirection="row" alignItems="center" gap="sm" paddingX="xs" marginTop="md">
+      <Box key={`group:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm" paddingX="xs" marginTop="md">
         {g.keys.length ? (
           <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
             {`${MARK[g.mark]} ${g.name}`}
@@ -555,11 +645,114 @@ export const register: Register = (on, options) => {
         <Text size="caption" color={C.subtle}>
           {g.count}
         </Text>
+        {g.merge && (
+          <Text size="caption" weight="semibold" color={C.text}>
+            {t(lang, 'mg_heading')}
+          </Text>
+        )}
         {vm.groups.length > 1 && g.keys.length > 0 && (
           <Button key={`only:${g.repo}`} plain={true} onPress={() => void onlyRepo(g)}>
             {t(lang, 'in_only')}
           </Button>
         )}
+        <Button key={`settings:${g.repo}`} plain={true} onPress={() => void toggleSettings(g.repo)}>
+          {`${t(lang, 'settings')} ${openSettings === g.repo ? '▾' : '▸'}`}
+        </Button>
+      </Box>
+    )
+    // A repo's Settings fold: its auto-merge (two taps to turn on, the second naming what it will
+    // do on GitHub; one to turn off) and its own validation skills beside the global ones.
+    const toggleSettings = async (repo: string) => {
+      await update($, settingsOpen, x => (x === repo ? null : repo))
+      await update($, confirmMerge, () => null)
+    }
+    const repoCmd = async (...args: string[]) => {
+      await $.process.run(['node', `${$.plugin.root}/scripts/repos.mjs`, ...args, '--lang', lang])
+      await loadRepos($)
+    }
+    const setMerge = async (repo: string, isOn: boolean) => {
+      await repoCmd('merge', repo, isOn ? 'on' : 'off')
+      await update($, confirmMerge, () => null)
+    }
+    // what the person typed in a skills field, kept outside the drawing so typing redraws nothing
+    const drafts = skillDrafts
+    const saveSkills = (repo: string, text: string) => repoCmd('skills', repo, ...text.split(',').map(x => x.trim()).filter(Boolean))
+    const fold = (g: Group) => (
+      <Box key={`fold:${g.repo}`} flexDirection="column" gap="sm" paddingX="lg">
+        {confirming === g.repo ? (
+          <Box flexDirection="column" gap="xs">
+            <Text weight="semibold" color={C.text}>
+              {t(lang, 'mg_confirm_title', g.repo)}
+            </Text>
+            <Text size="caption" color={C.text}>
+              {t(lang, 'mg_confirm_body', last?.me ?? '')}
+            </Text>
+            {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
+              <Text key={`rule:${i}`} size="caption" color={C.text}>
+                {`· ${rule}`}
+              </Text>
+            ))}
+            <Text size="caption" color={C.subtle}>
+              {t(lang, 'mg_method')}
+            </Text>
+            <Box flexDirection="row" gap="sm">
+              <Button key={`merge-yes:${g.repo}`} variant="primary" onPress={() => void setMerge(g.repo, true)}>
+                {t(lang, 'mg_yes', g.name)}
+              </Button>
+              <Button key={`merge-cancel:${g.repo}`} variant="secondary" onPress={() => void update($, confirmMerge, () => null)}>
+                {t(lang, 'cancel')}
+              </Button>
+            </Box>
+          </Box>
+        ) : (
+          <Box flexDirection="column" gap="xs">
+            <Box flexDirection="row" alignItems="center" gap="sm">
+              <Text size="caption" weight="semibold" color={C.text}>
+                {t(lang, g.merge ? 'mg_on' : 'mg_off')}
+              </Text>
+              <Button
+                key={`merge:${g.repo}`}
+                plain={true}
+                onPress={() => void (g.merge ? setMerge(g.repo, false) : update($, confirmMerge, () => g.repo))}
+              >
+                {t(lang, g.merge ? 'mg_turn_off' : 'mg_turn_on')}
+              </Button>
+            </Box>
+            <Text size="caption" color={C.subtle}>
+              {g.merge ? t(lang, 'mg_on_note') : t(lang, 'mg_off_note', g.name)}
+            </Text>
+          </Box>
+        )}
+        <Box flexDirection="column" gap="xs">
+          <Text size="caption" weight="semibold" color={C.text}>
+            {t(lang, 'skills_title')}
+          </Text>
+          {skills.length > 0 && (
+            <Text size="caption" color={C.subtle}>
+              {t(lang, 'skills_global', skills.join(', '))}
+            </Text>
+          )}
+          <Box flexDirection="row" alignItems="center" gap="sm">
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              {Input && (
+                <Input
+                  key={`skills:${g.repo}`}
+                  label={t(lang, 'skills_label', g.name)}
+                  value={g.skills.join(', ')}
+                  submitLabel={t(lang, 'skills_save')}
+                  onInput={(text: string) => void drafts.set(g.repo, text)}
+                  onSubmit={(text: string) => void saveSkills(g.repo, text)}
+                />
+              )}
+            </Box>
+            <Button key={`skills-save:${g.repo}`} plain={true} onPress={() => void saveSkills(g.repo, drafts.get(g.repo) ?? g.skills.join(', '))}>
+              {t(lang, 'skills_save')}
+            </Button>
+          </Box>
+          <Text size="caption" color={C.subtle}>
+            {t(lang, 'skills_note', g.name)}
+          </Text>
+        </Box>
       </Box>
     )
     type Row = (typeof vm.rows)[number]
@@ -568,18 +761,27 @@ export const register: Register = (on, options) => {
       if (x.isAuto) void update($, back, list => [...list, x.key])
       else void update($, out, list => (list.includes(x.key) ? list.filter(k => k !== x.key) : [...list, x.key]))
     }
+    // while a run goes every line is locked: its mark is text in a fixed column (text, unlike a
+    // Button, does not clip), so the column lines up
+    const locked = Boolean(vm.run?.isRunning)
     const line = (x: Row) => (
       <Box key={x.key} flexDirection="row" alignItems="center" gap="xs" paddingX="xs" hover={{ backgroundColor: HOVER }}>
-        {/* every line's mark is the same native button, unboxed (a width clips it), so they all line
-            up: a running line's ⠿ does nothing, an author left out opens Who, where they come back */}
-        <Button
-          key={`pick:${x.key}`}
-          plain={true}
-          dimColor={!x.canToggle}
-          onPress={() => (x.canToggle ? toggle(x) : x.isRunning ? undefined : void update($, authorsOpen, () => true))}
-        >
-          {x.isRunning ? '⠿' : x.isIn ? BOX.on : BOX.off}
-        </Button>
+        {locked ? (
+          <Box flexShrink={0} width={2}>
+            <Text color={x.mark.color}>{x.mark.glyph || ' '}</Text>
+          </Box>
+        ) : (
+          // every line's box is the same native button, unboxed (a width clips it), so they all
+          // line up; an author left out opens Who, where they come back
+          <Button
+            key={`pick:${x.key}`}
+            plain={true}
+            dimColor={!x.canToggle}
+            onPress={() => (x.canToggle ? toggle(x) : x.isRunning ? undefined : void update($, authorsOpen, () => true))}
+          >
+            {x.isRunning ? '⠿' : x.isIn ? BOX.on : BOX.off}
+          </Button>
+        )}
         {/* the verdict keeps one width, filled or not, so the avatars and titles line up */}
         <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
           {x.verdict && icon(x.verdict.svg!, x.verdict.text, 14, 14, x.verdict.tip)}
@@ -599,9 +801,17 @@ export const register: Register = (on, options) => {
           </Box>
           <Box flexShrink={0}>
             <Text size="caption" color={C.subtle}>
-              {[x.num, x.why, x.mergeNote].filter(Boolean).join(' · ')}
+              {x.status ? x.num : [x.num, x.why, x.mergeNote].filter(Boolean).join(' · ')}
             </Text>
           </Box>
+          {/* in the last run, how it ended: the word first, its colour only repeats it */}
+          {x.status && (
+            <Box flexShrink={0}>
+              <Text size="caption" color={x.status.color}>
+                {`· ${x.status.text}`}
+              </Text>
+            </Box>
+          )}
         </Box>
       </Box>
     )
@@ -611,7 +821,9 @@ export const register: Register = (on, options) => {
       who,
       go,
       <Box key="lines" flexDirection="column">
-        {vm.groups.length > 1 ? vm.groups.flatMap(g => [header(g), ...g.rows.map(line)]) : vm.rows.map(line)}
+        {vm.groups.length > 1 || openSettings
+          ? vm.groups.flatMap(g => [header(g), ...(openSettings === g.repo ? [fold(g)] : []), ...g.rows.map(line)])
+          : vm.rows.map(line)}
       </Box>,
     )
   })

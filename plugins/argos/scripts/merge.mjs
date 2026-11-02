@@ -40,7 +40,7 @@ export function gate(pr, verdict, me) {
   const checks = pr.statusCheckRollup ?? [];
   if (!checks.length) return "no CI";
   const red = checks.some((c) => !GREEN.has(c.conclusion ?? c.state ?? ""));
-  return red ? "CI not green" : null;
+  return red ? "CI red" : null;
 }
 
 // The repo's first allowed method, as a gh pr merge flag.
@@ -65,10 +65,10 @@ function sweep() {
         run(["pr", "review", url, "--approve", "--body", "Argos: validated with no blockers and nothing needing attention."]);
         const after = JSON.parse(run(["pr", "view", url, "--json", "mergeStateStatus"]));
         const how = method(JSON.parse(run(["api", `repos/${repoOf(url)}`])));
-        if (after.mergeStateStatus !== "CLEAN" || !how) outcome = { state: "approved", why: how ? "needs other reviews" : "no merge method allowed" };
+        if (after.mergeStateStatus !== "CLEAN" || !how) outcome = { state: "approved", why: how ? "needs more reviews" : "no merge method allowed" };
         else {
           run(["pr", "merge", url, how, "--match-head-commit", pr.headRefOid]);
-          outcome = { state: "merged", why: "" };
+          outcome = { state: "merged", why: how.slice(2) };
         }
       }
     } catch (err) {
@@ -100,9 +100,9 @@ function selfTest() {
   assert.equal(gate({ ...ok, isDraft: true }, v, "me"), "not open");
   assert.equal(gate({ ...ok, mergeable: "CONFLICTING" }, v, "me"), "conflicts");
   assert.equal(gate({ ...ok, statusCheckRollup: [] }, v, "me"), "no CI");
-  assert.equal(gate({ ...ok, statusCheckRollup: [{ conclusion: "FAILURE" }] }, v, "me"), "CI not green");
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ conclusion: "FAILURE" }] }, v, "me"), "CI red");
   // a check still running is not green either
-  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me"), "CI not green");
+  assert.equal(gate({ ...ok, statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: "" }] }, v, "me"), "CI red");
   assert.equal(method({ allow_squash_merge: false, allow_merge_commit: true }), "--merge");
   assert.equal(method({}), null);
   console.log("self-test ok");

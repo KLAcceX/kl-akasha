@@ -36,6 +36,12 @@
       "title": "Validation skills",
       "description": "Skills every validation reads as references, comma separated (e.g. security-review, api-style). A repo adds its own with /argos repos skills <repo> <skills>.",
       "default": ""
+    },
+    "runLimitMinutes": {
+      "type": "number",
+      "title": "Time limit per PR (min)",
+      "description": "A PR still validating after this many minutes counts as failed and can be retried.",
+      "default": 10
     }
   }
 }
