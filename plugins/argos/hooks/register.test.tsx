@@ -111,7 +111,7 @@ const judged = {
   prs: {
     u219: V({ issues: 2, finding: 'No backoff cap' }),
     u7: V({ issues: 3, finding: 'Cursor lost' }),
-    u8: V({ state: 'running' }),
+    u8: V({ state: 'running', at: new Date(NOW - 5 * 6e4).toISOString() }),
     u9: V({ sha: 'old0000' }),
   },
 }
@@ -140,7 +140,22 @@ test('a PR validated with no commit since is left out; a running one cannot be p
   expect([at('acme/api#9').isIn, at('acme/api#9').verdict?.text, at('acme/api#9').verdict?.count]).toEqual([true, '☆', undefined])
   // blockers are amber, a pass green: purple only says Argos looked
   expect([at('acme/web#7').verdict?.color, verdictTag(verdictOf(shaOn(item({})), V({}) as never), 'en').color]).toEqual(['warning', 'success'])
-  expect(vm.progress?.label).toBe('Validating 1 of 2')
+  expect(vm.run?.label).toBe('Validating 1 of 2')
+})
+
+test('a run: failed ones say why and go again; a line stuck past the limit counts as failed', () => {
+  const vs = (prs: Record<string, unknown>) => ({ ...judged, batch: { urls: ['u8', 'u9', 'u7'], at: round.at }, prs: { ...judged.prs, ...prs } }) as never
+  const stuck = ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) }))
+  expect([stuck.run?.isRunning, stuck.run?.label, stuck.run?.failed.map(f => [f.title, f.why])]).toEqual([false, '2 validated · 1 failed', [['T', 'timed out']]])
+  // a failed line is picked again by default, its verdict a red ✕ that says why on hover
+  const row = stuck.rows.find(x => x.key === 'acme/web#8')!
+  expect([row.isIn, row.verdict?.count, row.verdict?.tip]).toEqual([true, '✕', 'AI validation failed: timed out'])
+  const merged = ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: { ...V({ state: 'failed', reason: 'no access' }) }, u7: { ...V({ issues: 0 }), merge: { state: 'approved', why: 'needs other reviews', sha: 'abc1234', at: round.at } } }) }))
+  expect([merged.run?.label, merged.run?.retry, merged.rows.find(x => x.key === 'acme/web#7')?.mergeNote]).toEqual([
+    '2 validated · 1 failed · 1 approved, awaiting reviews',
+    ['u8'],
+    'approved · needs other reviews',
+  ])
 })
 
 test('the pane: the count, who goes, one Validate button and one line per PR', async ($, on) => {
@@ -392,11 +407,12 @@ test('auto-validate sends old verdicts on my PRs to one background subagent afte
   on('ui.open', () => ({ value: { isPlaced: true } }))
   await $.command.run({ command: 'argos', args: '' })
   await over
-  // only my PR: the teammate's old verdict waits for "all"
-  expect(runs.find(a => a.includes('start'))?.slice(2)).toEqual(['start', 'u219'])
+  // only what changed among my PRs with nothing pending: two with no verdict yet; the old one has
+  // open threads (pending), the draft waits, the teammate's old verdict waits for "all"
+  expect(runs.find(a => a.includes('start'))?.slice(2)).toEqual(['start', 'u220', 'u221'])
   expect(spawns).toHaveLength(1)
   expect(spawns[0]?.prompt).toContain('references/validate.md')
-  expect(spawns[0]?.prompt).toContain('- u219')
+  expect(spawns[0]?.prompt).toContain('- u220')
 })
 
 test('every button shows on a desktop the text it holds', async ($, on) => {

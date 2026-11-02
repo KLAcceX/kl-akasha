@@ -9,7 +9,7 @@ import type { PluginOptions, Register } from 'claude-code'
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
 import { C, HEX, HOVER, I, LOGO, STARS, TINT, rgba, titled } from './look'
-import { UI, authorOf, kindOf, toViewModel, verdictOf } from './view'
+import { UI, authorOf, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
 import type { Round, Verdicts } from '../types'
 
 export { outOf, reason, toViewModel, verdictOf, verdictTag } from './view'
@@ -21,6 +21,7 @@ const RUNNING = { plugin: 'argos', key: 'isRunning' } as const
 const DEMO = { plugin: 'argos', key: 'isDemo' } as const
 const VERDICTS = { plugin: 'argos', key: 'verdicts' } as const
 const IGNORED = { plugin: 'argos', key: 'ignored' } as const
+const ANNOUNCED = { plugin: 'argos', key: 'announced' } as const
 const round = atom(ROUND, null)
 const isRunning = atom(RUNNING, false)
 // PRs the person left out by hand, and PRs left out by the pane that the person brought back
@@ -37,6 +38,7 @@ const config = (options: PluginOptions) => ({
   account: String(options.account ?? '').trim(),
   qualifiers: String(options.qualifiers ?? '').split(/\s+/).filter(Boolean),
   lang: String(options.language ?? 'en'),
+  skills: String(options.skills ?? '').split(',').map(s => s.trim()).filter(Boolean),
 })
 
 async function stateDir($: any) {
@@ -58,30 +60,68 @@ async function loadVerdicts($: any): Promise<Verdicts | null> {
   }
 }
 
+// The skills a PR's validation reads as references: the plugin's own list, then its repo's
+// (repos.mjs skills), from repos.json beside the vigil's state.
+async function skillsOf($: any, global: string[]) {
+  let repos: { repo: string; skills?: string[] }[] = []
+  try {
+    repos = JSON.parse(await $.fs.read(`${await stateDir($)}/repos.json`))
+  } catch {}
+  return (url: string) => {
+    const own = repos.find(r => url.toLowerCase().includes(`github.com/${r.repo.toLowerCase()}/pull/`))?.skills ?? []
+    return [...new Set([...global, ...own])]
+  }
+}
+
 // Validates PRs in the background: marks them running, then hands them to subagents with the
 // validate job, ten each so a long list runs side by side; no chat is opened, the verdicts land on
-// the lines as each one finishes.
-async function validate($: any, urls: string[], lang: string) {
+// the lines as each one finishes. Each PR carries the skills its validation reads.
+async function validate($: any, urls: string[], lang: string, skills: string[]) {
   if (!urls.length) return
   await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'start', ...urls])
   await loadVerdicts($)
+  const of = await skillsOf($, skills)
+  const line = (u: string) => (of(u).length ? `- ${u} (skills: ${of(u).join(', ')})` : `- ${u}`)
   for (let i = 0; i < urls.length; i += 10)
     await $.agent.spawn({
-      prompt: [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`, `Scripts: ${$.plugin.root}/scripts`, ...urls.slice(i, i + 10).map(u => `- ${u}`)].join('\n'),
+      prompt: [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`, `Scripts: ${$.plugin.root}/scripts`, ...urls.slice(i, i + 10).map(line)].join('\n'),
       description: 'Argos validate',
     })
 }
 
-// Auto-validate: after a round, PRs whose verdict is old (new commits since) are validated again
-// in the background: the user's own with "mine", every watched PR with "all"; authors left out
-// stay out. ponytail: ten per round, so one burst of commits never spends a fortune at once.
-async function autoValidate($: any, r: Round | null, lang: string) {
+// Auto-validate: after a round, only what changed goes, in the background: PRs with no verdict
+// yet or with commits after theirs, among those with nothing pending (no change asked, not a
+// draft), the user's own with "mine", every watched PR with "all"; authors left out stay out. A
+// failed one waits for Retry. ponytail: ten per round, so a burst never spends a fortune at once.
+async function autoValidate($: any, r: Round | null, lang: string, skills: string[]) {
   const v = await loadVerdicts($)
   if (!r || !v || v.auto === 'off') return
   const skip = new Set(((await $.state.get(IGNORED)).value as string[] | undefined) ?? [])
+  const now = await $.clock.now()
   const all = [...(r.pending ?? []), ...(r.mine ?? []), ...(r.others ?? [])].filter(p => !skip.has(authorOf(p)) && !skip.has(`kind:${kindOf(p)}`))
-  const urls = [...new Set(all.filter(p => (v.auto === 'all' || p.kind === 'mine') && verdictOf(p, v.prs[p.url]).state === 'stale').map(p => p.url))].slice(0, 10)
-  await validate($, urls, lang)
+  const mine = (p: (typeof all)[number]) => p.kind === 'mine' || (Boolean(r.me) && p.author === r.me)
+  const changed = (p: (typeof all)[number]) => {
+    const verdict = verdictOf(p, v.prs[p.url], now)
+    return (verdict.state === 'none' || verdict.state === 'stale') && outOf(p, verdict) === null
+  }
+  const urls = [...new Set(all.filter(p => (v.auto === 'all' || mine(p)) && changed(p)).map(p => p.url))].slice(0, 10)
+  await validate($, urls, lang, skills)
+}
+
+// After verdicts land: auto-merge looks at the passing ones (merge.mjs does nothing for a repo
+// that did not opt in), and once a run has nothing left running, one toast says what it came to.
+// One sweep at a time: verdicts landing together would otherwise approve the same PR twice.
+let sweeping: Promise<unknown> | null = null
+async function afterVerdicts($: any, lang: string) {
+  if ((await $.state.get(DEMO)).value) return
+  sweeping ??= $.process.run(['node', `${$.plugin.root}/scripts/merge.mjs`, 'sweep'], { timeoutMs: 120_000 }).catch(() => {}).finally(() => (sweeping = null))
+  await sweeping
+  const v = await loadVerdicts($)
+  const r: Round | null = (await $.state.get(ROUND)).value ?? null
+  const run = runOf(v, await $.clock.now(), lang, [...(r?.pending ?? []), ...(r?.mine ?? []), ...(r?.others ?? [])])
+  if (!run || run.isRunning || (await $.state.get(ANNOUNCED)).value === run.at) return
+  await $.state.set(ANNOUNCED, run.at)
+  $.ui.toast(`Argos: ${run.label}`)
 }
 
 // Shows what the last round (from any session) wrote, unless what is on screen is newer
@@ -116,7 +156,7 @@ async function openPane($: any) {
 // when another one ran it within the interval, and only shows it.
 async function tick($: any, options: PluginOptions, force: boolean) {
   if ((await $.state.get(RUNNING)).value || (await $.state.get(DEMO)).value) return
-  const { minutes, account, qualifiers, lang } = config(options)
+  const { minutes, account, qualifiers, lang, skills } = config(options)
   const last = await load($)
   const now = await $.clock.now()
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
@@ -127,7 +167,8 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     await $.process.run(argv, { timeoutMs: 120_000 })
     const fresh = await load($)
     if (fresh?.notify) $.ui.toast(fresh.notify)
-    await autoValidate($, fresh, lang).catch(() => {})
+    await autoValidate($, fresh, lang, skills).catch(() => {})
+    await afterVerdicts($, lang).catch(() => {})
   } catch (err) {
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
     // this attempt's. Only a run that died before writing (killed at the time limit) gets the
@@ -143,7 +184,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
 }
 
 export const register: Register = (on, options) => {
-  const { lang, minutes, account } = config(options)
+  const { lang, minutes, account, skills } = config(options)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -163,7 +204,11 @@ export const register: Register = (on, options) => {
   // The AI records verdicts with verdicts.mjs from Bash; the lines follow as each one lands.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e)
-    if (e.command.includes('verdicts.mjs')) await loadVerdicts($)
+    // the lines follow at once; merging asks GitHub, so it never holds the agent's command
+    if (e.command.includes('verdicts.mjs')) {
+      await loadVerdicts($)
+      void afterVerdicts($, lang).catch(() => {})
+    }
     return result
   })
 
@@ -410,12 +455,37 @@ export const register: Register = (on, options) => {
     // One button validates everything left in, in the background; the stars fill in on the lines.
     const go = (
       <Box key="go" flexDirection="column" gap="xs">
-        {vm.progress && (
-          <Box flexDirection="row" alignItems="center" gap="xs">
-            {icon(STARS.run, '✦', 14, 14)}
-            <Text size="caption" weight="semibold" color={C.brand}>
-              {vm.progress.label}
-            </Text>
+        {/* the last run: how far it got or what it came to, and the ones that failed, with why */}
+        {vm.run && (
+          <Box key="run" flexDirection="column" gap="xs">
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+              {icon(vm.run.isRunning ? STARS.run : STARS.done, '✦', 14, 14)}
+              <Text size="caption" weight="semibold" color={vm.run.isRunning ? C.brand : C.text}>
+                {vm.run.label}
+              </Text>
+              {vm.run.retry.length > 0 && !vm.run.isRunning && (
+                <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills)}>
+                  {t(lang, 'run_retry')}
+                </Button>
+              )}
+            </Box>
+            {vm.run.failed.map(f => (
+              <Box key={`failed:${f.url}`} flexDirection="row" gap="xs" paddingX="xs" minWidth={0}>
+                <Text size="caption" color={C.error}>
+                  ✕
+                </Text>
+                <Box flexShrink={1} minWidth={0}>
+                  <Text size="caption" color={C.text} wrap="truncate">
+                    {f.title}
+                  </Text>
+                </Box>
+                <Box flexShrink={0}>
+                  <Text size="caption" color={C.subtle}>
+                    {f.why}
+                  </Text>
+                </Box>
+              </Box>
+            ))}
           </Box>
         )}
         <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
@@ -430,7 +500,7 @@ export const register: Register = (on, options) => {
             key="validate"
             variant={vm.validate.count ? 'primary' : 'secondary'}
             dimColor={!vm.validate.count}
-            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang) : undefined)}
+            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills) : undefined)}
           >
             {vm.validate.label}
           </Button>
@@ -529,7 +599,7 @@ export const register: Register = (on, options) => {
           </Box>
           <Box flexShrink={0}>
             <Text size="caption" color={C.subtle}>
-              {x.why ? `${x.num} · ${x.why}` : x.num}
+              {[x.num, x.why, x.mergeNote].filter(Boolean).join(' · ')}
             </Text>
           </Box>
         </Box>

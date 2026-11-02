@@ -30,7 +30,20 @@ export type Item = {
 
 // What verdicts.mjs writes to verdicts.json: the last AI validation of each PR.
 // issues: blockers; attention: risks that do not block; partial: not all of it was read
-export type Verdict = { state: 'running' | 'done'; sha?: string; issues?: number; attention?: number; partial?: boolean; finding?: string; at: string }
+// merge.mjs's outcome on a passing verdict, once per head commit, in a repo with auto-merge on
+export type MergeOutcome = { state: 'merged' | 'approved' | 'skipped'; why: string; sha: string; at: string }
+export type Verdict = {
+  state: 'running' | 'done' | 'failed'
+  sha?: string
+  issues?: number
+  attention?: number
+  partial?: boolean
+  finding?: string
+  // why it could not be validated
+  reason?: string
+  merge?: MergeOutcome
+  at: string
+}
 export type Verdicts = { auto: 'off' | 'mine' | 'all'; batch: { urls: string[]; at: string | null }; prs: Record<string, Verdict> }
 // What round.mjs writes to last-round.json.
 export type Round = {
@@ -65,6 +78,8 @@ declare module 'claude-code' {
       authorsOpen: boolean
       // what verdicts.mjs last wrote
       verdicts: Verdicts | null
+      // the run whose end was already told in a toast (its batch's start time)
+      announced: string | null
     }
   }
 }

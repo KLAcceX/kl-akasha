@@ -17,13 +17,17 @@ export const keyOf = (p: Item) => `${p.repo}#${p.number}`
 export const authorOf = (p: Item) => (p.author || '?').replace(/\[bot\]$/, '')
 export const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[bot\]$/.test(p.author ?? '') ? ('bot' as const) : ('human' as const))
 
-// A PR's verdict from the last validation: none, running, old (new commits since), blockers
-// found, partly read (never a pass), or passed. Attention counts risks that do not block.
-export type VerdictState = 'none' | 'run' | 'stale' | 'pass' | 'issues' | 'partial'
-export function verdictOf(p: Item, v?: Verdict): { state: VerdictState; issues: number; attention: number; finding: string } {
+// A PR's verdict from the last validation: none, running, failed (it could not be validated, or
+// it ran past RUN_LIMIT with no word), old (new commits since), blockers found, partly read (never
+// a pass), or passed. Attention counts risks that do not block.
+export const RUN_LIMIT = 30 * 6e4
+export type VerdictState = 'none' | 'run' | 'failed' | 'stale' | 'pass' | 'issues' | 'partial'
+export function verdictOf(p: Item, v?: Verdict, now?: number): { state: VerdictState; issues: number; attention: number; finding: string } {
   const attention = v?.attention ?? 0
   if (!v) return { state: 'none', issues: 0, attention: 0, finding: '' }
+  if (v.state === 'running' && now && now - Date.parse(v.at) > RUN_LIMIT) return { state: 'failed', issues: 0, attention: 0, finding: 'timed out' }
   if (v.state === 'running') return { state: 'run', issues: 0, attention: 0, finding: '' }
+  if (v.state === 'failed') return { state: 'failed', issues: 0, attention: 0, finding: v.reason || 'failed' }
   if (v.sha && p.sha && !p.sha.startsWith(v.sha) && !v.sha.startsWith(p.sha)) return { state: 'stale', issues: v.issues ?? 0, attention, finding: '' }
   const finding = v.finding ?? ''
   if (v.issues) return { state: 'issues', issues: v.issues, attention, finding }
@@ -38,8 +42,31 @@ export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
   if (v.state === 'issues') return { k: 'sig', svg: STARS.done, w: 16, count: `${v.issues}${more}`, color: C.warning, text: `✦${v.issues}${more}`, tip: t(lang, 'tip_v_issues', v.issues, v.attention) }
   if (v.state === 'partial') return { k: 'sig', svg: STARS.stale, w: 16, count: '½', color: C.subtle, text: '☆½', tip: t(lang, 'tip_v_partial', v.attention) }
   if (v.state === 'run') return { k: 'sig', svg: STARS.run, w: 16, text: '◌', tip: t(lang, 'tip_v_run') }
+  if (v.state === 'failed') return { k: 'sig', svg: STARS.stale, w: 16, count: '✕', color: C.error, text: '☆✕', tip: t(lang, 'tip_v_failed', v.finding) }
   if (v.state === 'stale') return { k: 'sig', svg: STARS.stale, w: 16, text: '☆', tip: t(lang, 'tip_v_stale') }
   return { k: 'sig', svg: STARS.none, w: 16, text: '✧', tip: t(lang, 'tip_v_none') }
+}
+
+// The last run, from verdicts.json's batch: how far it got, what failed (and why) to retry, and
+// what auto-merge did. A line counts as validated once it has any verdict, failed once it failed
+// or ran past RUN_LIMIT. Null before the first run.
+export function runOf(vs: Verdicts | null | undefined, now: number, lang: string, items: Item[] = []) {
+  const urls = vs?.batch?.urls ?? []
+  if (!urls.length) return null
+  const title = (url: string) => items.find(p => p.url === url)?.title ?? url.replace(/^https:\/\/github\.com\//, '')
+  const states = urls.map(url => ({ url, v: verdictOf({ sha: undefined } as Item, vs!.prs[url], now), merge: vs!.prs[url]?.merge }))
+  const running = states.filter(s => s.v.state === 'run').length
+  const failed = states.filter(s => s.v.state === 'failed').map(s => ({ url: s.url, title: title(s.url), why: s.v.finding }))
+  const validated = urls.length - running - failed.length
+  const merged = states.filter(s => s.merge?.state === 'merged').length
+  const approved = states.filter(s => s.merge?.state === 'approved').length
+  const parts = [
+    running ? t(lang, 'in_validating', validated + failed.length, urls.length) : t(lang, 'run_validated', validated),
+    failed.length ? t(lang, 'run_failed', failed.length) : '',
+    merged ? t(lang, 'run_merged', merged) : '',
+    approved ? t(lang, 'run_approved', approved) : '',
+  ]
+  return { isRunning: running > 0, at: vs!.batch.at, label: parts.filter(Boolean).join(' · '), failed, retry: failed.map(f => f.url) }
 }
 
 // What keeps a PR out of a validation by itself: someone asked for changes (changes requested,
@@ -135,8 +162,9 @@ export function toViewModel(r: Round | null, o: Opts) {
 
   const rows = all.map(p => {
     const key = keyOf(p)
-    const v = verdictOf(p, o.verdicts?.prs?.[p.url])
+    const v = verdictOf(p, o.verdicts?.prs?.[p.url], now)
     const auto = outOf(p, v)
+    const merged = o.verdicts?.prs?.[p.url]?.merge
     const name = authorOf(p)
     const kind = kindOfAuthor.get(name)!
     // who left it out: the author switch, the person's own tap, or the pane by itself
@@ -154,6 +182,8 @@ export function toViewModel(r: Round | null, o: Opts) {
       isIn: leftBy === null,
       // why the pane left a line out, said at its end; the person's own choices need no word
       why: leftBy === null || leftBy === 'hand' || leftBy === 'author' ? '' : t(lang, `why_${leftBy}`),
+      // what auto-merge did with a passing verdict: approved (others must still review), or why not
+      mergeNote: merged ? t(lang, `mg_${merged.state}`, merged.why) : '',
       // a running validation and an author left out are not toggled from the line
       canToggle: leftBy !== 'running' && leftBy !== 'author',
       isRunning: leftBy === 'running',
@@ -242,10 +272,9 @@ export function toViewModel(r: Round | null, o: Opts) {
   }
   const rework = free.filter(x => x.isRework).map(x => x.key)
   const picks = [pick('clean', free.filter(x => !x.hasReason).map(x => x.key)), ...(rework.length ? [pick('rework', rework)] : [])]
-  // Validation in flight: "Validating 9 of 22" while any of it runs.
-  const vb = o.verdicts?.batch?.urls ?? []
-  const vrun = vb.filter(u => o.verdicts?.prs?.[u]?.state === 'running').length
-  const progress = vrun ? { label: t(lang, 'in_validating', vb.length - vrun, vb.length) } : null
+  // The last run: "Validating 3 of 10 · 1 failed" while any of it runs, then what it came to
+  // ("9 validated · 1 failed · 2 merged"), with the failed ones ready to go again.
+  const run = runOf(o.verdicts, now, lang, all)
 
   return {
     ...head,
@@ -258,7 +287,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     groups,
     clear,
     picks,
-    progress,
+    run,
     // all of it in one repo of several says which ("Validate 4 · billing"), so a tap on Only
     // never sends more than the person meant; nothing picked reads "Validate", disabled
     validate: {

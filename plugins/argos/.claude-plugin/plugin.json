@@ -28,8 +28,14 @@
     "intervalMinutes": {
       "type": "number",
       "title": "Interval (min)",
-      "description": "How often the vigil runs, in minutes. Minimum 5.",
+      "description": "How often the vigil runs, in minutes, and auto-validate with it. Minimum 5.",
       "default": 15
+    },
+    "skills": {
+      "type": "string",
+      "title": "Validation skills",
+      "description": "Skills every validation reads as references, comma separated (e.g. security-review, api-style). A repo adds its own with /argos repos skills <repo> <skills>.",
+      "default": ""
     }
   }
 }
