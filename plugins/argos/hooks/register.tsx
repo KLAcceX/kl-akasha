@@ -358,7 +358,7 @@ export const register: Register = (on, options) => {
     const hasSvg = e.surface !== 'terminal'
     const Select = 'Select' in ui ? ui.Select : null
     const Input = 'Input' in ui ? ui.Input : null
-    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, openSettings, confirming, fixing] = await Promise.all([
+    const [running, last, left, brought, judged, authorsOut, isOpen, repoList, openSettings, confirming, fixing, validating] = await Promise.all([
       read($, isRunning),
       read($, round),
       read($, out),
@@ -370,6 +370,7 @@ export const register: Register = (on, options) => {
       read($, settingsOpen),
       read($, confirmMerge),
       read($, fixRuns),
+      read($, agentRuns),
     ])
     // the agents at work first: a line a fixing agent holds says so
     const working = (await $.agent.list().catch(() => []))
@@ -399,7 +400,7 @@ export const register: Register = (on, options) => {
     // The head: the mark, "Pull requests" and Check now; under it how many go to validation and
     // when Argos last looked.
     const head = (withCheck: boolean) => (
-      <Box key="head" flexDirection="column" gap="xs">
+      <Box key="head" flexDirection="column" gap={0}>
         <Box flexDirection="row" alignItems="center" gap="sm">
           {hasSvg && <ui.Svg source={LOGO} alt="Argos" width={16} height={16} />}
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -425,6 +426,11 @@ export const register: Register = (on, options) => {
             </Text>
           )}
         </Box>
+        {vm.state === 'ok' && vm.mergeLine && (
+          <Text size="caption" weight="semibold" color={C.text}>
+            {vm.mergeLine}
+          </Text>
+        )}
       </Box>
     )
     // A banner: check failed (red), no repo (neutral).
@@ -450,8 +456,10 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+    // Space goes between Boxes, never between lines of Text: lines of one thought sit at 0, blocks
+    // of a region md apart, regions lg apart, and stacked rows of Buttons xs apart.
     const frame = (...body: any[]) => (
-      <Box flexDirection="column" gap="md" padding="md">
+      <Box flexDirection="column" gap="lg" padding="md">
         {body.filter(Boolean)}
       </Box>
     )
@@ -520,8 +528,7 @@ export const register: Register = (on, options) => {
       await loadVerdicts($)
     }
     const auto = (
-      <Box key="auto" flexDirection="column" gap="xs">
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+      <Box key="auto" flexDirection="row" flexWrap="wrap" alignItems="center" gap="xs">
           <Text size="caption" color={C.text}>
             {t(lang, 'auto_label')}
           </Text>
@@ -541,21 +548,35 @@ export const register: Register = (on, options) => {
               onSelect={(n: string) => void setAuto(vm.auto.mode, Number(n))}
             />
           )}
-        </Box>
-        <Text size="caption" color={C.subtle}>
-          {vm.auto.line}
-        </Text>
       </Box>
     )
     const who = (
-      <Box key="who-box" flexDirection="column" gap="xs">
-        <Box flexDirection="row">
-          <Button key="who" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
-            {`${vm.who.label} ${isOpen ? '▾' : '▸'}`}
-          </Button>
+      <Box key="who-box" flexDirection="column" gap="md">
+        <Box flexDirection="column" gap={0}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap="xs" columnGap="md">
+            <Button key="who" plain={true} onPress={() => void update($, authorsOpen, x => !x)}>
+              {`${vm.who.label} ${isOpen ? '▾' : '▸'}`}
+            </Button>
+            {auto}
+          </Box>
+          <Text size="caption" color={C.subtle}>
+            {vm.auto.line}
+          </Text>
+          {vm.autoLine && (
+            <Text size="caption" color={C.subtle}>
+              {vm.autoLine}
+            </Text>
+          )}
         </Box>
         {isOpen && (
-          <Box flexDirection="column" gap="xs" paddingX="xs">
+          <Box
+            flexDirection="column"
+            gap="md"
+            padding="md"
+            borderStyle="round"
+            borderColor="rgba(128,128,128,0.25)"
+            backgroundColor="rgba(128,128,128,0.05)"
+          >
             <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
               <Text size="caption" color={C.subtle}>
                 {t(lang, 'who_set')}
@@ -566,7 +587,7 @@ export const register: Register = (on, options) => {
                 </Button>
               ))}
             </Box>
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" rowGap="xs" columnGap="md">
               {vm.authors.map(a => (
                 <Box key={`author:${a.name}`} flexDirection="row" alignItems="center" gap="xs">
                   {icon(a.svg, a.name.slice(0, 1).toUpperCase(), 16, 16, a.tip)}
@@ -580,17 +601,6 @@ export const register: Register = (on, options) => {
               ))}
             </Box>
           </Box>
-        )}
-        {auto}
-        {vm.mergeLine && (
-          <Text size="caption" weight="semibold" color={C.text}>
-            {vm.mergeLine}
-          </Text>
-        )}
-        {vm.autoLine && (
-          <Text size="caption" color={C.subtle}>
-            {vm.autoLine}
-          </Text>
         )}
       </Box>
     )
@@ -608,102 +618,125 @@ export const register: Register = (on, options) => {
       await update($, out, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => !want.has(x.key) && !x.hasReason).map(x => x.key)])
       await update($, back, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => want.has(x.key) && x.hasReason).map(x => x.key)])
     }
-    // The agents at work, each with Stop: its tools are refused from then on, so it ends.
-    const agents = working.length > 0 && (
-      <Box key="agents" flexDirection="column" gap="xs">
+    // How far a validating agent got with its PRs ("4 of 7"), and how many of them failed.
+    const progressOf = (id: string) => {
+      const urls = validating[id]
+      if (!urls) return null
+      const states = urls.map(u => judged?.prs[u]?.state)
+      return { done: states.filter(s => s === 'done' || s === 'failed').length, total: urls.length, failed: states.filter(s => s === 'failed').length }
+    }
+    const isFixing = working.some(a => fixing[a.id])
+    // The run line: kept only when no validating agent stands for the run (a run the chat started).
+    const runLine = vm.run?.isRunning && !working.some(a => validating[a.id]) && (
+      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
+        <Text color={C.brand}>⠿</Text>
         <Text size="caption" weight="semibold" color={C.text}>
-          {t(lang, 'ag_title', working.length)}
+          {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
         </Text>
-        {working.map(a => (
-          <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm" paddingX="xs">
-            <Text color={C.brand}>⠿</Text>
-            <Text size="caption" color={C.text}>
-              {a.description}
-            </Text>
-            <Text size="caption" color={C.subtle}>
-              {t(lang, `ag_${a.status}`)}
-            </Text>
-            <Button key={`stop:${a.id}`} plain={true} onPress={() => void stopAgent($, a.id)}>
-              {t(lang, 'ag_stop')}
-            </Button>
-          </Box>
-        ))}
+        {vm.run.failed > 0 && (
+          <Text size="caption" weight="semibold" color={C.error}>
+            {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+          </Text>
+        )}
       </Box>
     )
-    // One button validates everything left in, in the background; the stars fill in on the lines.
-    const go = (
-      <Box key="go" flexDirection="column" gap="xs">
-        {agents}
-        {/* The last run, in words: while it goes, how far ("Validating 4 of 10 · 1 failed") in
-            place of the picks and Validate; once done, what it came to, above them, until the next
-            run or check, with Retry on the failed ones. How each line ended is on its line. */}
-        {vm.run?.isRunning && (
-          <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
-            <Text color={C.brand}>⠿</Text>
-            <Text size="caption" weight="semibold" color={C.text}>
-              {t(lang, 'in_validating', vm.run.total - vm.rows.filter(x => x.mark.glyph === '○').length, vm.run.total)}
-            </Text>
-            {vm.run.failed > 0 && (
-              <Text size="caption" weight="semibold" color={C.error}>
-                {`· ${t(lang, 'run_failed', vm.run.failed)}`}
-              </Text>
-            )}
-          </Box>
+    // What the last run came to, until the next run or check, with Retry on the failed ones.
+    const doneLine = vm.run && !vm.run.isRunning && (
+      <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
+        {!vm.run.failed && <Text color={C.success}>✓</Text>}
+        <Text size="caption" weight="semibold" color={C.text}>
+          {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
+        </Text>
+        {vm.run.failed > 0 && (
+          <Text size="caption" weight="semibold" color={C.error}>
+            {`· ${t(lang, 'run_failed', vm.run.failed)}`}
+          </Text>
         )}
-        {vm.run && !vm.run.isRunning && (
-          <Box key="run" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="xs">
-            {!vm.run.failed && <Text color={C.success}>✓</Text>}
-            <Text size="caption" weight="semibold" color={C.text}>
-              {`${t(lang, 'run_done')} · ${t(lang, 'run_validated', vm.run.validated)}`}
-            </Text>
-            {vm.run.failed > 0 && (
-              <Text size="caption" weight="semibold" color={C.error}>
-                {`· ${t(lang, 'run_failed', vm.run.failed)}`}
-              </Text>
-            )}
-            {(vm.run.merged > 0 || vm.run.approved > 0) && (
+        {(vm.run.merged > 0 || vm.run.approved > 0) && (
+          <Text size="caption" color={C.text}>
+            {['', vm.run.merged ? t(lang, 'run_merged', vm.run.merged) : '', vm.run.approved ? t(lang, 'run_approved', vm.run.approved) : ''].filter((x, i) => !i || x).join(' · ')}
+          </Text>
+        )}
+        {vm.run.retry.length > 0 && (
+          <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills, prompts.validate)}>
+            {t(lang, 'run_retry', vm.run.retry.length)}
+          </Button>
+        )}
+      </Box>
+    )
+    // The agents at work and the runs, in one block: a validating agent is its run, so its line
+    // carries how far it got ("4 of 7 · 1 failed") and the one Stop. Stop refuses its tools from
+    // then on, so it ends.
+    const agents = (working.length > 0 || runLine || doneLine) && (
+      <Box key="agents" flexDirection="column" gap="xs">
+        {working.length > 0 && (
+          <Text size="caption" weight="semibold" color={C.text}>
+            {t(lang, 'ag_title', working.length)}
+          </Text>
+        )}
+        {working.map(a => {
+          const p = progressOf(a.id)
+          return (
+            <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
+              <Text color={C.brand}>⠿</Text>
               <Text size="caption" color={C.text}>
-                {['', vm.run.merged ? t(lang, 'run_merged', vm.run.merged) : '', vm.run.approved ? t(lang, 'run_approved', vm.run.approved) : ''].filter((x, i) => !i || x).join(' · ')}
+                {a.description}
               </Text>
-            )}
-            {vm.run.retry.length > 0 && (
-              <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills, prompts.validate)}>
-                {t(lang, 'run_retry', vm.run.retry.length)}
-              </Button>
-            )}
-          </Box>
-        )}
-        {!vm.run?.isRunning && (
-          <Box flexDirection="column" gap="xs">
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
-              {vm.picks.map(p => (
-                <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
-                  {p.label}
-                </Button>
-              ))}
-              {vm.rework.length > 0 && (
-                <Button key="fix" plain={true} onPress={() => void fix($, vm.rework, lang, prompts.fix)}>
-                  {t(lang, 'fix_n', vm.rework.length)}
-                </Button>
+              {p && (
+                <Text size="caption" color={C.text}>
+                  {t(lang, 'ag_progress', p.done, p.total)}
+                </Text>
               )}
-            </Box>
-            <Box flexDirection="row" alignItems="center" gap="sm">
-              <Button
-                key="validate"
-                variant={vm.validate.count ? 'primary' : 'secondary'}
-                dimColor={!vm.validate.count}
-                onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills, prompts.validate) : undefined)}
-              >
-                {vm.validate.label}
-              </Button>
-              {vm.clear && (
-                <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
-                  {vm.clear.label}
-                </Button>
+              {p && p.failed > 0 && (
+                <Text size="caption" color={C.error}>
+                  {`· ${t(lang, 'run_failed', p.failed)}`}
+                </Text>
               )}
+              <Text size="caption" color={C.subtle}>
+                {t(lang, `ag_${a.status}`)}
+              </Text>
+              <Button key={`stop:${a.id}`} plain={true} onPress={() => void stopAgent($, a.id)}>
+                {t(lang, 'ag_stop')}
+              </Button>
             </Box>
-          </Box>
-        )}
+          )
+        })}
+        {runLine}
+        {doneLine}
+      </Box>
+    )
+    // The selection and what acts on it: the picks only change the selection; Validate, Clear and
+    // Fix act, so they share the second row. Fix pushes, so it hides while its agent works. While
+    // a run goes the lines are locked and both rows wait.
+    const go = !vm.run?.isRunning && (
+      <Box key="go" flexDirection="column" gap="xs">
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md">
+          {vm.picks.map(p => (
+            <Button key={`quick:${p.id}`} plain={true} onPress={() => void pickOnly(p.keys)}>
+              {p.label}
+            </Button>
+          ))}
+        </Box>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap="sm">
+          <Button
+            key="validate"
+            variant={vm.validate.count ? 'primary' : 'secondary'}
+            dimColor={!vm.validate.count}
+            onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills, prompts.validate) : undefined)}
+          >
+            {vm.validate.label}
+          </Button>
+          {vm.clear && (
+            <Button key="clear" plain={true} onPress={() => void clearAll(vm.clear!.keys)}>
+              {vm.clear.label}
+            </Button>
+          )}
+          {vm.rework.length > 0 && !isFixing && (
+            <Button key="fix" plain={true} onPress={() => void fix($, vm.rework, lang, prompts.fix)}>
+              {t(lang, 'fix_n', vm.rework.length)}
+            </Button>
+          )}
+        </Box>
       </Box>
     )
     // One line per PR, packed to the left so the eye never crosses an empty middle: a box to leave
@@ -736,7 +769,7 @@ export const register: Register = (on, options) => {
     }
     const MARK = { on: BOX.on, mixed: BOX.mixed, off: BOX.off }
     const header = (g: Group) => (
-      <Box key={`group:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm" paddingX="xs" marginTop="md">
+      <Box key={`group:${g.repo}`} flexDirection="row" flexWrap="wrap" alignItems="center" rowGap="xs" columnGap="sm" paddingX="xs">
         {g.keys.length ? (
           <Button key={`repo:${g.repo}`} plain={true} onPress={() => void pickRepo(g)}>
             {`${MARK[g.mark]} ${g.name}`}
@@ -754,6 +787,7 @@ export const register: Register = (on, options) => {
             {t(lang, 'mg_heading')}
           </Text>
         )}
+        <Box flexGrow={1} />
         {vm.groups.length > 1 && g.keys.length > 0 && (
           <Button key={`only:${g.repo}`} plain={true} onPress={() => void onlyRepo(g)}>
             {t(lang, 'in_only')}
@@ -789,6 +823,7 @@ export const register: Register = (on, options) => {
         flexDirection="column"
         gap="md"
         padding="md"
+        marginLeft={3}
         marginBottom="sm"
         borderStyle="round"
         borderColor="rgba(128,128,128,0.25)"
@@ -806,9 +841,18 @@ export const register: Register = (on, options) => {
             </Box>
             <Box flexDirection="column" gap={0}>
               {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
-                <Text key={`rule:${i}`} size="caption" color={C.text}>
-                  {`· ${rule}`}
-                </Text>
+                <Box key={`rule:${i}`} flexDirection="row">
+                  <Box flexShrink={0} width={2}>
+                    <Text size="caption" color={C.subtle}>
+                      ·
+                    </Text>
+                  </Box>
+                  <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                    <Text size="caption" color={C.text}>
+                      {rule}
+                    </Text>
+                  </Box>
+                </Box>
               ))}
             </Box>
             <Text size="caption" color={C.subtle}>
@@ -940,12 +984,25 @@ export const register: Register = (on, options) => {
       head(true),
       failedBanner,
       who,
+      agents,
       go,
-      <Box key="lines" flexDirection="column">
-        {vm.groups.length > 1 || openSettings
-          ? vm.groups.flatMap(g => [header(g), ...(openSettings === g.repo ? [fold(g)] : []), ...g.rows.map(line)])
-          : vm.rows.map(line)}
-      </Box>,
+      vm.groups.length > 1 || openSettings ? (
+        <Box key="lines" flexDirection="column" gap="lg">
+          {vm.groups.map(g => (
+            <Box key={`repo-group:${g.repo}`} flexDirection="column" gap="xs">
+              {header(g)}
+              {openSettings === g.repo && fold(g)}
+              <Box flexDirection="column" gap={0}>
+                {g.rows.map(line)}
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      ) : (
+        <Box key="lines" flexDirection="column" gap={0}>
+          {vm.rows.map(line)}
+        </Box>
+      ),
     )
   })
 }

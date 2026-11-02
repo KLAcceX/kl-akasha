@@ -368,6 +368,8 @@ test('the agents at work are listed with Stop; Fix my PRs runs in the background
   })
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /agent working$/ }))?.text).toBe('1 agent working')
+  // the agent is its run: its line says how far it got, with the one Stop
+  expect((await ui.find({ type: 'Text', text: /^\d+ of \d+$/ }))?.text).toBe('0 of 1')
   // Stop: its PRs not yet validated fail, ready for Retry; its tools are refused from then on
   await ui.press({ key: 'stop:a1' })
   expect(runs.at(-1)).toEqual(['fail', 'u9', '--reason', 'stopped'])

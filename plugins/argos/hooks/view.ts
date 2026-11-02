@@ -337,7 +337,9 @@ export function toViewModel(r: Round | null, o: Opts) {
     const isOn = keys.length > 0 && keys.length === going.size && keys.every(k => going.has(k))
     return { id, keys, label: `${t(lang, `pick_${id}`)} ${keys.length}${isOn ? ' ✓' : ''}` }
   }
-  const rework = free.filter(x => x.isRework).map(x => x.key)
+  // my PRs a fixing agent does not hold yet: the pick and Fix count the same lines
+  const reworkRows = free.filter(x => x.isRework && !fixingSet.has(x.url))
+  const rework = reworkRows.map(x => x.key)
   const picks = [pick('clean', free.filter(x => !x.hasReason).map(x => x.key)), ...(rework.length ? [pick('rework', rework)] : [])]
   // Automatic mode in one line: off, or when the next round looks and what the last one did.
   const vs = o.verdicts
@@ -354,7 +356,7 @@ export function toViewModel(r: Round | null, o: Opts) {
   const auto = {
     mode: vs?.auto ?? 'off',
     every,
-    line: !vs || vs.auto === 'off' ? t(lang, 'auto_off') : [t(lang, 'auto_on'), next, last ? t(lang, 'auto_last', hhmm(Date.parse(last.at)), lastWhat) : ''].filter(Boolean).join(' · '),
+    line: !vs || vs.auto === 'off' ? t(lang, 'auto_off') : [next, last ? t(lang, 'auto_last', hhmm(Date.parse(last.at)), lastWhat) : ''].filter(Boolean).join(' · '),
   }
   // the repos that approve and merge by themselves, named in the head
   const merging = groups.filter(g => g.merge).map(g => g.name)
@@ -371,7 +373,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     clear,
     picks,
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
-    rework: rows.filter(x => x.isRework && !fixingSet.has(x.url)).map(x => x.url),
+    rework: reworkRows.map(x => x.url),
     run: showRun ? run : null,
     auto,
     mergeLine: merging.length ? t(lang, 'mg_line', merging.join(', ')) : '',
