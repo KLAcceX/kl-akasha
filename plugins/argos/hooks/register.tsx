@@ -23,6 +23,9 @@ const VERDICTS = { plugin: 'argos', key: 'verdicts' } as const
 const IGNORED = { plugin: 'argos', key: 'ignored' } as const
 const ANNOUNCED = { plugin: 'argos', key: 'announced' } as const
 const REPOS = { plugin: 'argos', key: 'repos' } as const
+// the validating agents this mod started, each with its PRs; and the ones the person stopped
+const AGENT_RUNS = { plugin: 'argos', key: 'agentRuns' } as const
+const STOPPED = { plugin: 'argos', key: 'stopped' } as const
 const round = atom(ROUND, null)
 const isRunning = atom(RUNNING, false)
 // PRs the person left out by hand, and PRs left out by the pane that the person brought back
@@ -38,6 +41,7 @@ const verdicts = atom(VERDICTS, null)
 const repos = atom(REPOS, [] as RepoCfg[])
 const settingsOpen = atom({ plugin: 'argos', key: 'settingsOpen' } as const, null as string | null)
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
+const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 // what was typed in each repo's skills field, by repo; outside the atoms so typing redraws nothing
 const skillDrafts = new Map<string, string>()
 
@@ -49,7 +53,20 @@ const config = (options: PluginOptions) => ({
   skills: String(options.skills ?? '').split(',').map(s => s.trim()).filter(Boolean),
   // minutes a PR may stay "validating" before it counts as failed
   limit: Math.max(2, Number(options.runLimitMinutes) || 10),
+  // the prompts behind Validate and Fix: Argos's own, the person's, or both
+  prompts: {
+    validate: { mode: promptMode(options.validatePromptMode), text: String(options.validatePrompt ?? '').trim() },
+    fix: { mode: promptMode(options.fixPromptMode), text: String(options.fixPrompt ?? '').trim() },
+  },
 })
+type Prompt = { mode: 'argos+mine' | 'argos' | 'mine'; text: string }
+function promptMode(x: unknown): Prompt['mode'] {
+  return x === 'argos' || x === 'mine' ? x : 'argos+mine'
+}
+// Argos's prompt, the person's added to it, or theirs alone; theirs alone with none written falls
+// back to Argos's, so a button never sends an empty ask.
+export const compose = (p: Prompt, argos: string[], mine: (text: string) => string[]) =>
+  p.mode === 'argos' || !p.text ? argos : p.mode === 'mine' ? mine(p.text) : [...argos, p.text]
 
 async function stateDir($: any) {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
@@ -95,17 +112,32 @@ async function skillsOf($: any, global: string[]) {
 // job, ten each so a long list runs side by side; each agent marks a PR started as it reaches it.
 // No chat is opened, the verdicts land on the lines as each one finishes. Each PR carries the
 // skills its validation reads.
-async function validate($: any, urls: string[], lang: string, skills: string[]) {
+// The person's own prompt replaces Argos's job only in what to look for: the verdicts are still
+// recorded with verdicts.mjs, or the pane could not show them.
+async function validate($: any, urls: string[], lang: string, skills: string[], prompt: Prompt) {
   if (!urls.length) return
   await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'queue', ...urls])
   await loadVerdicts($)
   const of = await skillsOf($, skills)
   const line = (u: string) => (of(u).length ? `- ${u} (skills: ${of(u).join(', ')})` : `- ${u}`)
-  for (let i = 0; i < urls.length; i += 10)
-    await $.agent.spawn({
-      prompt: [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`, `Scripts: ${$.plugin.root}/scripts`, ...urls.slice(i, i + 10).map(line)].join('\n'),
-      description: 'Argos validate',
-    })
+  const scripts = `${$.plugin.root}/scripts`
+  const ask = compose(prompt, [t(lang, 'b_auto'), `Job: ${$.plugin.root}/references/validate.md`], text => [text, t(lang, 'b_record', scripts)])
+  for (let i = 0; i < urls.length; i += 10) {
+    const part = urls.slice(i, i + 10)
+    const { agentId } = await $.agent.spawn({ prompt: [...ask, `Scripts: ${scripts}`, ...part.map(line)].join('\n'), description: `Argos validate · ${part.length} PRs` })
+    if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
+  }
+}
+
+// Stops a validating agent the mod started: from now on every tool it calls is refused, so it
+// ends, and its PRs not yet validated are marked failed, ready for Retry.
+async function stopAgent($: any, id: string) {
+  await $.state.set(STOPPED, [...(((await $.state.get(STOPPED)).value as string[] | undefined) ?? []), id])
+  const urls: string[] = ((await $.state.get(AGENT_RUNS)).value ?? {})[id] ?? []
+  const v = await loadVerdicts($)
+  for (const u of urls.filter(u => ['queued', 'running'].includes(v?.prs[u]?.state ?? '')))
+    await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'fail', u, '--reason', 'stopped'])
+  await loadVerdicts($)
 }
 
 // Auto-validate: after a round, once its interval has passed since the last automatic round, only
@@ -114,7 +146,7 @@ async function validate($: any, urls: string[], lang: string, skills: string[]) 
 // every watched PR with "all"; authors left out stay out. A failed one waits for Retry. Each round
 // is recorded, sent or not, so the pane can say when it looked. ponytail: ten per round, so a
 // burst never spends a fortune at once.
-async function autoValidate($: any, r: Round | null, lang: string, skills: string[]) {
+async function autoValidate($: any, r: Round | null, lang: string, skills: string[], prompt: Prompt) {
   const v = await loadVerdicts($)
   if (!r || !v || v.auto === 'off') return
   const now = await $.clock.now()
@@ -127,7 +159,7 @@ async function autoValidate($: any, r: Round | null, lang: string, skills: strin
     return (verdict.state === 'none' || verdict.state === 'stale') && outOf(p, verdict) === null
   }
   const urls = [...new Set(all.filter(p => (v.auto === 'all' || mine(p)) && changed(p)).map(p => p.url))].slice(0, 10)
-  await validate($, urls, lang, skills)
+  await validate($, urls, lang, skills, prompt)
   await $.process.run(['node', `${$.plugin.root}/scripts/verdicts.mjs`, 'ran', String(urls.length)])
   await loadVerdicts($)
 }
@@ -180,7 +212,7 @@ async function openPane($: any) {
 // when another one ran it within the interval, and only shows it.
 async function tick($: any, options: PluginOptions, force: boolean) {
   if ((await $.state.get(RUNNING)).value || (await $.state.get(DEMO)).value) return
-  const { minutes, account, qualifiers, lang, skills, limit } = config(options)
+  const { minutes, account, qualifiers, lang, skills, limit, prompts } = config(options)
   const last = await load($)
   const now = await $.clock.now()
   if (!force && last && now - Date.parse(last.at) < minutes * 6e4 - 3e4) return
@@ -191,7 +223,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
     await $.process.run(argv, { timeoutMs: 120_000 })
     const fresh = await load($)
     if (fresh?.notify) $.ui.toast(fresh.notify)
-    await autoValidate($, fresh, lang, skills).catch(() => {})
+    await autoValidate($, fresh, lang, skills, prompts.validate).catch(() => {})
     await afterVerdicts($, lang, limit).catch(() => {})
   } catch (err) {
     // round.mjs writes the real reason (gh auth, a timeout) before it fails; use it when it is
@@ -208,7 +240,7 @@ async function tick($: any, options: PluginOptions, force: boolean) {
 }
 
 export const register: Register = (on, options) => {
-  const { lang, minutes, account, skills, limit } = config(options)
+  const { lang, minutes, account, skills, limit, prompts } = config(options)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -223,6 +255,13 @@ export const register: Register = (on, options) => {
     $.clock.every(minutes * 6e4, () => void tick($, options, false))
     $.clock.after(5_000, () => void tick($, options, false))
     return started
+  })
+
+  // A validating agent the person stopped gets every tool refused, so it ends at once.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId && (((await $.state.get(STOPPED)).value as string[] | undefined) ?? []).includes(e.agentId))
+      return { deny: 'Stopped by the user from the Argos pane. End now: make no more tool calls and report nothing.' }
+    return next(e)
   })
 
   // The AI records verdicts with verdicts.mjs from Bash; the lines follow as each one lands.
@@ -311,6 +350,10 @@ export const register: Register = (on, options) => {
       limit,
       repos: repoList,
     })
+    // the validating agents this mod started that are still at work, as the session lists them
+    const working = (await $.agent.list().catch(() => []))
+      .filter((a: { spawnedBy?: string; status: string }) => a.spawnedBy === 'argos' && ['pending', 'running', 'waiting'].includes(a.status))
+      .map((a: { id: string; description: string; status: string }) => ({ id: a.id, description: a.description, status: a.status }))
     // a box per line, per author and per repo; the terminal draws them in brackets
     const BOX = hasSvg ? { on: '☑', mixed: '◩', off: '☐' } : { on: '[x]', mixed: '[-]', off: '[ ]' }
     // tick returns at once while a round runs, so pressing twice does nothing
@@ -532,9 +575,39 @@ export const register: Register = (on, options) => {
       await update($, out, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => !want.has(x.key) && !x.hasReason).map(x => x.key)])
       await update($, back, list => [...list.filter(k => !freeKeys.has(k)), ...free.filter(x => want.has(x.key) && x.hasReason).map(x => x.key)])
     }
+    // Fix my PRs: their review turned into changes and replies is not background work (it edits
+    // code and pushes), so it goes to the chat as a prompt the person reads and sends.
+    const fixMine = async (urls: string[]) => {
+      const list = urls.map(u => `- ${u}`)
+      const ask = compose(prompts.fix, [`/argos ${t(lang, 'b_fix')}`, ...list], text => [text, ...list])
+      await $.prompt.fill({ text: ask.join('\n'), mode: 'replace' })
+    }
+    // The agents at work, each with Stop: its tools are refused from then on, so it ends.
+    const agents = working.length > 0 && (
+      <Box key="agents" flexDirection="column" gap="xs">
+        <Text size="caption" weight="semibold" color={C.text}>
+          {t(lang, 'ag_title', working.length)}
+        </Text>
+        {working.map(a => (
+          <Box key={`agent:${a.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm" paddingX="xs">
+            <Text color={C.brand}>⠿</Text>
+            <Text size="caption" color={C.text}>
+              {a.description}
+            </Text>
+            <Text size="caption" color={C.subtle}>
+              {t(lang, `ag_${a.status}`)}
+            </Text>
+            <Button key={`stop:${a.id}`} plain={true} onPress={() => void stopAgent($, a.id)}>
+              {t(lang, 'ag_stop')}
+            </Button>
+          </Box>
+        ))}
+      </Box>
+    )
     // One button validates everything left in, in the background; the stars fill in on the lines.
     const go = (
       <Box key="go" flexDirection="column" gap="xs">
+        {agents}
         {/* The last run, in words: while it goes, how far ("Validating 4 of 10 · 1 failed") in
             place of the picks and Validate; once done, what it came to, above them, until the next
             run or check, with Retry on the failed ones. How each line ended is on its line. */}
@@ -568,7 +641,7 @@ export const register: Register = (on, options) => {
               </Text>
             )}
             {vm.run.retry.length > 0 && (
-              <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills)}>
+              <Button key="retry" plain={true} onPress={() => void validate($, vm.run!.retry, lang, skills, prompts.validate)}>
                 {t(lang, 'run_retry', vm.run.retry.length)}
               </Button>
             )}
@@ -582,13 +655,18 @@ export const register: Register = (on, options) => {
                   {p.label}
                 </Button>
               ))}
+              {vm.rework.length > 0 && (
+                <Button key="fix" plain={true} onPress={() => void fixMine(vm.rework)}>
+                  {t(lang, 'fix_n', vm.rework.length)}
+                </Button>
+              )}
             </Box>
             <Box flexDirection="row" alignItems="center" gap="sm">
               <Button
                 key="validate"
                 variant={vm.validate.count ? 'primary' : 'secondary'}
                 dimColor={!vm.validate.count}
-                onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills) : undefined)}
+                onPress={() => (vm.validate.count ? void validate($, vm.validate.urls, lang, skills, prompts.validate) : undefined)}
               >
                 {vm.validate.label}
               </Button>

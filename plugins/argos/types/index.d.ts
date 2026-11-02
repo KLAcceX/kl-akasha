@@ -96,6 +96,10 @@ declare module 'claude-code' {
       settingsOpen: string | null
       // the repo whose auto-merge waits for the person's confirmation
       confirmMerge: string | null
+      // the validating agents the mod started, by agent id, each with its PRs
+      agentRuns: Record<string, string[]>
+      // the agents the person stopped: every tool they call is refused
+      stopped: string[]
     }
   }
 }

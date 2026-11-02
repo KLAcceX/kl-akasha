@@ -37,6 +37,32 @@
       "description": "Skills every validation reads as references, comma separated (e.g. security-review, api-style). A repo adds its own with /argos repos skills <repo> <skills>.",
       "default": ""
     },
+    "validatePromptMode": {
+      "type": "string",
+      "title": "Validate prompt",
+      "description": "What Validate asks: Argos's own job plus your prompt, Argos's alone, or yours alone.",
+      "options": ["argos+mine", "argos", "mine"],
+      "default": "argos+mine"
+    },
+    "validatePrompt": {
+      "type": "string",
+      "title": "Your validate prompt",
+      "description": "Your own words for validating a PR (what to look for, house rules). Verdicts are always recorded so the pane can show them.",
+      "default": ""
+    },
+    "fixPromptMode": {
+      "type": "string",
+      "title": "Fix prompt",
+      "description": "What Fix my PRs asks: Argos's own job plus your prompt, Argos's alone, or yours alone.",
+      "options": ["argos+mine", "argos", "mine"],
+      "default": "argos+mine"
+    },
+    "fixPrompt": {
+      "type": "string",
+      "title": "Your fix prompt",
+      "description": "Your own words for fixing your PRs from their review (style, what to run before pushing).",
+      "default": ""
+    },
     "runLimitMinutes": {
       "type": "number",
       "title": "Time limit per PR (min)",

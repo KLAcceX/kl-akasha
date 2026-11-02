@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { reason, toViewModel, verdictOf, verdictTag } from './register'
+import { compose, reason, toViewModel, verdictOf, verdictTag } from './register'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -333,6 +333,56 @@ test('while a run goes the lines are locked and say how each stands; Validate wa
   expect((await ui.find({ type: 'Text', text: /validating · / }))?.text).toBe('· validating · 3m')
   expect((await ui.find({ type: 'Text', text: /· queued/ }))?.text).toBe('· queued')
   await ui.unmount()
+})
+
+test('a prompt: the Argos one, it plus your own, or yours alone (the Argos one when you wrote none)', () => {
+  const mine = (text: string) => [text, 'record verdicts']
+  expect(compose({ mode: 'argos+mine', text: 'check i18n' }, ['job'], mine)).toEqual(['job', 'check i18n'])
+  expect(compose({ mode: 'argos', text: 'check i18n' }, ['job'], mine)).toEqual(['job'])
+  expect(compose({ mode: 'mine', text: 'check i18n' }, ['job'], mine)).toEqual(['check i18n', 'record verdicts'])
+  expect(compose({ mode: 'mine', text: '' }, ['job'], mine)).toEqual(['job'])
+})
+
+test('the agents at work are listed with Stop; Fix my PRs goes to the chat as a prompt', async ($, on) => {
+  const runs: string[][] = []
+  let filled = ''
+  const seeded: Record<string, unknown> = {
+    round,
+    verdicts: { ...judged, batch: { urls: ['u9'], at: round.at }, prs: { u9: V({ state: 'running', at: new Date(NOW - 6e4).toISOString() }) } },
+    agentRuns: { a1: ['u9'] },
+  }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'Argos validate · 1 PRs', type: 'general-purpose', status: 'running', spawnedBy: 'argos' }] }))
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    filled = e.text
+    return { isFilled: true }
+  })
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /agent working$/ }))?.text).toBe('1 agent working')
+  // Stop: its PRs not yet validated fail, ready for Retry; its tools are refused from then on
+  await ui.press({ key: 'stop:a1' })
+  expect(runs.at(-1)).toEqual(['fail', 'u9', '--reason', 'stopped'])
+  await ui.unmount()
+
+  // Fix my PRs: the S3 migration has open threads; the prompt waits in the chat for the person
+  seeded.verdicts = { ...judged, batch: { urls: [], at: null } }
+  const fix = await $.ui.mount(PANE)
+  expect((await fix.find({ key: 'fix' }))?.text).toBe('Fix my 1 with Argos')
+  await fix.press({ key: 'fix' })
+  expect(filled.split('\n')).toEqual([
+    '/argos Fix these PRs of mine with Argos (job 2 in mine.md: turn the review into changes and replies). Show me the plan before pushing or replying.',
+    '- u219',
+  ])
+  await fix.unmount()
 })
 
 test('who: presets leave kinds out, the label always says the whole state', async ($, on) => {

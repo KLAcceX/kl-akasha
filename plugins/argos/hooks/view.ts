@@ -367,6 +367,8 @@ export function toViewModel(r: Round | null, o: Opts) {
     groups,
     clear,
     picks,
+    // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
+    rework: rows.filter(x => x.isRework).map(x => x.url),
     run: showRun ? run : null,
     auto,
     mergeLine: merging.length ? t(lang, 'mg_line', merging.join(', ')) : '',
