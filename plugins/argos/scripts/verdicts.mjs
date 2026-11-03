@@ -27,7 +27,7 @@ import { add as addHistory } from "./history.mjs";
 const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "verdicts.json");
 export const AUTO = ["off", "mine", "all"];
-const EMPTY = { auto: "off", autoEvery: 30, lastAuto: null, batch: { urls: [], at: null }, prs: {}, human: [] };
+const EMPTY = { auto: "off", autoEvery: 30, lastAuto: null, batch: { urls: [], at: null }, prs: {}, human: [], approved: {} };
 export const EVERY = [15, 30, 60];
 const busy = (state) => state === "running" || state === "queued";
 
@@ -43,7 +43,7 @@ export const read = (file = FILE) => {
   }
   return { ...EMPTY, ...JSON.parse(text) };
 };
-const nap = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export const nap = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 // Whole or not at all: a reader never sees half a file. Windows may hold the target for a moment.
 export const write = (v, file = FILE) => {
   mkdirSync(dirname(file), { recursive: true });

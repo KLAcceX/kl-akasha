@@ -178,6 +178,10 @@ test('a run: failed ones say why and go again; a line stuck past the limit count
     'skipped · attention 1',
     'Auto-merge on in api, web',
   ])
+  // an approval a push outdated and merge.mjs could not take back holds over any verdict
+  const stands = { state: 'skipped', why: 'stale approval: dismiss it on GitHub', sha: 'old', at: round.at }
+  const held = ok(toViewModel(before as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u7: { ...V({ sha: 'old' }), merge: stands } }) }))
+  expect(held.rows.find(x => x.key === 'acme/web#7')?.status?.text).toBe('skipped · stale approval: dismiss it on GitHub')
 })
 
 test('the dashboard: what stands in cards, one line per repo; a repo page has its lines, Settings has Who', async ($, on) => {

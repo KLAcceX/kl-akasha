@@ -22,6 +22,8 @@ export const kindOf = (p: Item) => (p.isAI ? ('agent' as const) : p.isBot || /\[
 // commits since), blockers found, partly read (never a pass), or passed. Attention counts risks
 // that do not block. The limit counts from when the agent started that PR (minutes, a setting).
 export const QUEUE_LIMIT = 60 * 6e4
+// As merge.mjs writes it.
+const OLD_APPROVAL = 'stale approval: dismiss it on GitHub'
 export type VerdictState = 'none' | 'queued' | 'run' | 'failed' | 'stale' | 'pass' | 'issues' | 'partial'
 export function verdictOf(p: Item, v?: Verdict, now?: number, limit = 10): { state: VerdictState; issues: number; attention: number; finding: string } {
   const attention = v?.attention ?? 0
@@ -222,6 +224,8 @@ export function toViewModel(r: Round | null, o: Opts) {
     if (fixingSet.has(p.url)) return { text: t(lang, 'st_fixing'), tone: 'subtle' }
     if (!inRun.has(p.url)) return null
     const raw = o.verdicts!.prs[p.url]!
+    // merge.mjs could not take back its approval: this holds until it does, whatever the verdict
+    if (raw.merge?.why === OLD_APPROVAL) return { text: t(lang, 'st_skipped', raw.merge.why), tone: 'warning' }
     if (v.state === 'queued') return { text: t(lang, 'st_queued'), tone: 'subtle' }
     if (v.state === 'run') return { text: t(lang, 'st_validating', Math.max(1, Math.floor((now - Date.parse(raw.at)) / 6e4))), tone: 'subtle' }
     if (v.state === 'failed') return { text: t(lang, 'st_failed', v.finding), tone: 'error' }
