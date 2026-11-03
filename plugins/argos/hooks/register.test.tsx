@@ -916,7 +916,7 @@ test('/argos demo waits with comments in the real format, one of each type', () 
   const reports = (vm as { toPublish: { where: string; report: string }[] }).toPublish
   expect(reports.map(x => x.where).sort()).toEqual(['billing #88', 'mobile-app #50', 'web #7', 'web #8'])
   expect([...new Set(reports.flatMap(x => typesOf(x.report)))].sort()).toEqual(['bug', 'cleanup', 'contract', 'deploy', 'scope', 'security', 'tests'])
-  for (const line of reports.flatMap(x => x.report.split('\n')).filter(Boolean)) expect(/^(Before merging:|Worth a look:|Antes do merge:|- \[[a-z]+\] `[^`]+:\d+`: .+; .+)$/.test(line)).toBe(true)
+  for (const line of reports.flatMap(x => x.report.split('\n')).filter(Boolean)) expect(/^(\d+ .+\. .+|- \[[a-z]+\] (Blocker|Warning|Suggestion|Bloqueio) · `[^`]+:\d+`: .+|  .+)$/.test(line)).toBe(true)
 })
 
 for (const [name, from, prOver, verdictOver, to] of [

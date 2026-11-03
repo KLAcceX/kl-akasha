@@ -5,11 +5,12 @@
 // Usage:
 //   node verdicts.mjs queue <pr-url>...                          a run asked for them: waiting
 //   node verdicts.mjs start <pr-url>...                          marks them as being validated now
-//   node verdicts.mjs set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial]
-//                         [--finding "<top finding>"] [--report-file <path, or - for stdin>]
-//     issues: blockers only, each with file:line and how it fails; attention: risks that do
-//     not block (deploy, a weak test); partial: not all of it was read, so it never passes;
-//     report: every finding, as it would read on the PR (publish.mjs posts it)
+//   node verdicts.mjs set <pr-url> --sha <head sha> [--partial] --findings-file <path, or - for stdin>
+//     findings: every finding as fields (references/comment.md); the counts, the top one and the
+//     report the pane shows come from them, and publish.mjs posts them
+//   node verdicts.mjs set <pr-url> --sha <head sha> --issues 0 [--partial]    nothing found
+//     issues: blockers only; attention: what does not block; partial: not all of it was read, so it
+//     never passes
 //   node verdicts.mjs fail <pr-url> --reason "<why>"              it could not be validated
 //   node verdicts.mjs auto <off|mine|all> [--every <minutes>]   validate new PRs and new commits by itself
 //   node verdicts.mjs ran <count>                                an automatic round sent that many
@@ -22,6 +23,7 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, 
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
+import { countsOf, parse as parseFindings, plainOf, topOf } from "./findings.mjs";
 import { add as addHistory } from "./history.mjs";
 import { isMain } from "./is-main.mjs";
 
@@ -104,10 +106,11 @@ export function queue(v, urls, now) {
 export const start = (v, urls, now) => mark(v, urls, "running", now);
 
 // A validation run again on the same commit keeps what was posted for it: that comment stands.
-export function set(v, url, { sha, issues, attention = 0, partial = false, finding = "", report = "" }, now) {
+export function set(v, url, { sha, issues, attention = 0, partial = false, finding = "", findings }, now) {
   const was = v.prs[url]?.published;
   const kept = was?.state === "posted" && was.sha === sha ? { published: was } : {};
-  return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, issues, attention, partial, finding: finding.trim().slice(0, 160), ...(report.trim() && { report: report.trim().slice(0, 6000) }), ...kept, at: now } } };
+  const from = findings ? { ...countsOf(findings), finding: topOf(findings), report: plainOf(findings), findings } : { issues, attention, finding: finding.trim().slice(0, 160) };
+  return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, partial, ...from, ...kept, at: now } } };
 }
 
 // A PR that could not be validated (no access, closed, the agent stopped): failed, with why, so
@@ -135,16 +138,17 @@ function main(args) {
   if (cmd === "set") {
     const url = rest[0];
     const sha = flag(rest, "sha");
-    const issues = Number(flag(rest, "issues"));
-    const attention = Number(flag(rest, "attention") ?? 0);
+    const file = flag(rest, "findings-file");
     const partial = rest.includes("--partial");
-    if (!isPr(url) || !/^[0-9a-f]{7,40}$/.test(sha ?? "") || ![issues, attention].every((n) => Number.isInteger(n) && n >= 0))
-      throw new Error('set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial] [--finding "<text>"]');
-    const file = flag(rest, "report-file");
-    const next = set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding"), report: file ? readFileSync(file === "-" ? 0 : file, "utf8") : "" }, now);
+    const counts = { issues: Number(flag(rest, "issues") ?? (file ? 0 : NaN)), attention: Number(flag(rest, "attention") ?? 0) };
+    if (!isPr(url) || !/^[0-9a-f]{7,40}$/.test(sha ?? "") || ![counts.issues, counts.attention].every((n) => Number.isInteger(n) && n >= 0))
+      throw new Error("set <pr-url> --sha <head sha> [--partial] (--findings-file <path, or - for stdin> | --issues 0)");
+    const findings = file ? parseFindings(readFileSync(file === "-" ? 0 : file, "utf8")) : undefined;
+    const next = set(v, url, { sha, ...counts, partial, finding: flag(rest, "finding") ?? "", findings }, now);
     write(next);
+    const { issues, attention, finding, report } = next.prs[url];
     // this file keeps only the last verdict of a PR; the history keeps each commit's
-    addHistory({ kind: "verdict", url, sha, issues, attention, partial, finding: next.prs[url].finding, report: next.prs[url].report, run: next.batch.at, at: now });
+    addHistory({ kind: "verdict", url, sha, issues, attention, partial, finding, report, run: next.batch.at, at: now });
     const said = issues ? `blocks ${issues}` : partial ? "partial" : "passed";
     return console.log(`${url}: ${said}${attention ? ` · attention ${attention}` : ""}`);
   }
@@ -196,6 +200,10 @@ function selfTest() {
   v = set(v, a, { sha: "abc1234", issues: 2, finding: "  no backoff cap  " }, "t2");
   assert.deepEqual(v.prs[a], { state: "done", sha: "abc1234", issues: 2, attention: 0, partial: false, finding: "no backoff cap", at: "t2" });
   assert.equal(set(v, a, { sha: "abc1234", issues: 0, attention: 2, partial: true }, "t2").prs[a].partial, true);
+  // the fields decide the counts, the top one and what the pane reads
+  const found = parseFindings(JSON.stringify({ summary: "Wrong.", findings: [{ severity: "blocker", type: "bug", path: "a.js", line: 1, title: "t", effect: "e", fix: "f" }] }));
+  const seen = set(v, a, { sha: "abc1234", issues: 9, findings: found }, "t2").prs[a];
+  assert.deepEqual([seen.issues, seen.attention, seen.finding, seen.report.split("\n")[1]], [1, 0, "t (a.js:1)", "- [bug] Blocker · `a.js:1`: t"]);
   // a queued PR keeps the batch open too
   assert.equal(queue(EMPTYv(), [a], "q").prs[a].state, "queued");
   assert.deepEqual(start(queue(EMPTYv(), [a], "q"), [b], "q2").batch.urls, [a, b]);

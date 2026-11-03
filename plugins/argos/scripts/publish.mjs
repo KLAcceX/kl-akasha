@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Argos publish: keeps one comment on a PR saying what its last validation found, as the account
-// that owns the repo. The person sends it from the pane, having read it, or turns it on per repo
-// (`repos.mjs publish <repo> on`). The mod runs this, never the agent that validated: the validation
-// stays read-only, and the report it wrote read the PR's own text, so it is treated as untrusted here.
+// Argos publish: keeps one comment on a PR saying what its last validation found, with the detail of
+// each finding on its line, as the account that owns the repo. The person sends it from the pane, having
+// read it, or turns it on per repo (`repos.mjs publish <repo> on`). The mod runs this, never the agent
+// that validated: the validation stays read-only, and the report it wrote read the PR's own text, so it
+// is treated as untrusted here.
 //
 // The rule, all of it:
 //   - the verdict found something (a blocker or something to look at) and carries its report; a pass
@@ -16,17 +17,28 @@
 //     so a lost record or a second press never posts twice and nobody else's text can stop a post.
 //     ponytail: an edit notifies nobody, so new findings on a later commit go unnoticed unless the
 //     author looks; post anew on a higher blocker count if that bites
+//   - a finding on a line of the diff also goes there, once, in a review that only comments: it can
+//     carry a suggestion to apply. A new commit adds only what is new, and a finding gone from the
+//     report keeps its old line comment: GitHub marks it outdated once the line changes. Whatever has
+//     no line in the diff stays in full in the comment. The review goes first, so a failure in
+//     between loses nothing: the next try finds what is on the lines by their markers.
 // Mentions, images and HTML comments are defused, so a report talked into them pings nobody, loads
-// nothing and fakes no marker.
+// nothing and fakes no marker. A suggestion is code in a fence, inert, and applied as it is, so it is
+// left alone.
 //
 // Usage:
-//   node publish.mjs <pr-url>...   those PRs, from the pane's button
-//   node publish.mjs sweep         every verdict with no outcome yet, in repos with auto-publish on
+//   node publish.mjs <pr-url>...       those PRs, from the pane's button
+//   node publish.mjs sweep             every verdict with no outcome yet, in repos with auto-publish on
+//   node publish.mjs preview <pr-url>  prints what would go, as JSON, and posts nothing
 //   node publish.mjs --self-test
 // Each outcome lands on the verdict (published: { state: posted | skipped | failed, why, sha, at }) and
 // prints as JSON. A skip stands until the next validation; a failure (the network, say) goes again.
 // Env: ARGOS_STATE, as the other scripts.
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { briefOf, fenceOf, fits, inlineOf, keyOf } from "./findings.mjs";
 import { hasSecret } from "./gate.mjs";
 import { add as addHistory } from "./history.mjs";
 import { isMain } from "./is-main.mjs";
@@ -39,6 +51,7 @@ const SWEEP_MS = 60_000;
 
 const MARK = "<!-- argos:";
 const markerOf = (sha) => `${MARK}${sha} -->`;
+const LINE_MARK = "<!-- argos-line:";
 export const found = (v) => v?.state === "done" && Boolean(v.report) && Boolean(v.issues || v.attention);
 // A verdict with no outcome yet, or one that failed; a skip waits for the next validation. A pass
 // waits too: it may have a comment to close.
@@ -63,14 +76,48 @@ export const defuse = (report) =>
     .trim();
 
 // The account is a person's, so the footer says who wrote this. A fixed English: nothing here knows the PR's language.
-export const bodyOf = (report, sha) => `${defuse(report)}\n\n<sub>Argos · AI validation of ${sha.slice(0, 7)} · not a human review, and it can be wrong</sub>\n${markerOf(sha)}`;
+const footerOf = (sha) => `<sub>Argos · AI validation of ${sha.slice(0, 7)} · not a human review, and it can be wrong</sub>`;
+export const bodyOf = (report, sha) => `${defuse(report)}\n\n${footerOf(sha)}\n${markerOf(sha)}`;
 export const closingOf = (sha) => bodyOf(`No findings on \`${sha.slice(0, 7)}\`.`, sha);
+// The text, the fence as it is, the rest of the text. Each line comment says who wrote it on its own.
+export const lineBodyOf = (r, f) => {
+  const [lead, ...rest] = inlineOf(r, f).map(defuse);
+  return [lead, fenceOf(f), ...rest, "<sub>Argos · AI, and it can be wrong</sub>"].filter(Boolean).join("\n\n") + `\n${LINE_MARK}${keyOf(f)} -->`;
+};
+export const reviewOf = (r, fresh, sha) => ({
+  commit_id: sha,
+  event: "COMMENT",
+  body: footerOf(sha),
+  comments: fresh.map((f) => ({ path: f.path, line: f.line, side: "RIGHT", ...(f.startLine < f.line && { start_line: f.startLine, start_side: "RIGHT" }), body: lineBodyOf(r, f) })),
+});
 
-// The account's own Argos comments on the PR, oldest first.
-const ownComments = (run, url, me) =>
-  lines(run(["api", "--paginate", `repos/${repoOf(url)}/issues/${url.split("/").at(-1)}/comments`, "-q", ".[] | {id, body, user: {login: .user.login}}"])).filter(
-    (c) => c.user?.login?.toLowerCase() === me.toLowerCase() && c.body?.includes(MARK),
-  );
+const pullApi = (url) => `repos/${repoOf(url)}/pulls/${url.split("/").at(-1)}`;
+// The account's own Argos comments on the PR, oldest first, and the same on its lines.
+const own = (run, path, mark, me) =>
+  lines(run(["api", "--paginate", path, "-q", ".[] | {id, body, user: {login: .user.login}}"])).filter((c) => c.user?.login?.toLowerCase() === me.toLowerCase() && c.body?.includes(mark));
+const ownComments = (run, url, me) => own(run, `repos/${repoOf(url)}/issues/${url.split("/").at(-1)}/comments`, MARK, me);
+
+// What this verdict leaves on the PR: the comment's text, and the line comments not there yet.
+function planOf(run, url, verdict, sha, me) {
+  const r = verdict.findings;
+  if (passes(verdict)) return { body: closingOf(sha), review: null };
+  if (!r) return { body: bodyOf(verdict.report, sha), review: null };
+  const files = lines(run(["api", "--paginate", `${pullApi(url)}/files`, "-q", ".[] | {path: .filename, patch}"]));
+  const onLine = own(run, `${pullApi(url)}/comments`, LINE_MARK, me).map((c) => c.body);
+  const fresh = r.findings.filter((f) => fits(f, files) && !onLine.some((b) => b.includes(`${LINE_MARK}${keyOf(f)} `)));
+  return { body: bodyOf(briefOf(r, (f) => fits(f, files)), sha), full: bodyOf(briefOf(r), sha), review: fresh.length ? reviewOf(r, fresh, sha) : null };
+}
+
+function postReview(run, url, review) {
+  const dir = mkdtempSync(join(tmpdir(), "argos-review-"));
+  try {
+    const file = join(dir, "review.json");
+    writeFileSync(file, JSON.stringify(review));
+    run(["api", "-X", "POST", `${pullApi(url)}/reviews`, "--input", file]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 function publishOne(repos, url, verdict) {
   const run = asAccount(repos, url);
@@ -83,10 +130,28 @@ function publishOne(repos, url, verdict) {
   if (last?.body.includes(markerOf(pr.headRefOid))) return { state: "posted", why: "" };
   // a pass has nothing to say, unless a comment says otherwise by now
   if (passes(verdict) && !last) return { state: "skipped", why: "nothing to publish" };
-  const body = `body=${passes(verdict) ? closingOf(pr.headRefOid) : bodyOf(verdict.report, pr.headRefOid)}`;
+  const plan = planOf(run, url, verdict, pr.headRefOid, me);
+  let text = plan.body;
+  if (plan.review)
+    try {
+      postReview(run, url, plan.review);
+    } catch (err) {
+      // GitHub refused a line, and with it the whole review: the comment carries it all instead
+      if (!String(err.message ?? err).includes("422")) throw err;
+      text = plan.full;
+    }
+  const body = `body=${text}`;
   if (last) run(["api", "-X", "PATCH", `repos/${repoOf(url)}/issues/comments/${last.id}`, "-f", body]);
   else run(["api", "-X", "POST", `repos/${repoOf(url)}/issues/${url.split("/").at(-1)}/comments`, "-f", body]);
   return { state: "posted", why: "" };
+}
+
+function preview(url) {
+  const run = asAccount(readRepos(), url);
+  const pr = JSON.parse(run(["pr", "view", url, "--json", "headRefOid"]));
+  const verdict = read().prs[url];
+  if (!verdict) throw new Error("no verdict for that PR");
+  return planOf(run, url, verdict, pr.headRefOid, run(["api", "user", "-q", ".login"]));
 }
 
 function publish(urls, until = Infinity) {
@@ -160,6 +225,20 @@ function selfTest() {
   assert.ok(body.startsWith("- `a.js:1`: wrong\n\n"));
   assert.ok(body.includes("AI validation of abc1234 · not a human review"));
   assert.ok(body.endsWith(markerOf("abc1234def")));
+  // on a line: the comment's text is defused, the code to apply is not, and only a range has a start
+  const r = { lang: "en", summary: "s", notes: [], findings: [] };
+  const f = { severity: "blocker", type: "bug", path: "a.js", line: 3, startLine: 3, title: "ask @bia", effect: "e", fix: "x", suggestion: "@Override\nrun();", why: "w" };
+  const inline = lineBodyOf(r, f);
+  assert.ok(inline.startsWith("🔴 **Blocker · bug**: ask @​bia\ne\n\n```suggestion\n@Override\nrun();\n```\n\n<details>"));
+  assert.ok(inline.includes("</details>\n\n<sub>Argos · AI"));
+  assert.ok(inline.endsWith(`${LINE_MARK}${keyOf(f)} -->`));
+  assert.ok(!inline.includes(MARK));
+  assert.ok(!lineBodyOf(r, { ...f, suggestion: undefined }).includes("suggestion"));
+  const review = reviewOf(r, [f, { ...f, startLine: 1, title: "t" }], "abc1234def");
+  assert.deepEqual([review.commit_id, review.event], ["abc1234def", "COMMENT"]);
+  assert.ok(review.body.includes("not a human review"));
+  assert.deepEqual([review.comments[0].line, review.comments[0].side, review.comments[0].start_line], [3, "RIGHT", undefined]);
+  assert.deepEqual([review.comments[1].start_line, review.comments[1].start_side], [1, "RIGHT"]);
   console.log("self-test ok");
 }
 
@@ -167,9 +246,10 @@ if (isMain(import.meta.url)) {
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "--self-test") selfTest();
   else if (cmd === "sweep") console.log(JSON.stringify(sweep()));
+  else if (cmd === "preview") console.log(JSON.stringify(preview(rest[0]), null, 2));
   else if (cmd && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(cmd)) console.log(JSON.stringify(publish([cmd, ...rest])));
   else {
-    console.error("usage: publish.mjs <pr-url>... | sweep | --self-test");
+    console.error("usage: publish.mjs <pr-url>... | sweep | preview <pr-url> | --self-test");
     process.exit(1);
   }
 }
