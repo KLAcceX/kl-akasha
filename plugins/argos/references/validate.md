@@ -37,7 +37,7 @@ node scripts/verdicts.mjs set <pr-url> --sha <headRefOid> --issues <n> --attenti
 - **`--attention`** counts risks that do not block and that a "passed" must not hide: a deploy risk (an env var without a default, a call without a timeout), a test that tests nothing, a new and little-used dependency.
 - **`--partial`** when not all of it was read (not reviewable, too big to finish, files you could not open): a partial verdict never shows as passed.
 - **`--finding`**: the most serious item, under 80 characters, with `path:line`: a Blocker if there is one, else the top attention item prefixed by its layer (`test: asserts only on a mock (order.test.ts:31)`, `deploy: CREATE INDEX without CONCURRENTLY (0042.sql:3)`). Empty only when nothing at all was found.
-- A PR you could not read at all (no access, closed, too broken to open) is marked failed, so the pane offers Retry instead of a line stuck on "validating": `node scripts/verdicts.mjs fail <pr-url> --reason "<why, a few words>"`.
+- A PR you could not read at all (no access, closed, too broken to open) is marked failed, so it says why and goes back to Validate instead of a line stuck on "validating": `node scripts/verdicts.mjs fail <pr-url> --reason "<why, a few words>"`.
 
 ## 4. Report
 
@@ -45,7 +45,7 @@ One short table in the user's language: PR, blocks, attention, top finding. Then
 
 ## Auto-validate
 
-`node scripts/verdicts.mjs auto <off|mine|all>` sets it. After each round (the vigil's interval), the mod validates only what changed: PRs with no verdict yet or with commits after theirs, among those with nothing pending (no change asked, not a draft) and authors not left out; only the user's PRs with `mine`, every watched PR with `all`; at most ten a round, in a background subagent with this job. A failed one waits for Retry. It spends tokens without asking, so it is off until the user turns it on.
+`node scripts/verdicts.mjs auto <off|mine|all>` sets it. After each round (the vigil's interval), the mod validates only what changed: PRs with no verdict yet or with commits after theirs, among those with nothing pending (no change asked, not a draft) and authors not left out; only the user's PRs with `mine`, every watched PR with `all`; at most ten a round, in a background subagent with this job. A failed one waits for Validate. It spends tokens without asking, so it is off until the user turns it on.
 
 The subagent works under three rules, because nobody watches it:
 

@@ -54,7 +54,7 @@ export function verdictTag(v: ReturnType<typeof verdictOf>, lang: string): Tag {
 }
 
 // The last run, from verdicts.json's batch: how far it got (a PR counts as started once its agent
-// reached it), what failed (and why) to retry, and what auto-merge did; `doneAt` is when its last
+// reached it), what failed, and what auto-merge did; `doneAt` is when its last
 // verdict landed. `label` says it in one line, for the toast. Null before the first run.
 export function runOf(vs: Verdicts | null | undefined, now: number, lang: string, limit = 10) {
   const urls = vs?.batch?.urls ?? []
@@ -85,7 +85,6 @@ export function runOf(vs: Verdicts | null | undefined, now: number, lang: string
     failed,
     merged,
     approved,
-    retry: states.filter(s => s.v.state === 'failed').map(s => s.url),
     label: parts.filter(Boolean).join(' · '),
   }
 }
@@ -213,8 +212,8 @@ export function toViewModel(r: Round | null, o: Opts) {
   // ended ("validated · passed", "failed · no access", "merged · squash") instead of their reason.
   const limit = o.limit ?? 10
   const run = runOf(o.verdicts, now, lang, limit)
-  // what failed stays on screen until it is handled, not until the next check
-  const showRun = Boolean(run && (run.isRunning || run.failed > 0 || run.doneAt > Date.parse(okAt ?? '')))
+  // the run's summary lasts until the next check; a failed PR keeps saying why on its own line
+  const showRun = Boolean(run && (run.isRunning || run.doneAt > Date.parse(okAt ?? '')))
   const inRun = new Set(showRun ? run!.urls : [])
   // the person's PRs a fixing agent holds right now
   const fixingSet = new Set(o.fixing ?? [])
@@ -222,13 +221,13 @@ export function toViewModel(r: Round | null, o: Opts) {
   // how a line in the run ended, in words, with the tone of its colour
   const statusOf = (p: Item, v: ReturnType<typeof verdictOf>): { text: string; tone: Tone } | null => {
     if (fixingSet.has(p.url)) return { text: t(lang, 'st_fixing'), tone: 'subtle' }
+    if (v.state === 'failed') return { text: t(lang, 'st_failed', v.finding), tone: 'error' }
     if (!inRun.has(p.url)) return null
     const raw = o.verdicts!.prs[p.url]!
     // merge.mjs could not take back its approval: this holds until it does, whatever the verdict
     if (raw.merge?.why === OLD_APPROVAL) return { text: t(lang, 'st_skipped', t(lang, 'mg_why', raw.merge.why)), tone: 'warning' }
     if (v.state === 'queued') return { text: t(lang, 'st_queued'), tone: 'subtle' }
     if (v.state === 'run') return { text: t(lang, 'st_validating', Math.max(1, Math.floor((now - Date.parse(raw.at)) / 6e4))), tone: 'subtle' }
-    if (v.state === 'failed') return { text: t(lang, 'st_failed', v.finding), tone: 'error' }
     // commits landed after the verdict: it no longer speaks for the head
     if (v.state === 'stale') return cfgOf(p.repo)?.merge ? { text: t(lang, 'st_skipped', t(lang, 'mg_new')), tone: 'warning' } : { text: t(lang, 'st_stale'), tone: 'subtle' }
     if (raw.merge) return { text: t(lang, `st_${raw.merge.state}`, t(lang, 'mg_why', raw.merge.why)), tone: raw.merge.state === 'skipped' ? 'warning' : 'success' }
@@ -412,8 +411,6 @@ export function toViewModel(r: Round | null, o: Opts) {
         title: p.title,
         line: [`${short(p.repo)} #${p.number}`, ...p.signals.map(code => label(lang, code)), ageOf(now - Date.parse(p.since ?? p.createdAt))].join(' · '),
       })),
-    // what failed in the last run, by PR, with why
-    failedLines: rows.filter(x => inRun.has(x.url) && x.vstate === 'failed').map(x => ({ key: x.key, where: `${short(x.repo)} ${x.num}`, why: x.finding })),
     // the dashboard's cards: every PR with nothing pending, ready to validate in one tap, and how
     // many verdicts found problems
     // (never one the person left to humans)
@@ -421,8 +418,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     issues: rows.filter(x => x.vstate === 'issues').length,
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
     rework: reworkRows.map(x => x.url),
-    // Retry never sends what the person left to humans
-    run: showRun && run ? { ...run, retry: run.retry.filter(u => !rows.some(x => x.url === u && byHand.has(x.key))) } : null,
+    run: showRun ? run : null,
     auto,
     mergeLine: merging.length ? t(lang, 'mg_line', merging.join(', ')) : '',
     // all of it in one repo of several says which ("Validate 4 · billing"), so a tap on Only

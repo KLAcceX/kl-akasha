@@ -268,7 +268,7 @@ async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
 }
 
 // Stops a validating agent the mod started: from now on every tool it calls is refused, so it
-// ends, and its PRs not yet validated are marked failed, ready for Retry.
+// ends, and its PRs not yet validated are marked failed, picked again for the next Validate.
 async function stopAgent($: any, id: string) {
   await $.state.set(STOPPED, [...(((await $.state.get(STOPPED)).value as string[] | undefined) ?? []), id])
   const urls: string[] = ((await $.state.get(AGENT_RUNS)).value ?? {})[id] ?? []
@@ -281,7 +281,7 @@ async function stopAgent($: any, id: string) {
 // Auto-validate: after a round, once its interval has passed since the last automatic round, only
 // what changed goes, in the background: PRs with no verdict yet or with commits after theirs,
 // among those with nothing pending (no change asked, not a draft), the user's own with "mine",
-// every watched PR with "all"; authors left out stay out. A failed one waits for Retry. Each round
+// every watched PR with "all"; authors left out stay out. A failed one waits for Validate. Each round
 // is recorded, sent or not, so the pane can say when it looked. ponytail: ten per round, so a
 // burst never spends a fortune at once.
 async function autoValidate($: any, r: Round | null, lang: string, prompt: Prompt) {
@@ -1133,7 +1133,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-    // what the last run came to, until the next run; what failed stays, with why, until handled
+    // what the last run came to, until the next check; a failed PR says why on its own line
     const doneLine = vm.run && !vm.run.isRunning && (
       <Box key="run" flexDirection="column" gap={SPACE.row}>
         <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline}>
@@ -1157,27 +1157,6 @@ export const register: Register = (on, options) => {
             </Text>
           )}
         </Box>
-        {vm.failedLines.length > 0 && (
-          <Box flexDirection="column" gap={SPACE.line}>
-            {vm.failedLines.map(x => (
-              <Text key={`failed:${x.key}`} size="caption" color={C.error}>
-                {`${x.where}: ${x.why}`}
-              </Text>
-            ))}
-          </Box>
-        )}
-        {vm.run.retry.length > 0 && (
-          <Box flexDirection="row">
-            <Button
-              key="retry"
-              variant="secondary"
-              dimColor={isWorking('retry')}
-              onPress={isWorking('retry') ? noop : work('retry', () => validate($, vm.run!.retry, lang, prompts.validate))}
-            >
-              {isWorking('retry') ? t(lang, 'cd_queuing', vm.run.retry.length) : t(lang, 'run_retry', vm.run.retry.length)}
-            </Button>
-          </Box>
-        )}
       </Box>
     )
     const agents = (working.length > 0 || runLine || doneLine) && (

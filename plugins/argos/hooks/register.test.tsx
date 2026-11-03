@@ -145,19 +145,20 @@ test('a PR validated with no commit since is left out; a running one cannot be p
   expect(vm.run?.label).toBe('Validating 2 of 2')
 })
 
-test('a run: failed ones say why and go again; a line stuck past the limit counts as failed', () => {
+test('a run: failed ones say why on their line and go back to Validate; a line stuck past the limit counts as failed', () => {
   const vs = (prs: Record<string, unknown>) => ({ ...judged, batch: { urls: ['u8', 'u9', 'u7'], at: round.at }, prs: { ...judged.prs, ...prs } }) as never
   // the run line stays until the next check: this round looked before the run ended
   const before = { ...vround, okAt: ago(2) }
   const stuck = ok(toViewModel(before as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) }))
-  expect([stuck.run?.isRunning, stuck.run?.label, stuck.run?.retry]).toEqual([false, '2 validated · 1 failed', ['u8']])
+  expect([stuck.run?.isRunning, stuck.run?.label]).toEqual([false, '2 validated · 1 failed'])
   // a failed line is picked again by default, says why on its line, its verdict a red ✕
   const row = stuck.rows.find(x => x.key === 'acme/web#8')!
   expect([row.isIn, row.verdict?.count, row.status?.text, row.status?.color]).toEqual([true, '✕', 'failed · timed out after 10 min', 'error'])
   // its verdict is on an older commit than the head, and says so
   expect(stuck.rows.find(x => x.key === 'acme/api#9')?.status?.text).toBe('validated · new commits since')
-  // a newer check does not take away what failed: it stays until handled
-  expect(ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'running', at: ago(1) }) }) })).run?.failed).toBe(1)
+  // a newer check ends the summary, so an old batch cannot linger; the failed line keeps why and is sent by Validate
+  const later = ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: vs({ u8: V({ state: 'failed', reason: 'no access', at: ago(90) }), u9: V({ at: ago(90) }), u7: V({ at: ago(90) }) }) }))
+  expect([later.run, later.rows.find(x => x.key === 'acme/web#8')?.status?.text, later.clean.includes('u8')]).toEqual([null, 'failed · no access', true])
   const merged = ok(
     toViewModel(before as never, {
       now: NOW,
@@ -169,9 +170,8 @@ test('a run: failed ones say why and go again; a line stuck past the limit count
     }),
   )
   const status = (k: string) => merged.rows.find(x => x.key === k)?.status?.text
-  expect([merged.run?.label, merged.run?.retry, status('acme/web#7'), status('acme/web#8'), status('acme/api#9'), merged.mergeLine]).toEqual([
+  expect([merged.run?.label, status('acme/web#7'), status('acme/web#8'), status('acme/api#9'), merged.mergeLine]).toEqual([
     '2 validated · 1 failed · 1 approved, awaiting reviews',
-    ['u8'],
     'approved · needs more reviews',
     'failed · no access',
     // a repo with auto-merge says why a verdict that did not pass was not merged
@@ -424,7 +424,7 @@ test('the agents at work are listed with Stop; Fix my PRs runs in the background
   expect((await ui.find({ type: 'Text', text: /agent working$/ }))?.text).toBe('1 agent working')
   // the agent is its run: its line says how far it got, with the one Stop
   expect((await ui.find({ type: 'Text', text: /^\d+ of \d+$/ }))?.text).toBe('0 of 1')
-  // Stop: its PRs not yet validated fail, ready for Retry; its tools are refused from then on
+  // Stop: its PRs not yet validated fail; its tools are refused from then on
   await ui.press({ key: 'stop:a1' })
   expect(runs.at(-1)).toEqual(['fail', 'u9', '--reason', 'stopped'])
   await ui.unmount()

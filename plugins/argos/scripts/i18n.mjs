@@ -46,7 +46,6 @@ const WORDS = {
     run_failed: (n) => (n === 1 ? "1 falhou" : `${n} falharam`),
     run_merged: (n) => (n === 1 ? "1 mergeado" : `${n} mergeados`),
     run_approved: (n) => (n === 1 ? "1 aprovado, esperando reviews" : `${n} aprovados, esperando reviews`),
-    run_retry: (n) => (n === 1 ? "Repetir 1 PR que falhou" : `Repetir ${n} PRs que falharam`),
     run_done: "Rodada concluída",
     tip_v_failed: (why) => `Validação por IA falhou: ${why}`,
     // how a line in the last run ended
@@ -364,7 +363,6 @@ const WORDS = {
     run_failed: (n) => `${n} failed`,
     run_merged: (n) => `${n} merged`,
     run_approved: (n) => `${n} approved, awaiting reviews`,
-    run_retry: (n) => (n === 1 ? "Retry 1 failed PR" : `Retry ${n} failed PRs`),
     run_done: "Run done",
     tip_v_failed: (why) => `AI validation failed: ${why}`,
     // how a line in the last run ended
