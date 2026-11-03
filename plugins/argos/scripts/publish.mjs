@@ -49,9 +49,9 @@ import { read, withLock, write } from "./verdicts.mjs";
 // Past this a sweep stops and the next round goes on: the mod kills it at 120 s.
 const SWEEP_MS = 60_000;
 
-const MARK = "<!-- argos:";
+export const MARK = "<!-- argos:";
 const markerOf = (sha) => `${MARK}${sha} -->`;
-const LINE_MARK = "<!-- argos-line:";
+export const LINE_MARK = "<!-- argos-line:";
 export const found = (v) => v?.state === "done" && Boolean(v.report) && Boolean(v.issues || v.attention);
 // A verdict with no outcome yet, or one that failed; a skip waits for the next validation. A pass
 // waits too: it may have a comment to close.
