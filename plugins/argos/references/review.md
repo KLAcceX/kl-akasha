@@ -55,7 +55,7 @@ Don't invent blockers. Most review value is not bug-finding, and a clean review 
 
 ## 7. Draft
 
-In the user's language, in this order:
+In the user's language, in this order. Word each finding the way `references/comment.md` says (its checks, tone and what never goes in); the shape is the one here:
 
 1. **Header:** PR link, author, level and why, size, project rules used (paths) or "No project review rules found; Argos recommendations apply", and any source you could not read.
 2. **Verdict:** one line: approve, comment or request changes, and the reason. Request changes only for a blocker. The user decides.

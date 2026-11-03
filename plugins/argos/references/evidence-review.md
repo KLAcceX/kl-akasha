@@ -82,6 +82,28 @@ Tone (Google, same page; [GitHub, How to write the perfect pull request](https:/
 - Prefer "What do you think about...?" over "Don't...". Say whether a point is preference or principle.
 - Do not block on personal style not in the style guide. Do not accept "I'll clean it up later" for new complexity; ask for a filed issue if it truly must wait ([Google, Handling pushback](https://google.github.io/eng-practices/review/reviewer/pushback.html)).
 
+## AI-written comments
+
+What `comment.md` rests on. Sample sizes and settings differ, so the numbers show a direction, not a target: none of them measures Argos.
+
+| Finding | Value | Backs this rule | Source (year) |
+|---|---|---|---|
+| Most AI review comments in the wild were not taken | 36.4% accepted, 7.3% discussed, 56.3% rejected; 31,073 comments, 239 repos | few lines, each checked | [Is Agentic Code Review Helpful?](https://arxiv.org/abs/2607.03316) (preprint, 2026) |
+| Why they were rejected | false positives 43.3% of rejections, intended trade-offs 23.7%, out of scope 10%, redundant 4.7% | the four checks; an answered trade-off is dropped | same |
+| An LLM reviewer in one company's teams | 73.8% resolved; 26.2% marked won't fix or closed; average closure rose from 5 h 52 to 8 h 20; complaints about faulty and irrelevant comments and about a new review after each fix | each comment costs time; report only this commit | [Automated Code Review In Practice](https://arxiv.org/abs/2412.18531) (2024) |
+| Google's bar for tool findings in code review | up to 10% effective false positives; a true finding nobody understood counts as a false positive | input and outcome on every line | [Sadowski et al., Lessons from Building Static Analysis Tools at Google](https://research.google/pubs/lessons-from-building-static-analysis-tools-at-google/) (CACM 2018) |
+| An LLM commenter at Google, before wide release | useful ratio stuck near 54% against a target of 80%; a confidence threshold held back weak comments, and most would-be comments fell on lines the author had not touched | leave out what you cannot show; only the diff | [AI-Assisted Assessment of Coding Practices](https://arxiv.org/abs/2405.13565) (2024) |
+| Noise from bots on PRs | 21 interviews: verbosity, dense text, repetition and unrequested actions read as noise; people stop watching or reconfigure | one short comment, no padding | [Wessel et al., Don't Disturb Me](https://www.ime.usp.br/~gerosa/papers/CSCW2021Wessel.pdf) (CSCW 2021) |
+| False positives erode trust | engineers describe ignoring such feedback and then missing real issues (interviews) | few lines, each checked | [Rethinking Code Review Workflows with LLM Assistance](https://arxiv.org/abs/2505.16339) (2025) |
+| How an LLM review reads | 20 interviews: LLM reviews took more effort to process than peers' direct ones (problem, then fix), but felt less taxing because they stay polite | one line, problem then fix; even tone | [Alami & Ernst, Human and Machine](https://arxiv.org/abs/2501.02092) (2025) |
+| What authors call useful | functional issues and corner cases; false positives, questions, praise, and remarks on code outside the change were rated not useful | no questions, no praise, only this PR | [Bosu et al., Characteristics of Useful Code Reviews](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bosu2015useful.pdf) (MSR 2015) |
+| Destructive criticism | nonspecific and inconsiderate feedback is rated less valid and less likely to improve the code; women rate it less appropriate and feel less motivated to go on (93 people; abstract and the author's slides read, not the full paper) | place and outcome on every line; the code as subject | [Gunawardena et al., Destructive Criticism in Software Code Review Impacts Inclusion](https://research.google/pubs/destructive-criticism-in-software-code-review-impacts-inclusion/) (CSCW 2022) |
+| Pushback | rare, but it hurts when it happens, and the amount varies with the author's gender, race and age (abstracts read) | never about the person | [Egelman et al.](https://research.google/pubs/predicting-developers-negative-feelings-about-code-review/) (2020); [Murphy-Hill et al.](https://research.google/pubs/the-pushback-effects-of-race-ethnicity-gender-and-age-in-code-review/) (CACM 2022) |
+| Wording | comment on the code, say why, label severity, leave the author room for a better fix; avoid "you" and frame notes as requests | tone; severity groups; a fix in one clause | [Google, How to write comments](https://google.github.io/eng-practices/review/reviewer/comments.html); [Lynch, How to Do Code Reviews Like a Human](https://mtlynch.io/human-code-reviews-1/) (2017) |
+| An AI review is not an approval | Copilot's reviews do not count toward required approvals by default, and GitHub says to validate its feedback | the footer; no approval language | [GitHub Docs, Copilot code review](https://docs.github.com/en/copilot/concepts/agents/code-review) (read 2026) |
+
+**Argos's own choices, not from a source:** the limits of 300 characters and 8 lines, the headings `Before merging` and `Worth a look`, the footer, and dropping an answered attention item while a Blocker stays. Vendor blogs with acceptance or false-positive rates were left out: none traces to data that could be checked.
+
 ## Respecting the project's own rules
 
 Look for these before applying any default from this file. If one exists, quote it in the review and follow it.

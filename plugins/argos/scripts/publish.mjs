@@ -62,7 +62,8 @@ export const defuse = (report) =>
     .replace(/(^|[^\w`/.-])@(?=[A-Za-z0-9])/gm, "$1@​")
     .trim();
 
-export const bodyOf = (report, sha) => `${defuse(report)}\n\n<sub>Argos · AI validation of ${sha.slice(0, 7)}</sub>\n${markerOf(sha)}`;
+// The account is a person's, so the footer says who wrote this. A fixed English: nothing here knows the PR's language.
+export const bodyOf = (report, sha) => `${defuse(report)}\n\n<sub>Argos · AI validation of ${sha.slice(0, 7)} · not a human review, and it can be wrong</sub>\n${markerOf(sha)}`;
 export const closingOf = (sha) => bodyOf(`No findings on \`${sha.slice(0, 7)}\`.`, sha);
 
 // The account's own Argos comments on the PR, oldest first.
@@ -157,7 +158,7 @@ function selfTest() {
   assert.equal(defuse(`ok${markerOf("abc")} done<!-- open`), "ok done");
   const body = bodyOf("- `a.js:1`: wrong", "abc1234def");
   assert.ok(body.startsWith("- `a.js:1`: wrong\n\n"));
-  assert.ok(body.includes("AI validation of abc1234<"));
+  assert.ok(body.includes("AI validation of abc1234 · not a human review"));
   assert.ok(body.endsWith(markerOf("abc1234def")));
   console.log("self-test ok");
 }
