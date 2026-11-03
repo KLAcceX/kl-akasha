@@ -9,7 +9,8 @@ import type { PluginOptions, Register } from 'claude-code'
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
 import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, TINT, rgba, titled } from './look'
-import { UI, authorOf, hhmm, kindOf, outOf, retriesNow, runOf, toViewModel, verdictOf } from './view'
+import { UI, ago, authorOf, hhmm, kindOf, outOf, retriesNow, runOf, runsOf, toViewModel, typesOf, verdictOf } from './view'
+import type { HistoryLine } from './view'
 import type { RepoCfg, Round, SetupInfo, Verdicts } from '../types'
 
 export { outOf, reason, toViewModel, verdictOf, verdictTag } from './view'
@@ -58,7 +59,6 @@ const SETUP_DONE = { plugin: 'argos', key: 'setupDone' } as const
 const setupDoneAtom = atom(SETUP_DONE, false)
 const setupInfo = atom(SETUP, null as SetupInfo | null)
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
-const confirmPublish = atom({ plugin: 'argos', key: 'confirmPublish' } as const, null as string[] | null)
 const confirmAutoPublish = atom({ plugin: 'argos', key: 'confirmAutoPublish' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
@@ -166,6 +166,22 @@ async function loadVerdicts($: any): Promise<Verdicts | null> {
     return v
   } catch {
     return (await $.state.get(VERDICTS)).value ?? null
+  }
+}
+
+// What history.jsonl keeps, line by line; none yet, or the sample round, is no history.
+async function readHistory($: any): Promise<HistoryLine[]> {
+  if ((await $.state.get(DEMO)).value) return []
+  try {
+    return (await $.fs.read(`${await stateDir($)}/history.jsonl`)).split('\n').flatMap((l: string) => {
+      try {
+        return l ? [JSON.parse(l)] : []
+      } catch {
+        return []
+      }
+    })
+  } catch {
+    return []
   }
 }
 
@@ -332,6 +348,11 @@ async function afterVerdicts($: any, lang: string, limit: number) {
   if (!run || run.isRunning || (await $.state.get(ANNOUNCED)).value === run.at) return
   await $.state.set(ANNOUNCED, run.at)
   $.ui.toast(`Argos: ${run.label}`)
+  // comments left waiting for the person: History opens on them, unless they are busy elsewhere
+  const r: Round | null = (await $.state.get(ROUND)).value ?? null
+  const others = new Set([...(r?.pending ?? []), ...(r?.mine ?? []), ...(r?.others ?? [])].filter(p => p.kind !== 'mine' && p.author !== r?.me).map(p => p.url))
+  const waits = run.urls.some(u => others.has(u) && !v?.human?.includes(u) && v?.prs[u]?.report && !v.prs[u].published)
+  if (waits && ((await $.state.get(PAGE)).value ?? 'home') === 'home') await $.state.set(PAGE, 'history')
 }
 
 // Shows what the last round (from any session) wrote, unless what is on screen is newer
@@ -604,7 +625,7 @@ export const register: Register = (on, options) => {
       read($, fixResult),
     ])
     // the agents at work first: a line a fixing agent holds says so
-    const [publishAsked, autoPublishAsked] = await Promise.all([read($, confirmPublish), read($, confirmAutoPublish)])
+    const autoPublishAsked = await read($, confirmAutoPublish)
     const working = (await $.agent.list().catch(() => []))
       .filter((a: { spawnedBy?: string; status: string }) => a.spawnedBy === 'argos' && ['pending', 'running', 'waiting'].includes(a.status))
       .map((a: { id: string; description: string; status: string }) => ({
@@ -648,6 +669,11 @@ export const register: Register = (on, options) => {
             {withCheck && (
               <Button key="check" variant="secondary" dimColor={running} onPress={running ? () => undefined : checkNow}>
                 {running ? t(lang, 'ui_checking') : t(lang, 'ui_check')}
+              </Button>
+            )}
+            {vm.state === 'ok' && (
+              <Button key="history-page" variant="secondary" onPress={() => void update($, page, () => 'history')}>
+                {t(lang, 'hi_open_page')}
               </Button>
             )}
             {vm.state === 'ok' && (
@@ -1047,7 +1073,7 @@ export const register: Register = (on, options) => {
     // does nothing until the run ends. A press runs once: a second press while the first one is
     // still at work is dropped.
     const focus = (key: string) => void $.ui.focus({ requestId: PANE, key }).catch(() => {})
-    const goTo = (to: string) => void update($, confirmPublish, () => null).then(() => update($, page, () => to)).then(() => focus(to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back'))
+    const goTo = (to: string) => void update($, page, () => to).then(() => focus(to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back'))
     // a box unticked by hand leaves the PR to humans: nothing automatic touches it, and it stays so
     const setOut = (fn: (list: string[]) => string[]) =>
       (outChain = outChain.then(async () => {
@@ -1081,11 +1107,11 @@ export const register: Register = (on, options) => {
     const inRun = new Set(vm.run?.isRunning ? vm.run.urls : [])
     const runs = (urls: string[]) => urls.some(u => inRun.has(u))
     // a sub-page's top: Back, a verb with where it goes, then the page's name as its heading
-    const bar = (title: string) => (
+    const bar = (title: string, toHistory = false) => (
       <Box key="bar" flexDirection="column" gap={SPACE.block}>
         <Box flexDirection="row">
-          <Button key="back" variant="secondary" onPress={() => void (goTo('home'), update($, confirmMerge, () => null))}>
-            {t(lang, 'back_home')}
+          <Button key="back" variant="secondary" onPress={() => void (goTo(toHistory ? 'history' : 'home'), update($, confirmMerge, () => null))}>
+            {t(lang, toHistory ? 'hi_back' : 'back_home')}
           </Button>
         </Box>
         <Text size="heading" weight="semibold" color={C.text}>
@@ -1300,7 +1326,6 @@ export const register: Register = (on, options) => {
     // Publishing says on each line how it went; a stop halfway loses nothing, since a second press
     // skips what GitHub already has.
     const publishNow = async (urls: string[]) => {
-      await update($, confirmPublish, () => null)
       if (await demoBlocks($, lang)) return
       try {
         const r = await $.process.run(['node', `${$.plugin.root}/scripts/publish.mjs`, ...urls], { timeoutMs: 120_000 })
@@ -1314,41 +1339,6 @@ export const register: Register = (on, options) => {
       }
       await loadVerdicts($)
     }
-    // Opens with the exact text of each review, read before anything leaves this machine.
-    const publishPanel = () => {
-      const list = vm.toPublish.filter(x => publishAsked?.includes(x.url))
-      if (!list.length) return null
-      const accounts = [...new Set(list.map(x => (repoList ?? []).find((r: RepoCfg) => r.repo === x.repo)?.account ?? last?.me ?? ''))]
-      return confirmBox({
-        key: 'publish-confirm',
-        title: t(lang, 'pb_title', list.length),
-        body: t(lang, 'pb_body', accounts.length === 1 ? accounts[0] : ''),
-        content: (
-          <Box flexDirection="column" gap={SPACE.row}>
-            {list.map(x => (
-              <Box key={`report:${x.key}`} flexDirection="column" gap={SPACE.line}>
-                <Text size="caption" weight="semibold" color={C.text}>
-                  {x.where}
-                </Text>
-                {x.report
-                  .split('\n')
-                  .filter(Boolean)
-                  .map((l, i) => (
-                    <Text key={`report:${x.key}:${i}`} size="caption" color={C.text}>
-                      {l}
-                    </Text>
-                  ))}
-              </Box>
-            ))}
-          </Box>
-        ),
-        isBusy: isWorking('publish'),
-        busyLabel: t(lang, 'pb_working'),
-        yes: { key: 'publish-yes', label: t(lang, 'pb_yes', list.length), onPress: work('publish', () => publishNow(list.map(x => x.url))) },
-        no: { key: 'publish-no', label: t(lang, 'pb_cancel'), onPress: () => void update($, confirmPublish, () => null) },
-      })
-    }
-    const askPublish = (urls: string[]) => () => void update($, confirmPublish, () => urls).then(() => focus('publish-yes'))
     const cards = (
       <Box key="cards" flexDirection="row" flexWrap="wrap" gap={SPACE.block}>
         {card(
@@ -1385,7 +1375,7 @@ export const register: Register = (on, options) => {
           t(lang, 'cd_issues_title', vm.issues),
           vm.toPublish.length ? t(lang, 'pb_ready', vm.toPublish.length) : vm.issues ? t(lang, 'cd_issues_body') : t(lang, 'cd_issues_none'),
           vm.toPublish.length
-            ? { key: 'publish', label: t(lang, 'pb_n', vm.toPublish.length), working: t(lang, 'pb_working'), onPress: askPublish(vm.toPublish.map(x => x.url)) }
+            ? { key: 'publish', label: t(lang, 'pb_open', vm.toPublish.length), onPress: () => goTo('history') }
             : vm.issues && worst?.issues
               ? {
                   key: 'open-issues',
@@ -1607,7 +1597,6 @@ export const register: Register = (on, options) => {
             {g.rows.map(x => line(x, Math.max(...g.rows.map(r => r.num.length))))}
           </Box>
         </Box>,
-        publishPanel(),
         <Box key="repo-go" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
           <Button
             key="validate"
@@ -1643,8 +1632,8 @@ export const register: Register = (on, options) => {
             {t(lang, 'in_clear', going.length)}
           </Button>
           {g.toPublish.length > 0 && (
-            <Button key="publish" variant="secondary" dimColor={isWorking('publish')} onPress={isWorking('publish') ? noop : askPublish(g.toPublish)}>
-              {isWorking('publish') ? t(lang, 'pb_working') : t(lang, 'pb_n', g.toPublish.length)}
+            <Button key="publish" variant="secondary" onPress={() => goTo('history')}>
+              {t(lang, 'pb_open', g.toPublish.length)}
             </Button>
           )}
         </Box>,
@@ -1964,9 +1953,173 @@ export const register: Register = (on, options) => {
         </Box>,
       )
 
+    // History: what waits on the person first, then each run, as the record of what Argos found and did.
+    const history = where === 'history' || where.startsWith('run:') ? runsOf(await readHistory($)) : []
+    const nowIs = await $.clock.now()
+    const whenOf = (iso: string) => ago(iso, nowIs, lang)
+    const rowOf = (url: string) => vm.rows.find(x => x.url === url)
+    const whereOf = (url: string) => {
+      const part = url.split('/')
+      return `${part[4] ?? url} #${part[6] ?? ''}`
+    }
+    const typesLine = (reports: (string | undefined)[]) => {
+      const count = new Map<string, number>()
+      for (const tag of reports.flatMap(r => typesOf(r))) count.set(tag, (count.get(tag) ?? 0) + 1)
+      return [...count].sort((a, b) => b[1] - a[1]).map(([tag, n]) => `${n} ${t(lang, 'hi_type', tag, n)}`).join(' · ')
+    }
+    const onePublish = (key: string, url: string) => (
+      <Box flexDirection="row">
+        <Button key={`publish-one:${key}`} variant="secondary" dimColor={isWorking('publish') || isWorking(`publish-one:${key}`)} onPress={isWorking('publish') || isWorking(`publish-one:${key}`) ? noop : work(`publish-one:${key}`, () => publishNow([url]))}>
+          {isWorking(`publish-one:${key}`) ? t(lang, 'pb_working') : t(lang, 'pb_one')}
+        </Button>
+      </Box>
+    )
+    const reportOf = (key: string, url: string, title: string, text: string, foot: any) => (
+      <Box key={`report:${key}`} flexDirection="column" gap={SPACE.line}>
+        <Text size="caption" weight="semibold" color={C.text}>
+          <ui.Link href={url}>{title}</ui.Link>
+        </Text>
+        {text
+          .split('\n')
+          .filter(Boolean)
+          .map((l, i) => (
+            <Text key={`report:${key}:${i}`} size="caption" color={C.text}>
+              {l}
+            </Text>
+          ))}
+        {foot}
+      </Box>
+    )
+    const historyPage = () => {
+      const waiting = vm.toPublish
+      const accounts = [...new Set(waiting.map(x => (repoList ?? []).find((r: RepoCfg) => r.repo === x.repo)?.account ?? last?.me ?? ''))]
+      const types = typesLine(waiting.map(x => x.report))
+      return frame(
+        bar(t(lang, 'hi_title')),
+        agents,
+        section(
+          'hi-waiting',
+          waiting.length ? t(lang, 'hi_waiting', waiting.length) : t(lang, 'hi_none_waiting'),
+          waiting.length > 0 && (
+            <Text key="hi-body" size="caption" color={C.subtle}>
+              {t(lang, 'hi_body', accounts.length === 1 ? accounts[0] : '')}
+            </Text>
+          ),
+          types && (
+            <Text key="hi-types" size="caption" weight="semibold" color={C.text}>
+              {types}
+            </Text>
+          ),
+          ...waiting.map(x => reportOf(x.key, x.url, `${x.where} · ${x.title}`, x.report, onePublish(x.key, x.url))),
+          waiting.length > 1 && (
+            <Box key="hi-all" flexDirection="row">
+              <Button key="publish-all" variant={isWorking('publish-all') ? 'secondary' : 'primary'} dimColor={isWorking('publish-all')} onPress={isWorking('publish-all') ? noop : work('publish-all', () => publishNow(waiting.map(x => x.url)))}>
+                {isWorking('publish-all') ? t(lang, 'pb_working') : t(lang, 'pb_n', waiting.length)}
+              </Button>
+            </Box>
+          ),
+        ),
+        section(
+          'hi-runs',
+          t(lang, 'hi_runs'),
+          !history.length && (
+            <Text key="hi-none" size="caption" color={C.subtle}>
+              {t(lang, 'hi_no_runs')}
+            </Text>
+          ),
+          ...history.map(run => {
+            const count = (fn: (x: (typeof run.items)[number]) => unknown) => run.items.filter(fn).length
+            const said = [
+              t(lang, 'hi_prs', run.items.length),
+              [count(x => x.issues), 'hi_issues'],
+              [count(x => x.kind === 'failed'), 'hi_failed'],
+              [count(x => x.published?.state === 'posted'), 'hi_published'],
+              [count(x => x.merged?.state === 'merged'), 'hi_merged'],
+            ].flatMap(p => (typeof p === 'string' ? [p] : p[0] ? [t(lang, p[1] as string, p[0])] : []))
+            return (
+              <Box key={`run:${run.at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
+                <Box flexGrow={1} flexShrink={1} width="40%" minWidth={24}>
+                  <Text size="caption" color={C.text}>
+                    {said.join(' · ')}
+                  </Text>
+                </Box>
+                <Button key={`open-run:${run.at}`} variant="secondary" onPress={() => goTo(`run:${run.at}`)}>
+                  {t(lang, 'hi_open', whenOf(run.at))}
+                </Button>
+              </Box>
+            )
+          }),
+        ),
+      )
+    }
+    const runPage = (run: (typeof history)[number]) => {
+      const found = run.items.filter(x => x.report || x.finding || x.kind === 'failed')
+      const mine = found.filter(x => rowOf(x.url)?.isOwn || x.published?.why === 'your PR')
+      const theirs = found.filter(x => !mine.includes(x))
+      const passed = run.items.length - found.length
+      const types = typesLine(theirs.map(x => x.report))
+      const footOf = (x: (typeof run.items)[number]) => {
+        const row = rowOf(x.url)
+        const text =
+          x.kind === 'failed'
+            ? t(lang, 'st_failed', x.why ?? '')
+            : x.merged?.state === 'merged'
+              ? t(lang, 'st_merged', x.merged.why ?? '')
+              : x.published?.state === 'posted'
+                ? t(lang, 'vn_published')
+                : !row
+                  ? t(lang, 'hi_closed')
+                  : row.vstate === 'stale'
+                    ? t(lang, 'hi_new')
+                    : x.published
+                      ? t(lang, 'pb_failed', t(lang, 'mg_why', x.published.why ?? ''))
+                      : ''
+        return text ? (
+          <Text size="caption" color={x.kind === 'failed' ? C.error : x.published?.state === 'posted' || x.merged ? C.success : C.subtle}>
+            {text}
+          </Text>
+        ) : null
+      }
+      return frame(
+        bar(t(lang, 'hi_run_title', whenOf(run.at)), true),
+        <Box key="run-summary" flexDirection="column" gap={SPACE.line}>
+          <Text size="caption" color={C.text}>
+            {[t(lang, 'hi_prs', run.items.length), passed ? t(lang, 'hi_passed', passed) : ''].filter(Boolean).join(' · ')}
+          </Text>
+          {types && (
+            <Text size="caption" weight="semibold" color={C.text}>
+              {types}
+            </Text>
+          )}
+        </Box>,
+        theirs.length > 0 &&
+          section(
+            'run-others',
+            t(lang, 'hi_others'),
+            ...theirs.map(x => {
+              const can = vm.toPublish.some(w => w.url === x.url)
+              const key = `${run.at}:${x.url}`
+              return reportOf(key, x.url, `${whereOf(x.url)}${rowOf(x.url) ? ` · ${rowOf(x.url)!.title}` : ''}`, x.report || x.finding || '', can ? onePublish(key, x.url) : footOf(x))
+            }),
+          ),
+        mine.length > 0 &&
+          section(
+            'run-mine',
+            t(lang, 'hi_mine'),
+            <Text key="run-mine-note" size="caption" color={C.subtle}>
+              {t(lang, 'hi_mine_note')}
+            </Text>,
+            ...mine.map(x => reportOf(`${run.at}:${x.url}`, x.url, `${whereOf(x.url)}${rowOf(x.url) ? ` · ${rowOf(x.url)!.title}` : ''}`, x.report || x.finding || '', footOf(x))),
+          ),
+      )
+    }
+    if (where === 'history') return historyPage()
+    const openedRun = where.startsWith('run:') ? history.find(run => `run:${run.at}` === where) : undefined
+    if (openedRun) return runPage(openedRun)
+    if (where.startsWith('run:')) return historyPage()
     const opened = vm.groups.find(g => g.repo === where)
     if (where === 'settings') return settingsPage()
     if (opened) return repoPage(opened)
-    return frame(head(true), failedBanner, needs, agents, cards, publishPanel(), repoRows)
+    return frame(head(true), failedBanner, needs, agents, cards, repoRows)
   })
 }

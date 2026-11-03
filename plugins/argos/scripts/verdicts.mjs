@@ -144,7 +144,7 @@ function main(args) {
     const next = set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding"), report: file ? readFileSync(file === "-" ? 0 : file, "utf8") : "" }, now);
     write(next);
     // this file keeps only the last verdict of a PR; the history keeps each commit's
-    addHistory({ kind: "verdict", url, sha, issues, attention, partial, finding: next.prs[url].finding, at: now });
+    addHistory({ kind: "verdict", url, sha, issues, attention, partial, finding: next.prs[url].finding, report: next.prs[url].report, run: next.batch.at, at: now });
     const said = issues ? `blocks ${issues}` : partial ? "partial" : "passed";
     return console.log(`${url}: ${said}${attention ? ` · attention ${attention}` : ""}`);
   }
@@ -156,7 +156,9 @@ function main(args) {
   if (cmd === "fail") {
     const url = rest[0];
     if (!isPr(url)) throw new Error('fail <pr-url> --reason "<why>"');
-    write(fail(v, url, flag(rest, "reason"), now));
+    const failed = fail(v, url, flag(rest, "reason"), now);
+    write(failed);
+    addHistory({ kind: "failed", url, sha: failed.prs[url].sha, why: failed.prs[url].reason, run: failed.batch.at, at: now });
     return console.log(`${url}: failed`);
   }
   if (cmd === "auto") {

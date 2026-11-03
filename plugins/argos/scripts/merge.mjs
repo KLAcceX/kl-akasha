@@ -35,6 +35,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 import { scan } from "./gate.mjs";
+import { add as addHistory } from "./history.mjs";
 import { read as readRepos } from "./repos.mjs";
 import { onlyUpkeep, pinsOnly } from "./upkeep.mjs";
 import { nap, read, withLock, write } from "./verdicts.mjs";
@@ -220,6 +221,8 @@ function sweepAll() {
       const now = read();
       if (now.prs[url]?.sha === verdict.sha) write({ ...now, prs: { ...now.prs, [url]: { ...now.prs[url], merge: { ...outcome, sha: verdict.sha, at: new Date().toISOString() } } } });
     });
+    // what was done in the person's name, once; a skip or a repeated approval is no event
+    if (outcome.state !== "skipped" && verdict.merge?.state !== outcome.state) addHistory({ kind: "merge", url, sha: verdict.sha, state: outcome.state, why: outcome.why, at: new Date().toISOString() });
     done.push({ url, ...outcome });
   }
   return done;

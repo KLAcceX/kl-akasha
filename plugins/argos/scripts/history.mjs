@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // Argos history: only what GitHub does not know. PRs, their age and their reviews stay on GitHub
 // and are asked for when needed; this keeps the verdict of each commit, so what the AI said can be
-// compared later with what happened, and the tokens each agent spent, so a round has a cost.
+// compared later with what happened, the report and the run it belongs to, what Argos posted and
+// merged in the person's name, and the tokens each agent spent, so a round has a cost.
 //
 // Usage:
 //   node history.mjs usage --kind validate|fix --prs <n> --model <id> --input <n> --output <n> --cache-read <n> --cache-write <n>
 //   node history.mjs stats [--days 30] [--lang pt-BR|en]    tokens and verdicts of the last days
 //   node history.mjs verdicts [<pr-url>]                    the verdicts kept, one JSON per line
 //   node history.mjs --self-test
-// verdicts.mjs adds a verdict each time one is recorded. Env: ARGOS_STATE, as the other scripts.
+// verdicts.mjs adds a verdict or a failure each time one is recorded, publish.mjs and merge.mjs what they
+// did. The pane reads the file for its History page. Env: ARGOS_STATE, as the other scripts.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

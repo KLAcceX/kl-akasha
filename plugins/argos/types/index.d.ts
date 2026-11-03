@@ -126,8 +126,6 @@ declare module 'claude-code' {
       page: string
       // the repo whose auto-merge waits for the person's confirmation
       confirmMerge: string | null
-      // the PRs whose reviews wait for the person's confirmation, after they read them
-      confirmPublish: string[] | null
       // the repo whose auto-publish waits for the person's confirmation
       confirmAutoPublish: string | null
       // the validating agents the mod started, by agent id, each with its PRs

@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { compose, reason, toViewModel, verdictOf, verdictTag } from './register'
+import { runsOf, typesOf } from './view'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -832,22 +833,115 @@ test('Publish shows the exact text first; only confirming runs the script, which
   })
   const ui = await $.ui.mount(PANE)
   const posts = () => runs.filter(r => r[1] === 'publish.mjs')
-  expect((await ui.find({ key: 'publish' }))?.text).toBe('Publish 1 review')
+  expect((await ui.find({ key: 'publish' }))?.text).toBe('Review 1 comment')
   await ui.press({ key: 'publish' })
-  // nothing has left yet: the panel holds each line of the text, and its way out
+  // nothing has left yet: the page holds each line of the text
   expect(posts()).toEqual([])
   expect((await ui.find({ type: 'Text', text: /a\.js:1/ }))?.text).toBe('- Blocker `a.js:1`: wrong')
   expect((await ui.find({ type: 'Text', text: /b\.js:2/ }))?.text).toBe('- Look at `b.js:2`: weak test')
-  await ui.press({ key: 'publish-no' })
-  expect(await ui.find({ key: 'publish-yes' })).toBeFalsy()
-  expect(posts()).toEqual([])
-  await ui.press({ key: 'publish' })
-  await ui.press({ key: 'publish-yes' })
+  await ui.press({ key: 'publish-one:acme/api#1' })
   expect(posts()).toEqual([['node', 'publish.mjs', url.split('/').at(-1)!]])
-  expect(toasts.at(-1)).toBe('Argos: 1 review published')
-  expect(await ui.find({ key: 'publish-yes' })).toBeFalsy()
+  expect(toasts.at(-1)).toBe('Argos: 1 comment published')
   await ui.unmount()
 })
+
+test('History: what waits first, then each run, by kind of fix; a PR of mine only shows findings', async ($, on) => {
+  const web = 'https://github.com/acme/web/pull/8'
+  const own = 'https://github.com/acme/web/pull/9'
+  const gone = 'https://github.com/acme/web/pull/3'
+  const fine = 'https://github.com/acme/web/pull/4'
+  const run = '2026-10-29T10:00:00.000Z'
+  const line = (o: Record<string, unknown>) => JSON.stringify({ kind: 'verdict', sha: 'abc1234', issues: 0, attention: 0, run, at: run, ...o })
+  const history = [
+    line({ url: web, issues: 2, report: '- [security] a.js:1: leak; remove it\n- [security] b.js:2: no auth; add it\n- [tests] c.js:3: weak; assert it' }),
+    line({ url: own, issues: 1, report: '- [deploy] d.sql:1: drops a column; keep it' }),
+    line({ url: gone, issues: 1, report: '- [scope] e.js:1: unrelated; move it' }),
+    line({ url: fine }),
+    JSON.stringify({ kind: 'merge', url: gone, sha: 'abc1234', state: 'merged', why: 'squash', at: run }),
+    'not json',
+  ].join('\n')
+  const prs = [
+    item({ kind: 'other', number: 8, repo: 'acme/web', url: web, title: 'Their PR', author: 'bia', sha: 'abc1234', signals: [] }),
+    item({ kind: 'mine', number: 9, repo: 'acme/web', url: own, title: 'My PR', author: 'me', sha: 'abc1234', signals: [] }),
+    item({ kind: 'other', number: 4, repo: 'acme/web', url: fine, title: 'Fine', author: 'bia', sha: 'abc1234', signals: [] }),
+  ]
+  const seeded: Record<string, unknown> = {
+    round: { ...round, me: 'me', repos: ['acme/web'], pending: [], mine: [prs[1]], others: [prs[0], prs[2]] },
+    verdicts: {
+      ...judged,
+      batch: { urls: [], at: null },
+      prs: { [web]: V({ issues: 2, report: '- [security] a.js:1: leak; remove it\n- [security] b.js:2: no auth; add it\n- [tests] c.js:3: weak; assert it' }), [own]: V({ issues: 1, report: '- [deploy] d.sql:1: drops a column; keep it' }), [fine]: V({}) },
+    },
+  }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    if (e.path.endsWith('history.jsonl')) return { value: history }
+    throw new Error('no file')
+  })
+  const ui = await $.ui.mount(PANE)
+  const text = async (rx: RegExp) => (await ui.find({ type: 'Text', text: rx }))?.text
+  await ui.press({ key: 'history-page' })
+  // only their PR waits, with its kinds counted; the run sums up in one line
+  expect(await text(/^Waiting to publish/)).toBe('Waiting to publish · 1')
+  expect(await text(/^2 security/)).toBe('2 security · 1 test')
+  expect(await ui.find({ key: 'publish-one:acme/web#9' })).toBeFalsy()
+  expect(await text(/^4 PRs/)).toBe('4 PRs · 3 with issues · 1 merged')
+  await ui.press({ key: `open-run:${run}` })
+  // the kinds count other people's PRs; mine shows up with no way to publish
+  expect(await text(/security · /)).toBe('2 security · 1 test · 1 scope')
+  expect(await text(/^4 PRs/)).toBe('4 PRs · 1 passed')
+  expect(await text(/d\.sql:1/)).toBe('- [deploy] d.sql:1: drops a column; keep it')
+  expect(await text(/^Findings only/)).toBeTruthy()
+  // a PR gone from the watch says what became of it
+  expect(await text(/^merged/)).toBe('merged · squash')
+  await ui.unmount()
+})
+
+test('runsOf groups by run, newest first, with what was done since; typesOf reads the tags', () => {
+  const v = (url: string, run: string, o = {}) => ({ kind: 'verdict', url, sha: 's', run, at: run, ...o })
+  const runs = runsOf([v('a', '1'), v('a', '2', { issues: 1 }), v('a', '2', { issues: 2 }), { kind: 'published', url: 'a', sha: 's', state: 'posted', at: '3' }, { kind: 'usage', url: '', at: '3' }, { kind: 'verdict', url: 'old', at: '0' }])
+  expect(runs.map(r => r.at)).toEqual(['2', '1'])
+  expect([runs[0].items.length, runs[0].items[0].issues, runs[0].items[0].published?.state]).toEqual([1, 2, 'posted'])
+  expect(typesOf('- [security] a\n  - [tests] b\nnote\n- no tag')).toEqual(['security', 'tests'])
+})
+
+for (const [name, from, prOver, verdictOver, to] of [
+  ['a run that leaves comments waiting opens History', 'home', {}, {}, 'history'],
+  ['someone busy elsewhere only gets the toast', 'settings', {}, {}, null],
+  ['a report already posted leaves nothing waiting', 'home', {}, { published: { state: 'posted', why: '', sha: 'abc1234', at: 'now' } }, null],
+  ['a PR of the person leaves nothing waiting', 'home', { kind: 'mine', author: 'me' }, {}, null],
+] as const)
+  test(`after a run: ${name}`, async ($, on) => {
+    const url = 'https://github.com/acme/web/pull/8'
+    const pr = item({ kind: 'other', number: 8, repo: 'acme/web', url, author: 'bia', sha: 'abc1234', signals: [], ...prOver })
+    const fresh = { ...round, me: 'me', repos: ['acme/web'], pending: [], mine: [], others: [pr], at: new Date(NOW + 1000).toISOString(), okAt: new Date(NOW + 1000).toISOString() }
+    const files: Record<string, string> = {
+      'last-round.json': JSON.stringify(fresh),
+      'verdicts.json': JSON.stringify({ ...judged, batch: { urls: [url], at: round.at }, prs: { [url]: V({ issues: 1, report: '- [tests] a.js:1: weak; assert it', ...verdictOver }) } }),
+      'repos.json': JSON.stringify([{ repo: 'acme/web' }]),
+    }
+    const pages: unknown[] = []
+    let settle = () => {}
+    const over = new Promise<void>(r => (settle = r))
+    on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key === 'page' && !pages.length ? { value: { value: from, version: 1 } } : next(e)))
+    on('state.set', async ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+      if (e.key === 'page') pages.push(e.value)
+      const done = await next(e)
+      if (e.key === 'isRunning' && e.value === false) settle()
+      return done
+    })
+    on('clock.now', clock)
+    on('env.get', () => ({ value: 'C:/home' }))
+    on('fs.read', (_: unknown, e: { path: string }) => ({ value: files[e.path.split(/[\\/]/).at(-1)!] }))
+    on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('ui.toast', () => ({ value: undefined }))
+    await $.command.run({ command: 'argos', args: '' })
+    await over
+    expect(pages.includes('history')).toBe(to === 'history')
+  })
 
 test('auto-publish: two taps on, the rules said first; one tap off', async ($, on) => {
   const seeded: Record<string, unknown> = { round, page: 'settings', verdicts: { ...judged, batch: { urls: [], at: null } }, repos: [{ repo: 'acme/portal' }] }

@@ -28,6 +28,7 @@
 // Env: ARGOS_STATE, as the other scripts.
 import assert from "node:assert/strict";
 import { hasSecret } from "./gate.mjs";
+import { add as addHistory } from "./history.mjs";
 import { isMain } from "./is-main.mjs";
 import { asAccount, lines, passes, repoOf, sameSha } from "./merge.mjs";
 import { read as readRepos } from "./repos.mjs";
@@ -109,6 +110,7 @@ function publish(urls, until = Infinity) {
       const now = read();
       if (now.prs[url]?.sha === verdict.sha) write({ ...now, prs: { ...now.prs, [url]: { ...now.prs[url], published: { ...outcome, sha: verdict.sha, at: new Date().toISOString() } } } });
     });
+    if (outcome.state !== "skipped") addHistory({ kind: "published", url, sha: verdict.sha, state: outcome.state, why: outcome.why, at: new Date().toISOString() });
     done.push({ url, ...outcome });
   }
   return done;

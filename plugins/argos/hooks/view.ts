@@ -31,6 +31,30 @@ export const MAX_TRIES = 3
 const RETRY_AFTER = 24 * 36e5
 export const retriesNow = (v: Verdict, now: number) => (v.tries ?? 0) < MAX_TRIES || now - Date.parse(v.at) > RETRY_AFTER
 
+// The types a report's lines start with ("- [security] a.js:1: ..."), one per finding.
+export const typesOf = (report = '') => report.split('\n').flatMap(l => l.match(/^\s*-\s*\[([a-z]+)\]/)?.[1] ?? [])
+
+// The runs history.jsonl records, newest first: each PR by its last line in that run, with what was
+// posted and merged for that commit since. ponytail: the whole file parsed on each draw of these
+// pages, and failures past the time limit are not recorded; both fine at 5000 lines and one person.
+export type HistoryLine = { kind: string; url: string; sha?: string; issues?: number; attention?: number; partial?: boolean; finding?: string; report?: string; run?: string; state?: string; why?: string; at: string }
+const KEEP_RUNS = 50
+export function runsOf(history: HistoryLine[]) {
+  const runs = new Map<string, Map<string, HistoryLine>>()
+  const after = new Map<string, HistoryLine>()
+  for (const e of history) {
+    if ((e.kind === 'verdict' || e.kind === 'failed') && e.run) runs.set(e.run, (runs.get(e.run) ?? new Map()).set(e.url, e))
+    if (e.kind === 'published' || e.kind === 'merge') after.set(`${e.kind}:${e.url}@${e.sha}`, e)
+  }
+  return [...runs]
+    .sort(([a], [b]) => b.localeCompare(a))
+    .slice(0, KEEP_RUNS)
+    .map(([at, items]) => ({
+      at,
+      items: [...items.values()].map(e => ({ ...e, published: after.get(`published:${e.url}@${e.sha}`), merged: after.get(`merge:${e.url}@${e.sha}`) })),
+    }))
+}
+
 // What a line says about publish.mjs's outcome; what needs no word (a pass, a PR of the person's) says nothing.
 const QUIET_PUBLISH = new Set(['nothing to publish', 'your PR'])
 const publishNote = (p: Verdict['published'], lang: string) =>
@@ -315,6 +339,7 @@ export function toViewModel(r: Round | null, o: Opts) {
       isIn: leftBy === null,
       // what would go on the PR, while it can: someone else's, on the current commit, not left to
       // humans, not out yet
+      isOwn: p.kind === 'mine' || Boolean(r.me && p.author === r.me),
       report:
         p.kind !== 'mine' && !(r.me && p.author === r.me) && ['issues', 'pass', 'partial'].includes(v.state) && (v.issues || v.attention) && leftBy !== 'hand' && leftBy !== 'author' && (!published || published.state === 'failed')
           ? (o.verdicts?.prs?.[p.url]?.report ?? '')
@@ -448,7 +473,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     clean: toGo.filter(x => !x.hasReason).map(x => x.url),
     issues: rows.filter(x => x.vstate === 'issues').length,
     // the reviews ready to go on GitHub, each with the text that would go
-    toPublish: [...new Map(rows.filter(x => x.report).map(x => [x.url, { key: x.key, url: x.url, repo: x.repo, where: `${short(x.repo)} ${x.num}`, report: x.report }])).values()],
+    toPublish: [...new Map(rows.filter(x => x.report).map(x => [x.url, { key: x.key, url: x.url, repo: x.repo, title: x.title, where: `${short(x.repo)} ${x.num}`, report: x.report }])).values()],
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
     rework: reworkRows.map(x => x.url),
     run: showRun ? run : null,
