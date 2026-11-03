@@ -656,6 +656,7 @@ export const DEMO_VERDICTS: Verdicts = {
       "sha": "0219a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
       "issues": 1,
       "finding": "Retry loop has no backoff cap (rules.ts:42)",
+      "report": "- Blocker `rules.ts:42`: the retry loop has no backoff cap, so a pricing outage retries forever. Cap it at 30 s.\n- Look at `rules.test.ts:12`: asserts only on a mock.",
       "at": "2026-10-31T10:00:00Z"
     },
     "https://github.com/acme/web/pull/7": {

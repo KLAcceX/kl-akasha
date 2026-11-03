@@ -32,6 +32,8 @@ export type Item = {
 // issues: blockers; attention: risks that do not block; partial: not all of it was read
 // merge.mjs's outcome on a passing verdict, once per head commit, in a repo with auto-merge on
 export type MergeOutcome = { state: 'merged' | 'approved' | 'skipped'; why: string; sha: string; at: string }
+// publish.mjs's outcome on a report, once per head commit
+export type PublishOutcome = { state: 'posted' | 'skipped' | 'failed'; why: string; sha: string; at: string }
 export type Verdict = {
   state: 'queued' | 'running' | 'done' | 'failed'
   sha?: string
@@ -42,6 +44,11 @@ export type Verdict = {
   // why it could not be validated
   reason?: string
   merge?: MergeOutcome
+  // how many times it was queued since its last verdict
+  tries?: number
+  // every finding, as it would read on the PR, and what publish.mjs did with it
+  report?: string
+  published?: PublishOutcome
   at: string
 }
 export type Verdicts = {
@@ -57,7 +64,7 @@ export type Verdicts = {
 }
 // A connected repo as repos.json keeps it: auto-merge and its own validation prompt (skills is
 // what an older version kept instead, read as a prompt to use them).
-export type RepoCfg = { repo: string; account?: string; path?: string; merge?: boolean; prompt?: string; skills?: string[] }
+export type RepoCfg = { repo: string; account?: string; path?: string; merge?: boolean; publish?: boolean; prompt?: string; skills?: string[] }
 // What setup.mjs finds on a first run: is gh there, its logged-in accounts, the one in use, and
 // repos with open PRs for it (error: why they could not be listed).
 export type SetupInfo = {
@@ -119,6 +126,10 @@ declare module 'claude-code' {
       page: string
       // the repo whose auto-merge waits for the person's confirmation
       confirmMerge: string | null
+      // the PRs whose reviews wait for the person's confirmation, after they read them
+      confirmPublish: string[] | null
+      // the repo whose auto-publish waits for the person's confirmation
+      confirmAutoPublish: string | null
       // the validating agents the mod started, by agent id, each with its PRs
       agentRuns: Record<string, string[]>
       // the agents the person stopped: every tool they call is refused

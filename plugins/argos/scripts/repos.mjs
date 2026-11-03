@@ -18,9 +18,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { langArg, t } from "./i18n.mjs";
+import { isMain } from "./is-main.mjs";
 
 const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "repos.json");
@@ -103,11 +103,15 @@ function main(args) {
     return console.log(`Argos: ${t(lang, next.length < list.length ? "removed" : "not_connected", name)}`);
   }
   // per repo settings, on a connected repo only
-  if ((verb === "merge" || verb === "prompt") && rest[0]) {
+  if ((verb === "merge" || verb === "publish" || verb === "prompt") && rest[0]) {
     const name = repoFromArg(rest[0]) ?? rest[0];
     const old = list.find((r) => same(r.repo, name));
     if (!old) fail(t(lang, "not_connected", name));
-    if (verb === "merge" && !["on", "off"].includes(rest[1])) fail("merge <repo> on|off");
+    if (verb !== "prompt" && !["on", "off"].includes(rest[1])) fail(`${verb} <repo> on|off`);
+    if (verb === "publish") {
+      write(list.map((r) => (r === old ? { ...old, publish: rest[1] === "on" } : r)));
+      return console.log(`Argos: ${t(lang, rest[1] === "on" ? "publish_on" : "publish_off", old.repo)}`);
+    }
     const text = rest.slice(1).join(" ").trim();
     // a prompt replaces the skills list an older version kept
     const { skills: _, prompt: __, ...base } = old;
@@ -117,7 +121,7 @@ function main(args) {
   }
   if (args.includes("--json")) return console.log(JSON.stringify(list));
   if (!list.length) return console.log(`Argos: ${t(lang, "no_repos")}`);
-  const extra = (r) => `${r.merge ? " · auto-merge" : ""}${r.prompt ? " · own prompt" : ""}`;
+  const extra = (r) => `${r.merge ? " · auto-merge" : ""}${r.publish ? " · auto-publish" : ""}${r.prompt ? " · own prompt" : ""}`;
   console.log([`Argos: ${t(lang, "list_title")}`, ...list.map((r) => `- ${r.repo}${r.account ? ` as ${r.account}` : ""}${extra(r)}${r.path ? `  (${r.path})` : ""}`)].join("\n"));
 }
 
@@ -147,7 +151,7 @@ function selfTest() {
 }
 
 // Run as a command only; round.mjs imports read() without triggering it.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   args.includes("--self-test") ? selfTest() : main(args);
 }

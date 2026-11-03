@@ -9,7 +9,7 @@
 //   node gate.mjs --self-test
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
+import { isMain } from "./is-main.mjs";
 
 // A PR link or owner/repo#n (as facts.mjs reads it; importing facts.mjs would run its CLI).
 const parsePr = (ref) => {
@@ -54,6 +54,9 @@ export function addedLines(diff) {
   }
   return out;
 }
+
+// A secret's shape in any text, such as a report about to go public.
+export const hasSecret = (text) => SECRETS.some(([, rx]) => rx.test(text));
 
 // What the gate finds in a diff: secrets anywhere, risky workflow lines under .github/workflows,
 // and a .env file added.
@@ -152,7 +155,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   if (process.argv.includes("--self-test")) selfTest();
   else
     try {

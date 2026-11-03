@@ -9,7 +9,7 @@ import type { PluginOptions, Register } from 'claude-code'
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
 import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, TINT, rgba, titled } from './look'
-import { UI, authorOf, hhmm, kindOf, outOf, runOf, toViewModel, verdictOf } from './view'
+import { UI, authorOf, hhmm, kindOf, outOf, retriesNow, runOf, toViewModel, verdictOf } from './view'
 import type { RepoCfg, Round, SetupInfo, Verdicts } from '../types'
 
 export { outOf, reason, toViewModel, verdictOf, verdictTag } from './view'
@@ -58,6 +58,8 @@ const SETUP_DONE = { plugin: 'argos', key: 'setupDone' } as const
 const setupDoneAtom = atom(SETUP_DONE, false)
 const setupInfo = atom(SETUP, null as SetupInfo | null)
 const confirmMerge = atom({ plugin: 'argos', key: 'confirmMerge' } as const, null as string | null)
+const confirmPublish = atom({ plugin: 'argos', key: 'confirmPublish' } as const, null as string[] | null)
+const confirmAutoPublish = atom({ plugin: 'argos', key: 'confirmAutoPublish' } as const, null as string | null)
 const agentRuns = atom(AGENT_RUNS, {} as Record<string, string[]>)
 const fixRuns = atom(FIX_RUNS, {} as Record<string, string[]>)
 // what was typed in each repo's prompt field, by repo; outside the atoms so typing redraws nothing
@@ -197,6 +199,13 @@ const byClone = (list: RepoCfg[], urls: string[]) => {
   return [...groups]
 }
 
+// What an agent's line says, so two agents with the same count can be told apart: its repo, or how
+// many when repos with no clone share one agent.
+const agentLabel = (job: string, urls: string[]) => {
+  const repos = [...new Set(urls.map(u => u.split('/')[4] ?? u))]
+  return `Argos ${job} · ${repos.length === 1 ? repos[0] : `${repos.length} repos`} · ${urls.length} PR${urls.length === 1 ? '' : 's'}`
+}
+
 // Validates PRs in the background: queues them, then hands them to subagents with the validate
 // job, ten each so a long list runs side by side; each agent marks a PR started as it reaches it.
 // No chat is opened, the verdicts land on the lines as each one finishes. Each PR carries the
@@ -227,7 +236,7 @@ async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
       try {
         const { agentId, deny } = await $.agent.spawn({
           prompt: lines.join('\n'),
-          description: `Argos validate · ${part.length} PRs`,
+          description: agentLabel('validate', part),
           ...(cwd && { cwd }),
         })
         // a refusal answers instead of throwing: the person's hooks or rules may say no
@@ -256,7 +265,7 @@ async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
     try {
       const { agentId, deny } = await $.agent.spawn({
         prompt: lines.join('\n'),
-        description: `Argos fix · ${group.length} PRs`,
+        description: agentLabel('fix', group),
         ...(cwd && { cwd }),
       })
       if (deny) throw new Error(deny)
@@ -281,7 +290,7 @@ async function stopAgent($: any, id: string) {
 // Auto-validate: after a round, once its interval has passed since the last automatic round, only
 // what changed goes, in the background: PRs with no verdict yet or with commits after theirs,
 // among those with nothing pending (no change asked, not a draft), the user's own with "mine",
-// every watched PR with "all"; authors left out stay out. A failed one waits for Validate. Each round
+// every watched PR with "all"; authors left out stay out. A failed one goes again a few times, then once a day. Each round
 // is recorded, sent or not, so the pane can say when it looked. ponytail: ten per round, so a
 // burst never spends a fortune at once.
 async function autoValidate($: any, r: Round | null, lang: string, prompt: Prompt) {
@@ -297,7 +306,8 @@ async function autoValidate($: any, r: Round | null, lang: string, prompt: Promp
   const mine = (p: (typeof all)[number]) => p.kind === 'mine' || (Boolean(r.me) && p.author === r.me)
   const changed = (p: (typeof all)[number]) => {
     const verdict = verdictOf(p, v.prs[p.url], now)
-    return (verdict.state === 'none' || verdict.state === 'stale') && outOf(p, verdict) === null
+    const again = verdict.state === 'failed' && retriesNow(v.prs[p.url], now)
+    return (verdict.state === 'none' || verdict.state === 'stale' || again) && outOf(p, verdict) === null
   }
   const urls = [...new Set(all.filter(p => (v.auto === 'all' || mine(p)) && changed(p)).map(p => p.url))].slice(0, 10)
   await validate($, urls, lang, prompt)
@@ -305,18 +315,17 @@ async function autoValidate($: any, r: Round | null, lang: string, prompt: Promp
   await loadVerdicts($)
 }
 
-// After verdicts land: auto-merge looks at the passing ones (merge.mjs does nothing for a repo
+// After verdicts land: auto-publish posts the reports of repos that turned it on (publish.mjs does its
+// own checks), auto-merge looks at the passing ones (merge.mjs does nothing for a repo
 // that did not opt in), and once a run has nothing left running, one toast says what it came to.
 // One sweep at a time: verdicts landing together would otherwise approve the same PR twice.
 let sweeping: Promise<unknown> | null = null
 async function afterVerdicts($: any, lang: string, limit: number) {
   if ((await $.state.get(DEMO)).value) return
-  sweeping ??= $.process
-    .run(['node', `${$.plugin.root}/scripts/merge.mjs`, 'sweep'], {
-      timeoutMs: 120_000,
-    })
-    .catch(() => {})
-    .finally(() => (sweeping = null))
+  sweeping ??= (async () => {
+    for (const script of ['merge.mjs', 'publish.mjs'])
+      await $.process.run(['node', `${$.plugin.root}/scripts/${script}`, 'sweep'], { timeoutMs: 120_000 }).catch(() => {})
+  })().finally(() => (sweeping = null))
   await sweeping
   const v = await loadVerdicts($)
   const run = runOf(v, await $.clock.now(), lang, limit)
@@ -595,6 +604,7 @@ export const register: Register = (on, options) => {
       read($, fixResult),
     ])
     // the agents at work first: a line a fixing agent holds says so
+    const [publishAsked, autoPublishAsked] = await Promise.all([read($, confirmPublish), read($, confirmAutoPublish)])
     const working = (await $.agent.list().catch(() => []))
       .filter((a: { spawnedBy?: string; status: string }) => a.spawnedBy === 'argos' && ['pending', 'running', 'waiting'].includes(a.status))
       .map((a: { id: string; description: string; status: string }) => ({
@@ -1037,7 +1047,7 @@ export const register: Register = (on, options) => {
     // does nothing until the run ends. A press runs once: a second press while the first one is
     // still at work is dropped.
     const focus = (key: string) => void $.ui.focus({ requestId: PANE, key }).catch(() => {})
-    const goTo = (to: string) => void update($, page, () => to).then(() => focus(to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back'))
+    const goTo = (to: string) => void update($, confirmPublish, () => null).then(() => update($, page, () => to)).then(() => focus(to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back'))
     // a box unticked by hand leaves the PR to humans: nothing automatic touches it, and it stays so
     const setOut = (fn: (list: string[]) => string[]) =>
       (outChain = outChain.then(async () => {
@@ -1240,6 +1250,105 @@ export const register: Register = (on, options) => {
     )
     type Group = (typeof vm.groups)[number]
     const worst = [...vm.groups].sort((a, b) => b.issues - a.issues)[0]
+    // An action on GitHub: the confirmation opens in the warning look, what it will do first, its
+    // answer last.
+    type Answer = { key: string; label: string; onPress: () => void }
+    const confirmBox = (o: { key: string; title: string; body: string; rules?: string[]; note?: string; content?: any; isBusy: boolean; busyLabel: string; yes: Answer; no: Answer }) => (
+      <Box key={o.key} flexDirection="column" gap={SPACE.block} padding="sm" borderStyle="round" borderColor={rgba(HEX.warning, EDGE)} backgroundColor={rgba(HEX.warning, TINT)}>
+        <Box flexDirection="column" gap={SPACE.line}>
+          <Text weight="semibold" color={C.text}>
+            {o.title}
+          </Text>
+          <Text size="caption" color={C.text}>
+            {o.body}
+          </Text>
+        </Box>
+        {o.rules && (
+          <Box flexDirection="column" gap={SPACE.line}>
+            {o.rules.map((rule, i) => (
+              <Box key={`rule:${i}`} flexDirection="row">
+                <Box flexShrink={0} width={2}>
+                  <Text size="caption" color={C.text}>
+                    •
+                  </Text>
+                </Box>
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Text size="caption" color={C.text}>
+                    {rule}
+                  </Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {o.content}
+        {o.note && (
+          <Text size="caption" color={C.subtle}>
+            {o.note}
+          </Text>
+        )}
+        <Box flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
+          <Button key={o.yes.key} variant={o.isBusy ? 'secondary' : 'primary'} dimColor={o.isBusy} onPress={o.isBusy ? noop : o.yes.onPress}>
+            {o.isBusy ? o.busyLabel : o.yes.label}
+          </Button>
+          <Button key={o.no.key} variant="secondary" dimColor={o.isBusy} onPress={o.isBusy ? noop : o.no.onPress}>
+            {o.no.label}
+          </Button>
+        </Box>
+      </Box>
+    )
+    // Publishing says on each line how it went; a stop halfway loses nothing, since a second press
+    // skips what GitHub already has.
+    const publishNow = async (urls: string[]) => {
+      await update($, confirmPublish, () => null)
+      if (await demoBlocks($, lang)) return
+      try {
+        const r = await $.process.run(['node', `${$.plugin.root}/scripts/publish.mjs`, ...urls], { timeoutMs: 120_000 })
+        if (r.exitCode) throw new Error((r.stderr ?? '').trim() || String(r.exitCode))
+        const out: { url: string; state: string; why: string }[] = JSON.parse(r.stdout)
+        const posted = out.filter(x => x.state === 'posted').length
+        const miss = out.find(x => x.state !== 'posted')
+        $.ui.toast(`Argos: ${[posted ? t(lang, 'pb_done', posted) : '', miss ? t(lang, 'pb_failed', t(lang, 'mg_why', miss.why)) : ''].filter(Boolean).join(' · ')}`)
+      } catch (err) {
+        $.ui.toast(`Argos: ${t(lang, 'pb_cmd_failed', String((err as Error)?.message ?? err).split('\n')[0])}`)
+      }
+      await loadVerdicts($)
+    }
+    // Opens with the exact text of each review, read before anything leaves this machine.
+    const publishPanel = () => {
+      const list = vm.toPublish.filter(x => publishAsked?.includes(x.url))
+      if (!list.length) return null
+      const accounts = [...new Set(list.map(x => (repoList ?? []).find((r: RepoCfg) => r.repo === x.repo)?.account ?? last?.me ?? ''))]
+      return confirmBox({
+        key: 'publish-confirm',
+        title: t(lang, 'pb_title', list.length),
+        body: t(lang, 'pb_body', accounts.length === 1 ? accounts[0] : ''),
+        content: (
+          <Box flexDirection="column" gap={SPACE.row}>
+            {list.map(x => (
+              <Box key={`report:${x.key}`} flexDirection="column" gap={SPACE.line}>
+                <Text size="caption" weight="semibold" color={C.text}>
+                  {x.where}
+                </Text>
+                {x.report
+                  .split('\n')
+                  .filter(Boolean)
+                  .map((l, i) => (
+                    <Text key={`report:${x.key}:${i}`} size="caption" color={C.text}>
+                      {l}
+                    </Text>
+                  ))}
+              </Box>
+            ))}
+          </Box>
+        ),
+        isBusy: isWorking('publish'),
+        busyLabel: t(lang, 'pb_working'),
+        yes: { key: 'publish-yes', label: t(lang, 'pb_yes', list.length), onPress: work('publish', () => publishNow(list.map(x => x.url))) },
+        no: { key: 'publish-no', label: t(lang, 'pb_cancel'), onPress: () => void update($, confirmPublish, () => null) },
+      })
+    }
+    const askPublish = (urls: string[]) => () => void update($, confirmPublish, () => urls).then(() => focus('publish-yes'))
     const cards = (
       <Box key="cards" flexDirection="row" flexWrap="wrap" gap={SPACE.block}>
         {card(
@@ -1274,14 +1383,16 @@ export const register: Register = (on, options) => {
         {card(
           'card:issues',
           t(lang, 'cd_issues_title', vm.issues),
-          vm.issues ? t(lang, 'cd_issues_body') : t(lang, 'cd_issues_none'),
-          vm.issues && worst?.issues
-            ? {
-                key: 'open-issues',
-                label: t(lang, 'cd_issues_open', clip(worst.name), worst.issues),
-                onPress: () => goTo(worst.repo),
-              }
-            : undefined,
+          vm.toPublish.length ? t(lang, 'pb_ready', vm.toPublish.length) : vm.issues ? t(lang, 'cd_issues_body') : t(lang, 'cd_issues_none'),
+          vm.toPublish.length
+            ? { key: 'publish', label: t(lang, 'pb_n', vm.toPublish.length), working: t(lang, 'pb_working'), onPress: askPublish(vm.toPublish.map(x => x.url)) }
+            : vm.issues && worst?.issues
+              ? {
+                  key: 'open-issues',
+                  label: t(lang, 'cd_issues_open', clip(worst.name), worst.issues),
+                  onPress: () => goTo(worst.repo),
+                }
+              : undefined,
         )}
         {card(
           'card:auto',
@@ -1481,6 +1592,11 @@ export const register: Register = (on, options) => {
                 {t(lang, 'rh_merge')}
               </Text>
             )}
+            {g.publish && (
+              <Text size="caption" color={C.subtle}>
+                {t(lang, 'rh_publish')}
+              </Text>
+            )}
           </Box>
           <Box flexDirection="column" gap={SPACE.row}>
             {g.rows.length === 0 && (
@@ -1491,6 +1607,7 @@ export const register: Register = (on, options) => {
             {g.rows.map(x => line(x, Math.max(...g.rows.map(r => r.num.length))))}
           </Box>
         </Box>,
+        publishPanel(),
         <Box key="repo-go" flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
           <Button
             key="validate"
@@ -1525,6 +1642,11 @@ export const register: Register = (on, options) => {
           >
             {t(lang, 'in_clear', going.length)}
           </Button>
+          {g.toPublish.length > 0 && (
+            <Button key="publish" variant="secondary" dimColor={isWorking('publish')} onPress={isWorking('publish') ? noop : askPublish(g.toPublish)}>
+              {isWorking('publish') ? t(lang, 'pb_working') : t(lang, 'pb_n', g.toPublish.length)}
+            </Button>
+          )}
         </Box>,
       )
     }
@@ -1560,6 +1682,17 @@ export const register: Register = (on, options) => {
       }
       mergeErrors.delete(repo)
       await update($, confirmMerge, () => null)
+    }
+    const setAutoPublish = async (repo: string, isOn: boolean) => {
+      const r = await repoCmd('publish', repo, isOn ? 'on' : 'off')
+      if (r && r.exitCode) {
+        mergeErrors.set(`publish:${repo}`, (r.stderr ?? '').trim())
+        return void $.ui.toast(`Argos: ${t(lang, isOn ? 'ap_failed_off' : 'ap_failed_on')}`)
+      }
+      mergeErrors.delete(`publish:${repo}`)
+      // other people's PRs are what gets a comment: mine alone would never post
+      if (isOn && vm.auto.mode !== 'all') await setAuto('all', vm.auto.every)
+      await update($, confirmAutoPublish, () => null)
     }
     // what the person typed in a prompt field, kept outside the drawing so typing redraws nothing
     const drafts = promptDrafts
@@ -1636,6 +1769,11 @@ export const register: Register = (on, options) => {
         <Text size="caption" color={autoErrors.has('auto') ? C.error : C.subtle}>
           {isWorking('auto-schedule') ? t(lang, 'auto_saving') : autoSays()}
         </Text>
+      {vm.auto.mode !== 'off' && (
+        <Text size="caption" color={C.subtle}>
+          {t(lang, 'auto_open')}
+        </Text>
+      )}
       </Box>,
     )
     // a repo's settings, in one panel: its auto-merge, then its own validation prompt
@@ -1682,56 +1820,73 @@ export const register: Register = (on, options) => {
             </Box>
           )}
         </Box>
-        {confirming === g.repo && (
-          // an action on GitHub: the confirmation opens under its button, in the warning look
-          <Box flexDirection="column" gap={SPACE.block} padding="sm" borderStyle="round" borderColor={rgba(HEX.warning, EDGE)} backgroundColor={rgba(HEX.warning, TINT)}>
-            <Box flexDirection="column" gap={SPACE.line}>
-              <Text weight="semibold" color={C.text}>
-                {t(lang, 'mg_confirm_title', g.repo)}
-              </Text>
-              <Text size="caption" color={C.text}>
-                {t(lang, 'mg_confirm_body', last?.me ?? '')}
-              </Text>
-            </Box>
-            <Box flexDirection="column" gap={SPACE.line}>
-              {(t(lang, 'mg_rules') as string[]).map((rule, i) => (
-                <Box key={`rule:${i}`} flexDirection="row">
-                  <Box flexShrink={0} width={2}>
-                    <Text size="caption" color={C.text}>
-                      •
-                    </Text>
-                  </Box>
-                  <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                    <Text size="caption" color={C.text}>
-                      {rule}
-                    </Text>
-                  </Box>
-                </Box>
-              ))}
-            </Box>
-            <Text size="caption" color={C.subtle}>
-              {t(lang, 'mg_method')}
+        {confirming === g.repo &&
+          confirmBox({
+            key: `merge-confirm:${g.repo}`,
+            title: t(lang, 'mg_confirm_title', g.repo),
+            body: t(lang, 'mg_confirm_body', last?.me ?? ''),
+            rules: t(lang, 'mg_rules') as string[],
+            note: t(lang, 'mg_method'),
+            isBusy: isWorking(`merge:${g.repo}`),
+            busyLabel: t(lang, 'mg_turning_on'),
+            yes: { key: `merge-yes:${g.repo}`, label: t(lang, 'mg_yes', clip(g.name)), onPress: work(`merge:${g.repo}`, () => setMerge(g.repo, true)) },
+            no: { key: `merge-cancel:${g.repo}`, label: t(lang, 'cancel'), onPress: () => void update($, confirmMerge, () => null).then(() => focus(`merge:${g.repo}`)) },
+          })}
+        <Box flexDirection="column" gap={SPACE.row}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" gap={SPACE.inline}>
+            <Text size="caption" weight="semibold" color={C.text}>
+              {t(lang, g.publish ? 'ap_on' : 'ap_off')}
             </Text>
-            <Box flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
-              <Button
-                key={`merge-yes:${g.repo}`}
-                variant={isWorking(`merge:${g.repo}`) ? 'secondary' : 'primary'}
-                dimColor={isWorking(`merge:${g.repo}`)}
-                onPress={isWorking(`merge:${g.repo}`) ? noop : work(`merge:${g.repo}`, () => setMerge(g.repo, true))}
-              >
-                {isWorking(`merge:${g.repo}`) ? t(lang, 'mg_turning_on') : t(lang, 'mg_yes', clip(g.name))}
-              </Button>
-              <Button
-                key={`merge-cancel:${g.repo}`}
-                variant="secondary"
-                dimColor={isWorking(`merge:${g.repo}`)}
-                onPress={isWorking(`merge:${g.repo}`) ? noop : () => void update($, confirmMerge, () => null).then(() => focus(`merge:${g.repo}`))}
-              >
-                {t(lang, 'cancel')}
-              </Button>
-            </Box>
+            <Button
+              key={`auto-publish:${g.repo}`}
+              variant="secondary"
+              dimColor={autoPublishAsked === g.repo || isWorking(`auto-publish:${g.repo}`)}
+              onPress={
+                autoPublishAsked === g.repo || isWorking(`auto-publish:${g.repo}`)
+                  ? noop
+                  : g.publish
+                    ? work(`auto-publish:${g.repo}`, () => setAutoPublish(g.repo, false))
+                    : () => void update($, confirmAutoPublish, () => g.repo).then(() => focus(`auto-publish-yes:${g.repo}`))
+              }
+            >
+              {isWorking(`auto-publish:${g.repo}`) ? t(lang, g.publish ? 'mg_turning_off' : 'mg_turning_on') : t(lang, g.publish ? 'ap_turn_off' : 'ap_turn_on', clip(g.name, 16))}
+            </Button>
           </Box>
-        )}
+          {g.publish && (
+            <Text size="caption" color={C.subtle}>
+              {t(lang, 'ap_on_note')}
+            </Text>
+          )}
+          {g.publish && vm.auto.mode !== 'all' && (
+            <Text size="caption" color={C.warning}>
+              {t(lang, 'ap_idle')}
+            </Text>
+          )}
+          {mergeErrors.get(`publish:${g.repo}`) !== undefined && (
+            <Box flexDirection="column" gap={SPACE.line}>
+              {mergeErrors.get(`publish:${g.repo}`) && (
+                <Text size="caption" color={C.error}>
+                  {mergeErrors.get(`publish:${g.repo}`)}
+                </Text>
+              )}
+              <Text size="caption" color={C.text}>
+                {t(lang, g.publish ? 'ap_failed_on' : 'ap_failed_off')}
+              </Text>
+            </Box>
+          )}
+        </Box>
+        {autoPublishAsked === g.repo &&
+          confirmBox({
+            key: `auto-publish-confirm:${g.repo}`,
+            title: t(lang, 'ap_confirm_title', g.repo),
+            body: t(lang, 'ap_confirm_body', (repoList ?? []).find((r: RepoCfg) => r.repo === g.repo)?.account ?? last?.me ?? ''),
+            rules: t(lang, 'ap_rules') as string[],
+            note: vm.auto.mode === 'all' ? undefined : t(lang, 'ap_sets_all', vm.auto.every),
+            isBusy: isWorking(`auto-publish:${g.repo}`),
+            busyLabel: t(lang, 'mg_turning_on'),
+            yes: { key: `auto-publish-yes:${g.repo}`, label: t(lang, 'ap_yes', clip(g.name)), onPress: work(`auto-publish:${g.repo}`, () => setAutoPublish(g.repo, true)) },
+            no: { key: `auto-publish-cancel:${g.repo}`, label: t(lang, 'ap_cancel'), onPress: () => void update($, confirmAutoPublish, () => null).then(() => focus(`auto-publish:${g.repo}`)) },
+          })}
         <Box flexDirection="column" gap={SPACE.row}>
           {Input && (
             <Input
@@ -1812,6 +1967,6 @@ export const register: Register = (on, options) => {
     const opened = vm.groups.find(g => g.repo === where)
     if (where === 'settings') return settingsPage()
     if (opened) return repoPage(opened)
-    return frame(head(true), failedBanner, needs, agents, cards, repoRows)
+    return frame(head(true), failedBanner, needs, agents, cards, publishPanel(), repoRows)
   })
 }

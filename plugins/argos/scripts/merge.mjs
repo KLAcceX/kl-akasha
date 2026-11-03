@@ -34,14 +34,14 @@ import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync } from "no
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 import { scan } from "./gate.mjs";
 import { read as readRepos } from "./repos.mjs";
 import { onlyUpkeep, pinsOnly } from "./upkeep.mjs";
 import { nap, read, withLock, write } from "./verdicts.mjs";
+import { isMain } from "./is-main.mjs";
 
-const repoOf = (url) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
-const sameSha = (a = "", b = "") => Boolean(a && b) && (a.startsWith(b) || b.startsWith(a));
+export const repoOf = (url) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
+export const sameSha = (a = "", b = "") => Boolean(a && b) && (a.startsWith(b) || b.startsWith(a));
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const WRITERS = new Set(["admin", "write"]);
 // Skips that no later round can change, for this commit.
@@ -100,7 +100,7 @@ const whenKnown = (ask, field) => {
   }
   return answer;
 };
-const lines = (out) => out.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+export const lines = (out) => out.split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const pullPath = (url) => `repos/${repoOf(url)}/pulls/${url.split("/").at(-1)}`;
 const reviewsOf = (run, url) => lines(run(["api", "--paginate", `${pullPath(url)}/reviews`, "-q", ".[] | {id, state, body, commit_id, user: {login: .user.login}}"]));
 
@@ -125,7 +125,7 @@ function sweep() {
 }
 
 // As the account this repo is connected with.
-const asAccount = (repos, url) => {
+export const asAccount = (repos, url) => {
   const account = repos.find((r) => r.repo.toLowerCase() === repoOf(url).toLowerCase())?.account;
   const env = account ? { ...process.env, GH_TOKEN: gh(["auth", "token", "-u", account]) } : process.env;
   return (args) => gh(args, env);
@@ -317,7 +317,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMain(import.meta.url)) {
   const [cmd] = process.argv.slice(2);
   if (cmd === "--self-test") selfTest();
   else if (cmd === "sweep") console.log(JSON.stringify(sweep()));

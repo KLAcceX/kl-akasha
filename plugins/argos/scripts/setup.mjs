@@ -8,9 +8,9 @@
 //       here: the session folder's GitHub repo (from its git origin), or null
 //   node setup.mjs --self-test
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { repoFromRemote } from "./repos.mjs";
+import { isMain } from "./is-main.mjs";
 
 const run = (args, env) => execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
 
@@ -89,7 +89,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   if (args.includes("--self-test")) selfTest();
   else {

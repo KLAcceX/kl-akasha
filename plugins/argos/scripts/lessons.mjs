@@ -7,9 +7,9 @@
 //   node lessons.mjs <owner/repo> [--author <login>] [--since YYYY-MM-DD] [--limit 20] [--account <gh login>] [--json]
 //   node lessons.mjs --self-test
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { PR_FIELDS, build } from "./feedback.mjs";
+import { isMain } from "./is-main.mjs";
 
 const QUERY = `query($q: String!, $n: Int!) { search(query: $q, type: ISSUE, first: $n) { nodes { ... on PullRequest {${PR_FIELDS}
       mergedAt } } } }`;
@@ -104,7 +104,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   args.includes("--self-test") ? selfTest() : main(args);
 }

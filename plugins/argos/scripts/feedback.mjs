@@ -7,8 +7,8 @@
 //   node feedback.mjs --self-test
 // Classes follow Conventional Comments (see references/evidence-fix.md, "Triage the comments").
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
+import { isMain } from "./is-main.mjs";
 
 // The PR fields build() reads; lessons.mjs asks for the same through search.
 export const PR_FIELDS = `
@@ -301,7 +301,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   args.includes("--self-test") ? selfTest() : main(args);
 }

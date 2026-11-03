@@ -25,6 +25,21 @@ export const QUEUE_LIMIT = 60 * 6e4
 // As merge.mjs writes it.
 const OLD_APPROVAL = 'stale approval: dismiss it on GitHub'
 export type VerdictState = 'none' | 'queued' | 'run' | 'failed' | 'stale' | 'pass' | 'issues' | 'partial'
+// Automatic rounds try a failed validation again this many times, then once a day: what the network
+// lost comes back by itself, what cannot be read stops spending. A new commit waits for that day.
+export const MAX_TRIES = 3
+const RETRY_AFTER = 24 * 36e5
+export const retriesNow = (v: Verdict, now: number) => (v.tries ?? 0) < MAX_TRIES || now - Date.parse(v.at) > RETRY_AFTER
+
+// What a line says about publish.mjs's outcome; what needs no word (a pass, a PR of the person's) says nothing.
+const QUIET_PUBLISH = new Set(['nothing to publish', 'your PR'])
+const publishNote = (p: Verdict['published'], lang: string) =>
+  !p || (p.state === 'skipped' && QUIET_PUBLISH.has(p.why))
+    ? null
+    : p.state === 'posted'
+      ? { text: t(lang, 'vn_published'), tone: 'success' as const }
+      : { text: t(lang, 'pb_failed', t(lang, 'mg_why', p.why)), tone: 'warning' as const }
+
 export function verdictOf(p: Item, v?: Verdict, now?: number, limit = 10): { state: VerdictState; issues: number; attention: number; finding: string } {
   const attention = v?.attention ?? 0
   const idle = now && v ? now - Date.parse(v.at) : 0
@@ -221,7 +236,10 @@ export function toViewModel(r: Round | null, o: Opts) {
   // how a line in the run ended, in words, with the tone of its colour
   const statusOf = (p: Item, v: ReturnType<typeof verdictOf>): { text: string; tone: Tone } | null => {
     if (fixingSet.has(p.url)) return { text: t(lang, 'st_fixing'), tone: 'subtle' }
-    if (v.state === 'failed') return { text: t(lang, 'st_failed', v.finding), tone: 'error' }
+    if (v.state === 'failed') {
+      const gaveUp = o.verdicts?.auto !== 'off' && (o.verdicts?.prs?.[p.url]?.tries ?? 0) >= MAX_TRIES
+      return { text: `${t(lang, 'st_failed', v.finding)}${gaveUp ? ` · ${t(lang, 'st_gave_up', MAX_TRIES)}` : ''}`, tone: 'error' }
+    }
     if (!inRun.has(p.url)) return null
     const raw = o.verdicts!.prs[p.url]!
     // merge.mjs could not take back its approval: this holds until it does, whatever the verdict
@@ -230,6 +248,8 @@ export function toViewModel(r: Round | null, o: Opts) {
     if (v.state === 'run') return { text: t(lang, 'st_validating', Math.max(1, Math.floor((now - Date.parse(raw.at)) / 6e4))), tone: 'subtle' }
     // commits landed after the verdict: it no longer speaks for the head
     if (v.state === 'stale') return cfgOf(p.repo)?.merge ? { text: t(lang, 'st_skipped', t(lang, 'mg_new')), tone: 'warning' } : { text: t(lang, 'st_stale'), tone: 'subtle' }
+    const note = publishNote(raw.published, lang)
+    if (note) return note
     if (raw.merge) return { text: t(lang, `st_${raw.merge.state}`, t(lang, 'mg_why', raw.merge.why)), tone: raw.merge.state === 'skipped' ? 'warning' : 'success' }
     // a repo with auto-merge says why a verdict that did not pass was not merged
     if (cfgOf(p.repo)?.merge && (v.state !== 'pass' || v.attention))
@@ -254,6 +274,8 @@ export function toViewModel(r: Round | null, o: Opts) {
     const v = verdictOf(p, o.verdicts?.prs?.[p.url], now, limit)
     const auto = outOf(p, v)
     const merged = o.verdicts?.prs?.[p.url]?.merge
+    const published = o.verdicts?.prs?.[p.url]?.published
+    const pubNote = publishNote(published, lang)
     const status = statusOf(p, v)
     const name = authorOf(p)
     const kind = kindOfAuthor.get(name)!
@@ -288,8 +310,15 @@ export function toViewModel(r: Round | null, o: Opts) {
         ...(v.state === 'stale' ? [{ text: t(lang, 'st_stale'), color: C.subtle }] : []),
         ...(v.attention ? [{ text: t(lang, 'vn_attention', v.attention), color: C.warning }] : []),
         ...(merged ? [{ text: t(lang, `st_${merged.state}`, merged.why), color: merged.state === 'skipped' ? C.warning : C.success }] : []),
+        ...(pubNote ? [{ text: pubNote.text, color: TONE[pubNote.tone] }] : []),
       ],
       isIn: leftBy === null,
+      // what would go on the PR, while it can: someone else's, on the current commit, not left to
+      // humans, not out yet
+      report:
+        p.kind !== 'mine' && !(r.me && p.author === r.me) && ['issues', 'pass', 'partial'].includes(v.state) && (v.issues || v.attention) && leftBy !== 'hand' && leftBy !== 'author' && (!published || published.state === 'failed')
+          ? (o.verdicts?.prs?.[p.url]?.report ?? '')
+          : '',
       // why the pane left a line out, said at its end; the person's own choices need no word
       why: leftBy === 'author' ? t(lang, 'why_author') : leftBy === 'hand' ? t(lang, 'why_human') : leftBy === null ? '' : t(lang, `why_${leftBy}`),
       // what auto-merge did with a passing verdict: approved (others must still review), or why not
@@ -357,6 +386,8 @@ export function toViewModel(r: Round | null, o: Opts) {
       mark: isAll ? ('on' as const) : picked ? ('mixed' as const) : ('off' as const),
       count: t(lang, 'in_of', picked, lines.length),
       merge: Boolean(cfgOf(repo)?.merge),
+      publish: Boolean(cfgOf(repo)?.publish),
+      toPublish: lines.filter(x => x.report).map(x => x.url),
       prompt: cfgOf(repo)?.prompt ?? '',
       // what its lines going to validation are, and how its verdicts stand
       go: lines.filter(x => x.isIn).map(x => x.url),
@@ -416,6 +447,8 @@ export function toViewModel(r: Round | null, o: Opts) {
     // (never one the person left to humans)
     clean: toGo.filter(x => !x.hasReason).map(x => x.url),
     issues: rows.filter(x => x.vstate === 'issues').length,
+    // the reviews ready to go on GitHub, each with the text that would go
+    toPublish: [...new Map(rows.filter(x => x.report).map(x => [x.url, { key: x.key, url: x.url, repo: x.repo, where: `${short(x.repo)} ${x.num}`, report: x.report }])).values()],
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
     rework: reworkRows.map(x => x.url),
     run: showRun ? run : null,

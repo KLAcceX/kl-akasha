@@ -6,9 +6,10 @@
 //   node verdicts.mjs queue <pr-url>...                          a run asked for them: waiting
 //   node verdicts.mjs start <pr-url>...                          marks them as being validated now
 //   node verdicts.mjs set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial]
-//                         [--finding "<top finding>"]
+//                         [--finding "<top finding>"] [--report-file <path, or - for stdin>]
 //     issues: blockers only, each with file:line and how it fails; attention: risks that do
-//     not block (deploy, a weak test); partial: not all of it was read, so it never passes
+//     not block (deploy, a weak test); partial: not all of it was read, so it never passes;
+//     report: every finding, as it would read on the PR (publish.mjs posts it)
 //   node verdicts.mjs fail <pr-url> --reason "<why>"              it could not be validated
 //   node verdicts.mjs auto <off|mine|all> [--every <minutes>]   validate new PRs and new commits by itself
 //   node verdicts.mjs ran <count>                                an automatic round sent that many
@@ -20,9 +21,9 @@
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { add as addHistory } from "./history.mjs";
+import { isMain } from "./is-main.mjs";
 
 const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "verdicts.json");
@@ -94,11 +95,19 @@ function mark(v, urls, state, now) {
   for (const u of urls) prs[u] = { ...prs[u], state, at: now };
   return { ...v, batch, prs };
 }
-export const queue = (v, urls, now) => mark(v, urls, "queued", now);
+// Tries count from here, so what keeps failing stops spending; a verdict starts over.
+export function queue(v, urls, now) {
+  const next = mark(v, urls, "queued", now);
+  for (const u of urls) next.prs[u] = { ...next.prs[u], tries: (v.prs[u]?.tries ?? 0) + 1 };
+  return next;
+}
 export const start = (v, urls, now) => mark(v, urls, "running", now);
 
-export function set(v, url, { sha, issues, attention = 0, partial = false, finding = "" }, now) {
-  return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, issues, attention, partial, finding: finding.trim().slice(0, 160), at: now } } };
+// A validation run again on the same commit keeps what was posted for it: that comment stands.
+export function set(v, url, { sha, issues, attention = 0, partial = false, finding = "", report = "" }, now) {
+  const was = v.prs[url]?.published;
+  const kept = was?.state === "posted" && was.sha === sha ? { published: was } : {};
+  return { ...v, prs: { ...v.prs, [url]: { state: "done", sha, issues, attention, partial, finding: finding.trim().slice(0, 160), ...(report.trim() && { report: report.trim().slice(0, 6000) }), ...kept, at: now } } };
 }
 
 // A PR that could not be validated (no access, closed, the agent stopped): failed, with why, so
@@ -131,7 +140,8 @@ function main(args) {
     const partial = rest.includes("--partial");
     if (!isPr(url) || !/^[0-9a-f]{7,40}$/.test(sha ?? "") || ![issues, attention].every((n) => Number.isInteger(n) && n >= 0))
       throw new Error('set <pr-url> --sha <head sha> --issues <n> [--attention <m>] [--partial] [--finding "<text>"]');
-    const next = set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding") }, now);
+    const file = flag(rest, "report-file");
+    const next = set(v, url, { sha, issues, attention, partial, finding: flag(rest, "finding"), report: file ? readFileSync(file === "-" ? 0 : file, "utf8") : "" }, now);
     write(next);
     // this file keeps only the last verdict of a PR; the history keeps each commit's
     addHistory({ kind: "verdict", url, sha, issues, attention, partial, finding: next.prs[url].finding, at: now });
@@ -211,7 +221,7 @@ function selfTest() {
 }
 
 // Run as a command only; merge.mjs imports read() and write() without triggering it.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMain(import.meta.url)) {
   if (process.argv.includes("--self-test")) selfTest();
   else
     try {

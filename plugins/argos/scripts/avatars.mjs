@@ -5,9 +5,9 @@
 // Usage: node avatars.mjs --self-test
 import { deflateSync, inflateSync } from "node:zlib";
 import { readFileSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import decodeJpegData from "./vendor/jpeg-decoder.cjs";
+import { isMain } from "./is-main.mjs";
 
 const N = 16;
 
@@ -168,4 +168,4 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href && process.argv.includes("--self-test")) selfTest();
+if (isMain(import.meta.url) && process.argv.includes("--self-test")) selfTest();

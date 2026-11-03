@@ -249,10 +249,10 @@ test('Validate N marks them running and hands them to background subagents, ten 
 test('each repo with a local clone gets its own agent started there, with its own prompt', async ($, on) => {
   const api = 'https://github.com/acme/api/pull/1'
   const web = 'https://github.com/acme/web/pull/2'
-  const prs = [item({ kind: 'other', number: 1, repo: 'acme/api', url: api, author: 'bia', signals: [] }), item({ kind: 'other', number: 2, repo: 'acme/web', url: web, author: 'bia', signals: [] })]
-  const spawns: { prompt: string; cwd?: string }[] = []
+  const prs = [item({ kind: 'other', number: 1, repo: 'acme/api', url: api, author: 'bia', signals: [] }), item({ kind: 'other', number: 2, repo: 'acme/web', url: web, author: 'bia', signals: [] }), item({ kind: 'other', number: 3, repo: 'acme/docs', url: 'https://github.com/acme/docs/pull/3', author: 'bia', signals: [] })]
+  const spawns: { prompt: string; description: string; cwd?: string }[] = []
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
-    e.key === 'round' ? { value: { value: { ...round, repos: ['acme/api', 'acme/web'], pending: [], mine: [], others: prs }, version: 1 } } : next(e),
+    e.key === 'round' ? { value: { value: { ...round, repos: ['acme/api', 'acme/web', 'acme/docs'], pending: [], mine: [], others: prs }, version: 1 } } : next(e),
   )
   on('clock.now', clock)
   on('env.get', () => ({ value: 'C:/home' }))
@@ -261,13 +261,15 @@ test('each repo with a local clone gets its own agent started there, with its ow
     throw new Error('no file')
   })
   on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
-  on('agent.spawn', (_: unknown, e: { prompt: string; cwd?: string }) => {
+  on('agent.spawn', (_: unknown, e: { prompt: string; description: string; cwd?: string }) => {
     spawns.push(e)
     return { agentId: `a${spawns.length}`, model: 'm' }
   })
   const ui = await $.ui.mount(PANE)
   await ui.press({ key: 'validate-clean' })
   expect(spawns.map(x => x.cwd)).toEqual(['C:/src/api', undefined])
+  // each agent's line says its repo; repos with no clone share an agent and say how many
+  expect(spawns.map(x => x.description)).toEqual(['Argos validate · api · 1 PR', 'Argos validate · 2 repos · 2 PRs'])
   expect(spawns[0].prompt.split('\n')).toContain("Rules for acme/api (the user's, for this repo's PRs): Check the ledger first")
   expect(spawns[1].prompt).not.toMatch(/Rules for/)
   // the engine gives an agent the CLAUDE.md above the session's folder, so the prompt names the clone's
@@ -434,7 +436,7 @@ test('the agents at work are listed with Stop; Fix my PRs runs in the background
   const fix = await $.ui.mount(PANE)
   expect((await fix.find({ key: 'fix' }))?.text).toBe('Fix 1 PR')
   await fix.press({ key: 'fix' })
-  expect(spawned.at(-1)?.description).toBe('Argos fix · 1 PRs')
+  expect(spawned.at(-1)?.description).toBe('Argos fix · u219 · 1 PR')
   expect(spawned.at(-1)?.prompt).toMatch(/push and reply without asking me/)
   expect(spawned.at(-1)?.prompt.split('\n').at(-1)).toBe('- u219')
   await fix.unmount()
@@ -777,3 +779,140 @@ test('every button shows on a desktop the text it holds', async ($, on) => {
   }
   await ui.unmount()
 })
+
+test('what can be published: a report on a PR by another person, on the current commit, once, never left to humans', () => {
+  const see = (prs: Record<string, unknown>, ui?: { out: string[]; back: string[] }) =>
+    ok(toViewModel(vround as never, { now: NOW, lang: 'en', minutes: 60, running: false, ...(ui && { ui }), verdicts: { ...judged, batch: { urls: [], at: null }, prs } as never }))
+  const report = '- Blocker `a.js:1`: wrong'
+  expect(see({ u8: V({ issues: 2, report }) }).toPublish.map(x => [x.url, x.where, x.report])).toEqual([['u8', 'web #8', report]])
+  // the person's own PR shows its findings and gets no comment
+  expect(see({ u219: V({ issues: 2, report }) }).toPublish).toEqual([])
+  // something to look at counts; a pass, or a verdict from before reports, has nothing to say
+  expect(see({ u8: V({ attention: 1, report }) }).toPublish.length).toBe(1)
+  expect(see({ u8: V({ report }) }).toPublish).toEqual([])
+  expect(see({ u8: V({ issues: 2 }) }).toPublish).toEqual([])
+  // new commits since: the report no longer speaks for the head
+  expect(see({ u8: V({ issues: 2, report, sha: 'old0000' }) }).toPublish).toEqual([])
+  expect(see({ u8: V({ issues: 2, report }) }, { out: ['acme/web#8'], back: [] }).toPublish).toEqual([])
+  // posted is done and says so; a skip waits for the next validation; a failure may go again
+  const at = (state: string, why = '') => ({ u8: V({ issues: 2, report, published: { state, why, sha: 'abc1234', at: round.at } }) })
+  const posted = see(at('posted'))
+  expect(posted.toPublish).toEqual([])
+  expect(posted.rows.find(x => x.key === 'acme/web#8')?.said.map(n => n.text)).toContain('published on GitHub')
+  expect(see(at('skipped', 'new commits')).toPublish).toEqual([])
+  // a pass or a PR of the person's in a repo on auto-publish needs no word on its line
+  expect(see(at('skipped', 'your PR')).rows.find(x => x.key === 'acme/web#8')?.said.map(n => n.text).join()).not.toMatch(/not published/)
+  const failed = see(at('failed', 'HTTP 502'))
+  expect(failed.toPublish.length).toBe(1)
+  expect(failed.rows.find(x => x.key === 'acme/web#8')?.said.map(n => n.text)).toContain('not published: HTTP 502')
+})
+
+test('Publish shows the exact text first; only confirming runs the script, which says how it went', async ($, on) => {
+  const url = 'https://github.com/acme/api/pull/1'
+  const pr = item({ kind: 'other', number: 1, repo: 'acme/api', url, author: 'bia', sha: 'abc1234', signals: [] })
+  const seeded: Record<string, unknown> = {
+    round: { ...round, repos: ['acme/api'], pending: [], mine: [], others: [pr] },
+    verdicts: { ...judged, batch: { urls: [], at: null }, prs: { [url]: V({ issues: 1, finding: 'wrong', report: '- Blocker `a.js:1`: wrong\n- Look at `b.js:2`: weak test' }) } },
+  }
+  const runs: string[][] = []
+  const toasts: string[] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('ui.toast', (_: unknown, e: { text: string }) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push(e.argv.map(a => a.split('/').at(-1)!))
+    return { value: { exitCode: 0, stdout: JSON.stringify([{ url, state: 'posted', why: '' }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const ui = await $.ui.mount(PANE)
+  const posts = () => runs.filter(r => r[1] === 'publish.mjs')
+  expect((await ui.find({ key: 'publish' }))?.text).toBe('Publish 1 review')
+  await ui.press({ key: 'publish' })
+  // nothing has left yet: the panel holds each line of the text, and its way out
+  expect(posts()).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /a\.js:1/ }))?.text).toBe('- Blocker `a.js:1`: wrong')
+  expect((await ui.find({ type: 'Text', text: /b\.js:2/ }))?.text).toBe('- Look at `b.js:2`: weak test')
+  await ui.press({ key: 'publish-no' })
+  expect(await ui.find({ key: 'publish-yes' })).toBeFalsy()
+  expect(posts()).toEqual([])
+  await ui.press({ key: 'publish' })
+  await ui.press({ key: 'publish-yes' })
+  expect(posts()).toEqual([['node', 'publish.mjs', url.split('/').at(-1)!]])
+  expect(toasts.at(-1)).toBe('Argos: 1 review published')
+  expect(await ui.find({ key: 'publish-yes' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('auto-publish: two taps on, the rules said first; one tap off', async ($, on) => {
+  const seeded: Record<string, unknown> = { round, page: 'settings', verdicts: { ...judged, batch: { urls: [], at: null } }, repos: [{ repo: 'acme/portal' }] }
+  const runs: string[][] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
+    runs.push([...e.argv.slice(2)])
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const ui = await $.ui.mount(PANE)
+  const asks = () => runs.filter(r => r[0] === 'publish')
+  await ui.press({ key: 'auto-publish:acme/portal' })
+  expect(asks()).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /^one comment per PR/ }))?.text).toBe('one comment per PR, updated at each new commit')
+  // other people's PRs are what gets a comment, so it says it will validate them too
+  expect((await ui.find({ type: 'Text', text: /sets auto-validate to every PR/ }))?.text).toMatch(/every 30 min/)
+  await ui.press({ key: 'auto-publish-yes:acme/portal' })
+  expect(asks().at(-1)?.slice(0, 3)).toEqual(['publish', 'acme/portal', 'on'])
+  expect(runs.filter(r => r[0] === 'auto').at(-1)).toEqual(['auto', 'all', '--every', '30'])
+  expect(await ui.find({ key: 'auto-publish-yes:acme/portal' })).toBeFalsy()
+  await ui.unmount()
+  seeded.repos = [{ repo: 'acme/portal', publish: true }]
+  const on2 = await $.ui.mount(PANE)
+  expect((await on2.find({ key: 'auto-publish:acme/portal' }))?.text).toBe('Turn off auto-publish for portal')
+  // auto-validate turned down since: said, since nothing would ever post
+  expect((await on2.find({ type: 'Text', text: /^Nothing will post/ }))?.text).toMatch(/pick every PR/)
+  await on2.press({ key: 'auto-publish:acme/portal' })
+  expect(asks().at(-1)?.slice(0, 3)).toEqual(['publish', 'acme/portal', 'off'])
+  await on2.unmount()
+})
+
+for (const [name, prs, sent] of [
+  ['a failed validation goes again by itself', { u220: { state: 'failed', reason: 'HTTP 502', at: ago(0.01), tries: 1 }, u221: V({}) }, ['u220']],
+  ['after its tries it stops spending', { u220: V({}), u221: { state: 'failed', reason: 'no access', at: ago(0.01), tries: 3 } }, []],
+  ['and goes once a day after that', { u220: V({}), u221: { state: 'failed', reason: 'no access', at: ago(2), tries: 3 } }, ['u221']],
+] as const)
+  test(`auto-validate: ${name}`, async ($, on) => {
+    const fresh = { ...vround, at: new Date(NOW + 1000).toISOString(), okAt: new Date(NOW + 1000).toISOString() }
+    const files: Record<string, string> = {
+      'last-round.json': JSON.stringify(fresh),
+      'verdicts.json': JSON.stringify({ ...judged, auto: 'mine', batch: { urls: [], at: null }, prs }),
+    }
+    const spawns: { prompt: string }[] = []
+    let settle = () => {}
+    const over = new Promise<void>(r => (settle = r))
+    on('state.set', async ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+      const done = await next(e)
+      if (e.key === 'isRunning' && e.value === false) settle()
+      return done
+    })
+    on('clock.now', clock)
+    on('env.get', () => ({ value: 'C:/home' }))
+    on('fs.read', (_: unknown, e: { path: string }) => ({ value: files[e.path.split(/[\\/]/).at(-1)!] }))
+    on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('agent.spawn', (_: unknown, e: { prompt: string }) => {
+      spawns.push(e)
+      return { agentId: 'a1', model: 'm' }
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    await $.command.run({ command: 'argos', args: '' })
+    await over
+    expect(spawns.flatMap(x => x.prompt.split('\n').filter(l => l.startsWith('- ')).map(l => l.slice(2)))).toEqual([...sent])
+  })

@@ -12,9 +12,9 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { langArg, t } from "./i18n.mjs";
+import { isMain } from "./is-main.mjs";
 
 const STATE = process.env.ARGOS_STATE ?? join(homedir(), ".claude", "kl-akasha", "argos", "state.json");
 const FILE = join(dirname(STATE), "history.jsonl");
@@ -136,7 +136,7 @@ function selfTest() {
   console.log("self-test ok");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMain(import.meta.url)) {
   if (process.argv.includes("--self-test")) selfTest();
   else
     try {
