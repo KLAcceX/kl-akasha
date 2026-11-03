@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { compose, reason, toViewModel, verdictOf, verdictTag } from './register'
 import { t } from '../scripts/i18n.mjs'
+import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
 import { runsOf, typesOf } from './view'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
@@ -908,6 +909,14 @@ test('runsOf groups by run, newest first, with what was done since; typesOf read
   expect(typesOf('- [security] a\n  - [tests] b\nnote\n- no tag')).toEqual(['security', 'tests'])
   // reports saved before cleanup replaced ai still read in the History page
   expect([t('pt-BR', 'hi_type', 'bug', 2), t('pt-BR', 'hi_type', 'cleanup', 1), t('pt-BR', 'hi_type', 'ai', 1), t('en', 'hi_type', 'other', 1)]).toEqual(['bugs', 'limpeza', 'IA', 'other'])
+})
+
+test('/argos demo waits with comments in the real format, one of each type', () => {
+  const vm = toViewModel({ ...DEMO_ROUND, at: new Date(NOW).toISOString() } as never, { now: NOW, lang: 'en', minutes: 60, running: false, verdicts: DEMO_VERDICTS as never })
+  const reports = (vm as { toPublish: { where: string; report: string }[] }).toPublish
+  expect(reports.map(x => x.where).sort()).toEqual(['billing #88', 'mobile-app #50', 'web #7', 'web #8'])
+  expect([...new Set(reports.flatMap(x => typesOf(x.report)))].sort()).toEqual(['bug', 'cleanup', 'contract', 'deploy', 'scope', 'security', 'tests'])
+  for (const line of reports.flatMap(x => x.report.split('\n')).filter(Boolean)) expect(/^(Before merging:|Worth a look:|Antes do merge:|- \[[a-z]+\] `[^`]+:\d+`: .+; .+)$/.test(line)).toBe(true)
 })
 
 for (const [name, from, prOver, verdictOver, to] of [

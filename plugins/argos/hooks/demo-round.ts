@@ -655,15 +655,18 @@ export const DEMO_VERDICTS: Verdicts = {
       "state": "done",
       "sha": "0219a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
       "issues": 1,
+      "attention": 1,
       "finding": "Retry loop has no backoff cap (rules.ts:42)",
-      "report": "- Blocker `rules.ts:42`: the retry loop has no backoff cap, so a pricing outage retries forever. Cap it at 30 s.\n- Look at `rules.test.ts:12`: asserts only on a mock.",
+      "report": "Before merging:\n- [bug] `rules.ts:42`: the retry loop has no backoff cap, so a pricing outage retries forever; cap it at 30 s.\n\nWorth a look:\n- [tests] `rules.test.ts:12`: the only assert is on a mock, so it still passes with the retry deleted; assert on the calls made.",
       "at": "2026-10-31T10:00:00Z"
     },
     "https://github.com/acme/web/pull/7": {
       "state": "done",
       "sha": "0007a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
       "issues": 3,
+      "attention": 1,
       "finding": "Cursor is lost when the filter changes",
+      "report": "Before merging:\n- [bug] `src/list/Table.tsx:88`: changing the filter keeps the old cursor, so page 2 of the new filter starts at the wrong row; reset the cursor when the filter changes.\n- [contract] `src/api/items.ts:14`: the response no longer has `nextPage`, so a client reading it stops at the first page; keep it beside `cursor` until clients move.\n- [security] `src/api/items.ts:31`: `sort` goes straight into the SQL string, so a crafted `?sort=` reaches the database; check it against the allowed columns.\n\nWorth a look:\n- [cleanup] `src/list/useCursor.ts:5`: `legacyCursor` is exported and has no caller; removing it leaves one way to page.",
       "at": "2026-10-31T10:00:00Z"
     },
     "https://github.com/acme/checkout/pull/224": {
@@ -685,13 +688,16 @@ export const DEMO_VERDICTS: Verdicts = {
       "sha": "0008a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
       "issues": 2,
       "finding": "Migration drops the index before copying",
+      "report": "Before merging:\n- [deploy] `migrations/0042.sql:3`: the index is dropped before the copy, so reads scan the whole table until it ends; create the new index first, with `CONCURRENTLY`.\n- [tests] `test/items.test.ts:20`: the assert on the row count was removed, so nothing checks the copy; put it back.",
       "at": "2026-10-31T10:00:00Z"
     },
     "https://github.com/acme/billing/pull/88": {
       "state": "done",
       "sha": "0088a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
       "issues": 1,
+      "attention": 1,
       "finding": "Rounding differs from the invoice total",
+      "report": "Before merging:\n- [bug] `src/invoice.ts:52`: each line is rounded before the sum, so three items at 0.335 add up to 1.02 while the invoice says 1.01; round only the sum.\n\nWorth a look:\n- [scope] `src/theme.css:1`: the task and description name only the rounding, and this file changes the theme colours; a PR of its own keeps this one about rounding.",
       "at": "2026-10-31T10:00:00Z"
     },
     "https://github.com/acme/mobile-app/pull/50": {
@@ -699,6 +705,7 @@ export const DEMO_VERDICTS: Verdicts = {
       "sha": "0050a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c",
       "issues": 1,
       "finding": "Chart bundle still loads on the first screen",
+      "report": "Antes do merge:\n- [bug] `src/App.tsx:12`: o bundle do gráfico ainda carrega na primeira tela, então a abertura espera um código que ela não usa; carregue o gráfico com `lazy`.",
       "at": "2026-10-31T10:00:00Z"
     },
     "https://github.com/acme/mobile-app/pull/44": {
