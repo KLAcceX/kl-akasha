@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { compose, reason, toViewModel, verdictOf, verdictTag } from './register'
+import { t } from '../scripts/i18n.mjs'
 import { runsOf, typesOf } from './view'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
@@ -905,6 +906,8 @@ test('runsOf groups by run, newest first, with what was done since; typesOf read
   expect(runs.map(r => r.at)).toEqual(['2', '1'])
   expect([runs[0].items.length, runs[0].items[0].issues, runs[0].items[0].published?.state]).toEqual([1, 2, 'posted'])
   expect(typesOf('- [security] a\n  - [tests] b\nnote\n- no tag')).toEqual(['security', 'tests'])
+  // reports saved before cleanup replaced ai still read in the History page
+  expect([t('pt-BR', 'hi_type', 'bug', 2), t('pt-BR', 'hi_type', 'cleanup', 1), t('pt-BR', 'hi_type', 'ai', 1), t('en', 'hi_type', 'other', 1)]).toEqual(['bugs', 'limpeza', 'IA', 'other'])
 })
 
 for (const [name, from, prOver, verdictOver, to] of [
