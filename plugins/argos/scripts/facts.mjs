@@ -43,8 +43,12 @@ export const parsePr = (ref) => {
   return short ? { repo: short[1], number: Number(short[2]) } : null;
 };
 
+// Look like a key and are not: a bot's release notes quote them. Whole names, since ES or ARM may be
+// a real project. ponytail: a fixed list; another look-alike reads as a task nobody finds.
+const NOT_TASK = /^(SHA-(1|224|256|384|512)|MD-5|UTF-(8|16|32)|X86-64|AES-(128|192|256)|RSA-(2048|3072|4096)|HTTP-[123]|(CVE|RFC|ISO|ECMA|PEP)-\d+)$/;
+
 // First Jira-style key (ABC-123) in the branch, then the title, then the body.
-export const taskKey = (...texts) => texts.map((t) => (t ?? "").match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0]).find(Boolean) ?? null;
+export const taskKey = (...texts) => texts.flatMap((t) => (t ?? "").match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []).find((k) => !NOT_TASK.test(k)) ?? null;
 
 export const riskSignals = (files, labels) => [
   ...labels.filter((l) => RISK_LABELS.test(l)).map((l) => `label:${l}`),
@@ -146,6 +150,9 @@ function selfTest() {
   assert.equal(taskKey("fix/typo", "[ABC-9] typo", ""), "ABC-9");
   assert.equal(taskKey("main", "no key", "closes OPS-77"), "OPS-77");
   assert.equal(taskKey("main", "utf-8 fix", ""), null);
+  assert.equal(taskKey("dependabot/npm", "Bump x", "Signed with SHA-256, fixes CVE-2024-1234"), null);
+  assert.equal(taskKey("main", "no key", "SHA-256 of the build, closes OPS-77"), "OPS-77");
+  assert.equal(taskKey("ES-12-login", "x", ""), "ES-12");
 
   const risky = riskSignals(["src/auth/session.ts", "README.md", "db/migrations/001.sql"], ["hotfix", "docs"]);
   assert.deepEqual(risky, ["label:hotfix", "path:src/auth/session.ts", "path:db/migrations/001.sql"]);

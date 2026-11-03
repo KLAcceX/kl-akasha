@@ -225,13 +225,13 @@ export function toViewModel(r: Round | null, o: Opts) {
     if (!inRun.has(p.url)) return null
     const raw = o.verdicts!.prs[p.url]!
     // merge.mjs could not take back its approval: this holds until it does, whatever the verdict
-    if (raw.merge?.why === OLD_APPROVAL) return { text: t(lang, 'st_skipped', raw.merge.why), tone: 'warning' }
+    if (raw.merge?.why === OLD_APPROVAL) return { text: t(lang, 'st_skipped', t(lang, 'mg_why', raw.merge.why)), tone: 'warning' }
     if (v.state === 'queued') return { text: t(lang, 'st_queued'), tone: 'subtle' }
     if (v.state === 'run') return { text: t(lang, 'st_validating', Math.max(1, Math.floor((now - Date.parse(raw.at)) / 6e4))), tone: 'subtle' }
     if (v.state === 'failed') return { text: t(lang, 'st_failed', v.finding), tone: 'error' }
     // commits landed after the verdict: it no longer speaks for the head
     if (v.state === 'stale') return cfgOf(p.repo)?.merge ? { text: t(lang, 'st_skipped', t(lang, 'mg_new')), tone: 'warning' } : { text: t(lang, 'st_stale'), tone: 'subtle' }
-    if (raw.merge) return { text: t(lang, `st_${raw.merge.state}`, raw.merge.why), tone: raw.merge.state === 'skipped' ? 'warning' : 'success' }
+    if (raw.merge) return { text: t(lang, `st_${raw.merge.state}`, t(lang, 'mg_why', raw.merge.why)), tone: raw.merge.state === 'skipped' ? 'warning' : 'success' }
     // a repo with auto-merge says why a verdict that did not pass was not merged
     if (cfgOf(p.repo)?.merge && (v.state !== 'pass' || v.attention))
       return {

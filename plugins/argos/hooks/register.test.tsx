@@ -270,6 +270,32 @@ test('each repo with a local clone gets its own agent started there, with its ow
   expect(spawns.map(x => x.cwd)).toEqual(['C:/src/api', undefined])
   expect(spawns[0].prompt.split('\n')).toContain("Rules for acme/api (the user's, for this repo's PRs): Check the ledger first")
   expect(spawns[1].prompt).not.toMatch(/Rules for/)
+  // the engine gives an agent the CLAUDE.md above the session's folder, so the prompt names the clone's
+  expect(spawns[0].prompt).toMatch(/each folder above C:\/src\/api/)
+  expect(spawns[1].prompt).not.toMatch(/Environment rules/)
+  await ui.unmount()
+})
+
+test("an agent the person's hooks refuse fails its PRs with the reason, instead of leaving them queued", async ($, on) => {
+  const url = 'https://github.com/acme/api/pull/1'
+  const calls: string[][] = []
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+    e.key === 'round' ? { value: { value: { ...round, repos: ['acme/api'], pending: [], mine: [], others: [item({ kind: 'other', number: 1, repo: 'acme/api', url, author: 'bia', signals: [] })] }, version: 1 } } : next(e),
+  )
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    calls.push(e.argv)
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('agent.spawn', () => ({ deny: 'a hook said no\nmore detail' }))
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'validate-clean' })
+  const failed = calls.find(a => a.includes('fail'))
+  expect(failed?.slice(-3)).toEqual([url, '--reason', 'a hook said no'])
   await ui.unmount()
 })
 

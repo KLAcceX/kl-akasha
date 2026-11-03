@@ -13,6 +13,8 @@
 //     code from instructions anyone may have left it. Nor does a Dockerfile, a workflow or a script:
 //     they run on install, build or CI. A verdict reads the PR's own text, so it can be talked into
 //     passing; this script decides on facts the PR cannot write
+//   - the gate finds nothing in the diff (a secret, a risky workflow line): the verdict may come from
+//     the person's prompt alone, so this script looks by itself
 //   - no conflicts, and every CI check passed (no checks at all is not green)
 //   - after the approval, GitHub says it can merge (required reviews and rules satisfied)
 // Merge uses the first method the repo allows (squash, merge commit, rebase), pinned to the head
@@ -33,6 +35,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
+import { scan } from "./gate.mjs";
 import { read as readRepos } from "./repos.mjs";
 import { onlyUpkeep, pinsOnly } from "./upkeep.mjs";
 import { nap, read, withLock, write } from "./verdicts.mjs";
@@ -42,7 +45,8 @@ const sameSha = (a = "", b = "") => Boolean(a && b) && (a.startsWith(b) || b.sta
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const WRITERS = new Set(["admin", "write"]);
 // Skips that no later round can change, for this commit.
-const FINAL = new Set(["not open", "your PR", "from a fork", "author cannot write", "coding agent", "changes build or CI"]);
+const RISKY = "secret or risky workflow";
+const FINAL = new Set(["not open", "your PR", "from a fork", "author cannot write", "coding agent", "changes build or CI", RISKY]);
 const REVIEW_BODY = "Argos: validated with no blockers and nothing needing attention.";
 // Said on the PR's line until the dismissal goes through; view.ts shows it over "new commits".
 const OLD_APPROVAL = "stale approval: dismiss it on GitHub";
@@ -183,7 +187,7 @@ function sweepAll() {
       const pr = whenKnown(() => JSON.parse(run(["pr", "view", url, "--json", "state,isDraft,headRefOid,author,isCrossRepository,mergeable,statusCheckRollup"])), "mergeable");
       if (pr.author?.is_bot) pr.files = lines(run(["api", "--paginate", `${pullPath(url)}/files`, "-q", ".[] | {path: .filename, patch}"]));
       const me = run(["api", "user", "-q", ".login"]);
-      const why = gate(pr, verdict, me, pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login));
+      const why = gate(pr, verdict, me, pr.author?.is_bot ? undefined : accessOf(run, repoOf(url), pr.author?.login)) ?? (scan(run(["pr", "diff", url])).length ? RISKY : null);
       // approved stays on the record, so no later round approves again; new commits took it back
       if (why) outcome = { state: approved && why !== "new commits" ? "approved" : "skipped", why };
       else {

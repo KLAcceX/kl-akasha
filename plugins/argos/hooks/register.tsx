@@ -184,9 +184,10 @@ const repoOf = (list: RepoCfg[], url: string) => list.find(r => url.toLowerCase(
 // A repo's own validation prompt, added to Argos's job for its PRs. An older repos.json kept a
 // list of skills instead: it reads as a prompt to use them.
 const promptOf = (r: RepoCfg | undefined) => r?.prompt ?? (r?.skills?.length ? `Read the skills ${r.skills.join(', ')} and judge by their rules.` : '')
-// PRs by the local clone their agent runs in: an agent started in a repo's clone loads that
-// repo's CLAUDE.md and rules as a session opened there would; a repo without one runs in the
-// session's folder.
+// PRs by the local clone their agent runs in; a repo without one runs in the session's folder. The
+// engine gives an agent the CLAUDE.md above the session's folder, not above its cwd, so a prompt
+// names the clone (b_env): the folders above it hold the person's environment rules, whatever
+// folder the session opened in, and the repo's own rules come from its base (rules.mjs).
 const byClone = (list: RepoCfg[], urls: string[]) => {
   const groups = new Map<string, string[]>()
   for (const u of urls) {
@@ -222,13 +223,15 @@ async function validate($: any, urls: string[], lang: string, prompt: Prompt) {
           .filter(r => r && promptOf(r))
           .map(r => [r!.repo, promptOf(r)]),
       )
-      const lines = [...ask, `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
+      const lines = [...ask, ...(cwd ? [t(lang, 'b_env', cwd)] : []), `Scripts: ${scripts}`, ...[...rules].map(([repo, text]) => t(lang, 'b_rules', repo, text)), ...part.map(u => `- ${u}`)]
       try {
-        const { agentId } = await $.agent.spawn({
+        const { agentId, deny } = await $.agent.spawn({
           prompt: lines.join('\n'),
           description: `Argos validate · ${part.length} PRs`,
           ...(cwd && { cwd }),
         })
+        // a refusal answers instead of throwing: the person's hooks or rules may say no
+        if (deny) throw new Error(deny)
         if (agentId) await update($, agentRuns, runs => ({ ...runs, [agentId]: part }))
       } catch (err) {
         // no agent will reach them: they fail now, with why, instead of waiting an hour
@@ -249,13 +252,14 @@ async function fix($: any, urls: string[], lang: string, prompt: Prompt) {
   const list = await loadRepos($)
   const ask = compose(prompt, [t(lang, 'b_fix'), `Job: ${$.plugin.root}/references/mine.md (Job 2, in the background)`], text => [text, t(lang, 'b_fix_rules')])
   for (const [cwd, group] of byClone(list, urls)) {
-    const lines = [...ask, `Scripts: ${$.plugin.root}/scripts`, ...group.map(u => (cwd ? `- ${u} (clone: ${cwd})` : `- ${u}`))]
+    const lines = [...ask, ...(cwd ? [t(lang, 'b_env', cwd)] : []), `Scripts: ${$.plugin.root}/scripts`, ...group.map(u => (cwd ? `- ${u} (clone: ${cwd})` : `- ${u}`))]
     try {
-      const { agentId } = await $.agent.spawn({
+      const { agentId, deny } = await $.agent.spawn({
         prompt: lines.join('\n'),
         description: `Argos fix · ${group.length} PRs`,
         ...(cwd && { cwd }),
       })
+      if (deny) throw new Error(deny)
       if (agentId) await update($, fixRuns, runs => ({ ...runs, [agentId]: group }))
     } catch (err) {
       await $.state.set(FIX_RESULT, t(lang, 'fix_failed', String((err as Error)?.message ?? err).split('\n')[0]))

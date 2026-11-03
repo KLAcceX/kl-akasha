@@ -9,6 +9,7 @@
 //   node gate.mjs --self-test
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
 
 // A PR link or owner/repo#n (as facts.mjs reads it; importing facts.mjs would run its CLI).
 const parsePr = (ref) => {
@@ -36,8 +37,9 @@ const WORKFLOW = [
   ["pull_request_target runs with write access on the PR's code", /pull_request_target/],
   ["workflow asks for write-all", /permissions:\s*write-all/],
   ["event text interpolated into a shell step", /run:.*\$\{\{\s*github\.event\./],
-  ["action not pinned to a commit SHA", /uses:\s*(?!\.\/|docker:\/\/)[^@\s]+@(?![0-9a-f]{40}\b)\S+/],
 ];
+// Worth a look, not a stop: most repos pin actions by tag, so every bump a bot opens would block.
+const WATCH = [["action not pinned to a commit SHA", /uses:\s*(?!\.\/|docker:\/\/)[^@\s]+@(?![0-9a-f]{40}\b)\S+/]];
 
 // The added lines of a unified diff, by file, with their line numbers in the new file.
 export function addedLines(diff) {
@@ -59,8 +61,10 @@ export function scan(diff) {
   const found = [];
   for (const { file, line, text } of addedLines(diff)) {
     for (const [what, rx] of SECRETS) if (rx.test(text)) found.push({ kind: "secret", what, at: `${file}:${line}` });
-    if (/^\.github\/workflows\//.test(file))
+    if (/^\.github\/workflows\//.test(file)) {
       for (const [what, rx] of WORKFLOW) if (rx.test(text)) found.push({ kind: "workflow", what, at: `${file}:${line}` });
+      for (const [what, rx] of WATCH) if (rx.test(text)) found.push({ kind: "workflow", what, at: `${file}:${line}`, attention: true });
+    }
   }
   for (const m of diff.matchAll(/^\+\+\+ b\/((?:.*\/)?\.env(?:\.[\w-]+)?)$/gm))
     if (!/\.(example|sample|template)$/.test(m[1])) found.push({ kind: "secret", what: ".env file added", at: m[1] });
@@ -74,7 +78,7 @@ export function verdict({ found, size, checks }) {
     ...(size > TOO_BIG ? [`${size} changed lines, past ${TOO_BIG}: split it before an AI or a person reads it`] : []),
     ...(failing.length ? [`CI failing: ${failing.map((c) => c.name).join(", ")}`] : []),
   ];
-  return { blockers: found, reviewable: reasons.length === 0, reasons };
+  return { blockers: found.filter((f) => !f.attention), attention: found.filter((f) => f.attention), reviewable: reasons.length === 0, reasons };
 }
 
 function gh(args, env) {
@@ -98,6 +102,7 @@ function main(args) {
   const out = verdict({ found: scan(gh(["pr", "diff", String(pr.number), ...R], env)), size: meta.additions + meta.deletions, checks });
   if (args.includes("--json")) return console.log(JSON.stringify(out, null, 2));
   for (const b of out.blockers) console.log(`BLOCKER ${b.kind}: ${b.what} (${b.at})${b.kind === "secret" ? " — rotate it: removing it later leaves it in the history" : ""}`);
+  for (const a of out.attention) console.log(`ATTENTION ${a.kind}: ${a.what} (${a.at})`);
   console.log(out.reviewable ? "reviewable" : `not reviewable: ${out.reasons.join("; ")}`);
 }
 
@@ -139,18 +144,21 @@ function selfTest() {
   // not reviewable still carries the blockers
   const v = verdict({ found, size: 1500, checks: [{ name: "test", state: "FAILURE" }] });
   assert.equal(v.reviewable, false);
-  assert.equal(v.blockers.length, 4);
+  assert.equal(v.blockers.length, 3);
+  assert.deepEqual(v.attention.map((a) => a.at), [".github/workflows/ci.yml:2"]);
   assert.equal(v.reasons.length, 2);
   assert.equal(verdict({ found: [], size: 10, checks: [{ name: "lint", state: "SUCCESS" }] }).reviewable, true);
   assert.deepEqual(parsePr("acme/web#7"), { repo: "acme/web", number: 7 });
   console.log("self-test ok");
 }
 
-if (process.argv.includes("--self-test")) selfTest();
-else
-  try {
-    main(process.argv.slice(2));
-  } catch (err) {
-    console.error(err.message);
-    process.exit(1);
-  }
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (process.argv.includes("--self-test")) selfTest();
+  else
+    try {
+      main(process.argv.slice(2));
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+}
