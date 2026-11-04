@@ -99,8 +99,11 @@ export function reportLines(text: string) {
     .map(line => {
       // findings.mjs writes "- [bug] Blocker · `a.js:1`: title"; reports from before it have no severity
       const found = line.match(/^\s*-\s*\[([a-z-]+)\]\s*(?:([^·`]+?)\s*·\s*)?`?([^`:]+(?::\d+)?)`?:\s*(.*)$/)
-      if (found) return { kind: 'finding' as const, tag: found[1]!, ...(found[2] && { severity: found[2] }), place: found[3]!, text: found[4]!.replace(/`/g, '') }
-      if (/^\S[^.]*:$/.test(line.trim())) return { kind: 'heading' as const, text: line.trim().slice(0, -1) }
+      if (found) return { kind: 'finding' as const, tag: found[1]!, ...(found[2] && { severity: found[2] }), place: found[3]!, text: found[4]! }
+      // under a finding, findings.mjs indents: a label and its code, deeper still
+      if (/^ {4}/.test(line)) return { kind: 'code' as const, text: line.slice(4) }
+      if (/^\s+\S.*:$/.test(line)) return { kind: 'label' as const, text: line.trim().slice(0, -1) }
+      if (/^\S[^.]*:$/.test(line.trimEnd())) return { kind: 'heading' as const, text: line.trimEnd().slice(0, -1) }
       return { kind: 'line' as const, text: line }
     })
 }

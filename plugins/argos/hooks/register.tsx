@@ -2138,39 +2138,101 @@ export const register: Register = (on, options) => {
       listFrame(bar(t(lang, 'hi_clean_title'), { ...toList, then: 'show-clean' }), caption('clean-note', t(lang, 'hi_clean_note')), <Box key="clean-list" flexDirection="column" gap={SPACE.block}>{cleanLines(reportGroups(vm.reports).clean)}</Box>)
     // One report. Moving between them stays at the top, where the button never shifts; publishing is the
     // final act at the bottom, past the text it publishes, so paging fast cannot land on it.
-    const reportBody = (x: ReportRow) => {
-      const blocks: { title: string; items: any[] }[] = []
-      const into = () => blocks.at(-1) ?? (blocks.push({ title: t(lang, x.state === 'own' && !typesOf(x.text).length ? 'hi_summary' : 'hi_findings'), items: [] }), blocks.at(-1)!)
-      const lead: any[] = []
-      reportLines(x.text).forEach((l, i) => {
-        if (l.kind === 'heading') blocks.push({ title: l.text, items: [] })
-        else if (l.kind === 'finding') {
-          if (l.severity && blocks.at(-1)?.title !== l.severity) blocks.push({ title: l.severity, items: [] })
-          into().items.push(
-            <Box key={`line:${i}`} flexDirection="column" gap={SPACE.line}>
-              <Text size="caption" weight="semibold" color={C.text}>
-                {`${t(lang, 'hi_type', l.tag, 1)} · ${l.place}`}
-              </Text>
-              <Text size="footnote" color={C.text}>
-                {l.text}
-              </Text>
-            </Box>,
-          )
-        } else {
-          // the sentence before the first finding says what they mean together
-          const line = (
-            <Text key={`line:${i}`} size="footnote" color={C.text}>
-              {l.text.startsWith(' ') ? l.text.trim().replace(/`/g, '') : l.text}
+    // A report's text, with what is in backticks set apart as code.
+    const reportText = (key: string, text: string, size: 'caption' | 'footnote', color: string, weight?: 'semibold') => (
+      <Text key={key} size={size} color={color} weight={weight}>
+        {text.split(/(`[^`\n]+`)/).map((part, i) =>
+          i % 2 ? (
+            <Text key={i} mono color={C.text} backgroundColor={rgba(HEX.grey, 0.28)}>
+              {part.slice(1, -1)}
             </Text>
-          )
-          if (blocks.length) into().items.push(line)
-          else if (typesOf(x.text).length) lead.push(line)
-          else into().items.push(line)
+          ) : (
+            part
+          ),
+        )}
+      </Text>
+    )
+    // One card per finding: what it is, what happens, what to do. Findings come most serious first, so
+    // the first ones the verdict counts as blockers take the amber a problem has everywhere.
+    const reportBody = (x: ReportRow) => {
+      type Card = { kind: 'card'; tag: string; severity?: string; place: string; title: string; lines: string[]; label: string; code: string[]; after: string[] }
+      const parts: (Card | { kind: 'heading' | 'line'; text: string })[] = []
+      let card: Card | null = null
+      for (const l of reportLines(x.text)) {
+        if (l.kind === 'finding') parts.push((card = { kind: 'card', tag: l.tag, severity: l.severity, place: l.place, title: l.text, lines: [], label: '', code: [], after: [] }))
+        else if (l.kind === 'code' && card) card.code.push(l.text)
+        else if (l.kind === 'label' && card) card.label = l.text
+        else if (l.kind === 'line' && card && l.text.startsWith(' ')) (card.code.length ? card.after : card.lines).push(l.text.trim())
+        else {
+          card = null
+          parts.push({ kind: l.kind === 'heading' ? 'heading' : 'line', text: l.text })
         }
-      })
-      // what stops the merge reads in amber, as its count does on the line
-      const isBlocking = (i: number) => i === 0 && x.issues > 0
-      return [...lead, ...blocks.map((b, i) => (isBlocking(i) ? tinted(`block:${i}`, HEX.warning, C.warning, b.title, ...b.items) : reportSection(`block:${i}`, b.title, ...b.items)))]
+      }
+      // The brief, as the comment on the PR opens: how much, what it means together, then where each one is.
+      const cards = parts.filter((p): p is Card => p.kind === 'card')
+      const lead = cards.length && parts[0]?.kind === 'line' ? parts.shift()!.text.trim() : ''
+      const cut = lead.indexOf('. ')
+      const counts = cut > 0 ? lead.slice(0, cut) : [x.issues ? t(lang, 'hi_blockers', x.issues) : '', x.attention ? t(lang, 'hi_to_check', x.attention) : ''].filter(Boolean).join(' · ')
+      const summary = cut > 0 ? lead.slice(cut + 2) : lead
+      let found = 0
+      return [
+        cards.length > 0 &&
+          tinted(
+            'report-brief',
+            HEX.warning,
+            C.warning,
+            counts,
+            summary && reportText('brief-summary', summary, 'footnote', C.text),
+            cards.length > 1 && (
+              <Box key="brief-where" flexDirection="column" gap={SPACE.line}>
+                {cards.map((c, i) => (
+                  <Box key={`brief:${i}`} flexDirection="row" flexWrap="wrap" columnGap={SPACE.inline}>
+                    {c.severity && (
+                      <Text size="caption" weight="semibold" color={C.warning}>
+                        {c.severity}
+                      </Text>
+                    )}
+                    <Text size="caption" color={C.subtle}>
+                      {`${t(lang, 'hi_type', c.tag, 1)} · ${c.place}`}
+                    </Text>
+                  </Box>
+                ))}
+              </Box>
+            ),
+          ),
+        <Box key="report-body" flexDirection="column" gap={SPACE.block}>
+          {parts.map((p, i) => {
+            if (p.kind === 'heading')
+              return (
+                <Text key={`part:${i}`} weight="semibold" color={C.text}>
+                  {p.text}
+                </Text>
+              )
+            if (p.kind === 'line')
+              return reportText(`part:${i}`, p.text, 'footnote', C.text)
+            const isBlocker = found++ < x.issues
+            return (
+              <Box key={`part:${i}`} flexDirection="column" gap={SPACE.row} padding="sm" borderStyle="round" borderColor={rgba(isBlocker ? HEX.warning : HEX.grey, EDGE)} backgroundColor={rgba(isBlocker ? HEX.warning : HEX.grey, TINT)}>
+                <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.inline}>
+                  {p.severity && (
+                    <Text size="caption" weight="semibold" color={C.warning}>
+                      {p.severity}
+                    </Text>
+                  )}
+                  <Text size="caption" color={C.subtle}>
+                    {`${t(lang, 'hi_type', p.tag, 1)} · ${p.place}`}
+                  </Text>
+                </Box>
+                {reportText('title', p.title, 'footnote', C.text, 'semibold')}
+                {p.lines.map((line, n) => reportText(`line:${n}`, line, 'footnote', n > 1 ? C.subtle : C.text))}
+                {p.code.length > 0 && caption('code-label', p.label)}
+                {p.code.length > 0 && <ui.Code source={p.code.join('\n')} path={p.place.replace(/:\d+$/, '')} />}
+                {p.after.map((line, n) => reportText(`after:${n}`, line, 'caption', C.subtle))}
+              </Box>
+            )
+          })}
+        </Box>,
+      ]
     }
     const footOf = (x: ReportRow, back: { to: string; label: string }) => {
       const act = (key: string, label: string, onPress: () => void, variant: 'primary' | 'secondary' = 'primary') => (
@@ -2240,7 +2302,7 @@ export const register: Register = (on, options) => {
             <Text size="footnote" weight="semibold" color={C.text}>
               <ui.Link href={x.url}>{x.title || x.url}</ui.Link>
             </Text>
-            {stateLine(x, t(lang, 'hi_place_report', at + 1, all.length), x.issues ? t(lang, 'hi_blockers', x.issues) : '', x.attention ? t(lang, 'hi_to_check', x.attention) : '')}
+            {stateLine(x, t(lang, 'hi_place_report', at + 1, all.length))}
           </Box>
         </Box>,
         ...reportBody(x),

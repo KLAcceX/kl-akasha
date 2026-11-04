@@ -840,8 +840,8 @@ test('Publish shows the exact text first; only confirming runs the script, which
   await ui.press({ key: 'read-waiting' })
   // nothing has left yet: the page holds each line of the text
   expect(posts()).toEqual([])
-  expect((await ui.find({ type: 'Text', text: /a\.js:1/ }))?.text).toBe('- Blocker `a.js:1`: wrong')
-  expect((await ui.find({ type: 'Text', text: /b\.js:2/ }))?.text).toBe('- Look at `b.js:2`: weak test')
+  expect((await ui.find({ type: 'Text', text: /a\.js:1/ }))?.text).toBe('- Blocker a.js:1: wrong')
+  expect((await ui.find({ type: 'Text', text: /b\.js:2/ }))?.text).toBe('- Look at b.js:2: weak test')
   expect((await ui.find({ key: 'publish-one:acme/api#1' }))?.text).toBe('Publish comment on api #1')
   await ui.press({ key: 'publish-one:acme/api#1' })
   expect(posts()).toEqual([['node', 'publish.mjs', url.split('/').at(-1)!]])
@@ -896,7 +896,7 @@ test('Reports: what waits first, grouped by what it found; a report per page; pa
   expect((await ui.find({ key: 'show-mine' }))?.text).toBe('Show 1 of your PRs: 1 blocks merge')
   // their PR, with something to publish
   await ui.press({ key: 'read-waiting' })
-  expect(await text(/^report 1 of 2/)).toBe('report 1 of 2 · 2 blockers · 1 to check')
+  expect(await text(/^report 1 of 2/)).toBe('report 1 of 2')
   expect(await text(/a\.js:1/)).toBe('security · a.js:1')
   expect(await text(/^leak/)).toBe('leak; remove it')
   expect((await ui.find({ key: 'publish-one:acme/web#8' }))?.text).toBe('Publish comment on web #8')
@@ -976,9 +976,16 @@ test('reports: publishing moves no row and no next; a comment leads to the next 
   // as findings.mjs writes them: the severity is read, and the lines under a finding stay
   expect(reportLines('1 blocker. Wrong total.\n- [bug] Blocker · `a.js:2`: `x` is wrong.\n  It returns 1.\n- [scope] Warning · PR description: off topic.')).toEqual([
     { kind: 'line', text: '1 blocker. Wrong total.' },
-    { kind: 'finding', tag: 'bug', severity: 'Blocker', place: 'a.js:2', text: 'x is wrong.' },
+    { kind: 'finding', tag: 'bug', severity: 'Blocker', place: 'a.js:2', text: '`x` is wrong.' },
     { kind: 'line', text: '  It returns 1.' },
     { kind: 'finding', tag: 'scope', severity: 'Warning', place: 'PR description', text: 'off topic.' },
+  ])
+  // a label under a finding is not a heading, and its code stays as written
+  expect(reportLines('- [bug] Warning · `a.js:2`: wrong.\n  Suggested change:\n      return 1;\nWorth a look:')).toEqual([
+    { kind: 'finding', tag: 'bug', severity: 'Warning', place: 'a.js:2', text: 'wrong.' },
+    { kind: 'label', text: 'Suggested change' },
+    { kind: 'code', text: '  return 1;' },
+    { kind: 'heading', text: 'Worth a look' },
   ])
 })
 
