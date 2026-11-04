@@ -22,8 +22,8 @@
 |---|---|
 | **What** | A collection of Claude Code skills, grouped by domain and installable as plugins |
 | **For** | My own work and any other project where I use AI |
-| **Domains** | Pull requests (Argos) and redaction (Lethe) |
-| **Format** | A Claude Code plugin marketplace: one domain = one plugin = one skill |
+| **Domains** | Pull requests (Argos) and redaction (Lethe); see the [catalog](#catalog) |
+| **Format** | A Claude Code plugin marketplace: one domain = one plugin = one skill, with its jobs inside |
 
 ---
 
@@ -50,21 +50,33 @@ Each plugin's README covers its first steps, commands and options.
 
 ---
 
-## Pantheon
+## Catalog
 
-Each domain takes the name of an entity, from any mythology, whose nature fits the domain's job.
+Install a plugin. It brings one skill with its name, and the skill picks the job from what you ask.
 
-| Plugin | Domain | Name origin | Status |
+| Plugin | Domain | Named after | Status |
 |---|---|---|---|
-| [**Argos**](plugins/argos/README.md) | Pull requests: watch, fix, review, learn from reviews, never let a PR go stale | Argos Panoptes, the hundred-eyed giant who never fully slept | 🚧 in progress |
-| [**Lethe**](plugins/lethe/README.md) | Redaction: content goes from A to B without what B must not know | Lethe, the river of forgetting the dead drank from before rebirth | 🚧 in progress |
-| **Anubis** | Triangulation: weighs what the task asks against what was built and what the PR says | Anubis, who weighs the heart against the feather of truth | 💭 planned |
-| *tbd* | Code quality | | 💭 planned |
-| *tbd* | Security | | 💭 planned |
+| [**Argos**](plugins/argos/README.md) | Pull requests | Argos Panoptes, the hundred-eyed giant who never fully slept | 🚧 in progress |
+| [**Lethe**](plugins/lethe/README.md) | Redaction | The river of forgetting the dead drank from before rebirth | 🚧 in progress |
 
-**Reserved:** **Janus**, god of doorways, for merge, release and deploy; **Thoth**, the scribe who records the weighing, for tech-debt and task logging.
+```text
+Argos
+├── Triage     what needs you now, across your PRs and your review queue
+├── Fix        your own PR after review, a failing CI or a conflict
+├── Lessons    what reviewers keep asking you, and whether a PR is ready
+├── Review     a draft review of a teammate's PR, then approve or merge it
+├── Validate   a verdict on each PR in a batch, and the comments that come of it
+├── Impact     whether review waits changed since Argos began commenting
+└── Vigil      connect repositories, change the language, watch on a schedule
 
-> Every name goes through the council before it lands here.
+Lethe
+├── Clean      text, files, folders or logs without what must be forgotten
+└── Publish    a private repo on its public mirror, its whole history sanitized
+```
+
+Argos also ships a pane in Claude Code, for the same jobs without asking.
+
+Each domain takes the name of an entity, from any mythology, whose nature fits its job.
 
 ---
 
@@ -73,8 +85,6 @@ Each domain takes the name of an entity, from any mythology, whose nature fits t
 In Sanskrit, *ākāśa* is the ether, the space that holds everything. Many traditions later took up the idea of the **Akashic records**: a cosmic library holding all knowledge that ever existed.
 
 That is what this repository aims to be: the place where every "how to" worth teaching an AI is kept.
-
-It is a sibling of `kl-ouroboros`, the serpent that eats its own tail.
 
 ---
 
@@ -106,7 +116,7 @@ Personal state and settings live **outside** the repo, in `~/.claude/kl-akasha/`
 
 ### Rules
 
-1. **One domain, one plugin.** Code quality, security and tasks each get their own folder under `plugins/`. Looking for something about PRs? Go to `plugins/argos/` and nowhere else.
+1. **One domain, one plugin.** Each domain gets its own folder under `plugins/`. Looking for something about PRs? Go to `plugins/argos/` and nowhere else. A new plugin or job gets its row in the [catalog](#catalog) in the same change.
 2. **One entity, one name.** A plugin's skill takes the entity's name and nothing else (`argos`, `lethe`), and its jobs live inside it. Sub-names are hard to remember and tie a skill to a single job.
 3. **Each plugin stands alone.** Claude Code copies only the plugin's folder on install, so nothing may depend on files outside it.
 4. **README for people, SKILL.md for the AI.** Each plugin has one README: install, jobs, commands, options. `SKILL.md` stays lean; long checklists go in `references/`, loaded only when needed.
