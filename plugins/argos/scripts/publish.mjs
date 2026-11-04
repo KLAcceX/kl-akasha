@@ -119,6 +119,9 @@ function postReview(run, url, review) {
   }
 }
 
+// It may have gone: GitHub never said. Publishing again only updates the same comment.
+export const noAnswer = (err, said) => err.code === "ETIMEDOUT" || Boolean(err.killed) || /timeout|timed out|connection|EOF|HTTP 50[234]/i.test(said);
+
 function publishOne(repos, url, verdict) {
   const run = asAccount(repos, url);
   const me = run(["api", "user", "-q", ".login"]);
@@ -169,7 +172,8 @@ function publish(urls, until = Infinity) {
     try {
       outcome = v.human?.includes(url) ? { state: "skipped", why: "left to humans" } : publishOne(repos, url, verdict);
     } catch (err) {
-      outcome = { state: "failed", why: String(err.message ?? err).split("\n")[0].slice(0, 80) };
+      const said = String(err.stderr || err.message || err).trim();
+      outcome = { state: "failed", why: said.split("\n")[0].slice(0, 80), ...(noAnswer(err, said) && { unconfirmed: true }) };
     }
     // read again: a validation may have landed while GitHub answered
     withLock(() => {
@@ -193,6 +197,9 @@ function sweep() {
 }
 
 function selfTest() {
+  assert.equal(noAnswer({}, "HTTP 502: Bad Gateway"), true);
+  assert.equal(noAnswer({ code: "ETIMEDOUT" }, ""), true);
+  assert.equal(noAnswer({}, "HTTP 403: Resource not accessible (acme/web/pull/502)"), false);
   const pr = { state: "OPEN", isDraft: false, headRefOid: "abc1234def", author: { login: "bia" } };
   const v = { state: "done", sha: "abc1234", issues: 1, attention: 0, report: "- `a.js:1`: wrong" };
   const pass = { state: "done", sha: "abc1234", issues: 0, attention: 0, partial: false };

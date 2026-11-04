@@ -35,11 +35,12 @@ export const retriesNow = (v: Verdict, now: number) => (v.tries ?? 0) < MAX_TRIE
 export const typesOf = (report = '') => report.split('\n').flatMap(l => l.match(/^\s*-\s*\[([a-z]+)\]/)?.[1] ?? [])
 
 // The runs history.jsonl records, newest first: each PR by its last line in that run, with what was
-// posted and merged for that commit since. ponytail: the whole file parsed on each draw of these
-// pages, and failures past the time limit are not recorded; both fine at 5000 lines and one person.
+// posted and merged for that commit since. Kept by age, since auto-validate can make dozens a day.
+// ponytail: the whole file parsed on each draw of these pages, and failures past the time limit are
+// not recorded; both fine at 5000 lines and one person.
 export type HistoryLine = { kind: string; url: string; sha?: string; issues?: number; attention?: number; partial?: boolean; finding?: string; report?: string; run?: string; state?: string; why?: string; at: string }
-const KEEP_RUNS = 50
-export function runsOf(history: HistoryLine[]) {
+const KEEP_DAYS = 30
+export function runsOf(history: HistoryLine[], now?: number) {
   const runs = new Map<string, Map<string, HistoryLine>>()
   const after = new Map<string, HistoryLine>()
   for (const e of history) {
@@ -48,11 +49,60 @@ export function runsOf(history: HistoryLine[]) {
   }
   return [...runs]
     .sort(([a], [b]) => b.localeCompare(a))
-    .slice(0, KEEP_RUNS)
+    .filter(([at]) => !(now && now - Date.parse(at) > KEEP_DAYS * 864e5))
     .map(([at, items]) => ({
       at,
       items: [...items.values()].map(e => ({ ...e, published: after.get(`published:${e.url}@${e.sha}`), merged: after.get(`merge:${e.url}@${e.sha}`) })),
     }))
+}
+
+// The runs by local day, newest first.
+export function daysOf<R extends { at: string }>(runs: R[], now: number) {
+  const dayOf = (ms: number) => {
+    const d = new Date(ms)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const days = new Map<string, R[]>()
+  for (const run of runs) days.set(dayOf(Date.parse(run.at)), [...(days.get(dayOf(Date.parse(run.at))) ?? []), run])
+  return [...days].map(([key, list]) => ({ key, runs: list, isToday: key === dayOf(now), isYesterday: key === dayOf(now - 864e5) }))
+}
+
+// How a report stands, as the person reads it: its first word on the line. Only these three wait on them.
+export type ReportState = 'failed' | 'publish' | 'notPublished' | 'notConfirmed' | 'published' | 'outdated' | 'validating' | 'own' | 'partly' | 'quiet' | 'merged' | 'closed'
+export type ReportRow = { key: string; url: string; repo: string; where: string; num: string; isOwn: boolean; title: string; state: ReportState; issues: number; attention: number; partial: boolean; text: string; sha: string; why: string; at: string; canPublish: boolean }
+export const isWaiting = (x: ReportRow) => x.state === 'publish' || x.state === 'notPublished' || x.state === 'notConfirmed'
+const isClean = (x: ReportRow) => x.state !== 'failed' && !x.issues && !x.attention && !x.partial && !x.text
+// Severity groups, so publishing never moves a row and the next report never jumps: only how much it
+// found orders them, never its state. Other people's PRs only: the person's own have a page of their
+// own, since they get no comment and would bury what does.
+const byFound = (a: ReportRow, b: ReportRow) => b.issues - a.issues || b.attention - a.attention || a.repo.localeCompare(b.repo) || a.url.localeCompare(b.url, undefined, { numeric: true })
+export function reportGroups(rows: ReportRow[]) {
+  const theirs = rows.filter(x => !x.isOwn)
+  const failed = theirs.filter(x => x.state === 'failed').sort(byFound)
+  const blocks = theirs.filter(x => x.state !== 'failed' && x.issues).sort(byFound)
+  const look = theirs.filter(x => x.state !== 'failed' && !x.issues && !isClean(x)).sort(byFound)
+  const own = rows.filter(x => x.isOwn && !isClean(x)).sort(byFound)
+  const walk = [...failed, ...blocks, ...look]
+  return { failed, blocks, look, own, clean: rows.filter(isClean).sort(byFound), walk, all: [...walk, ...own] }
+}
+// Every report in one line of reading, the list's order, both ways: nothing to remember and nowhere to get stuck.
+export function nearReports(list: ReportRow[], x: ReportRow) {
+  const at = list.findIndex(r => r.url === x.url)
+  return { at, prev: at > 0 ? list[at - 1] : undefined, next: list[at + 1] }
+}
+// A report's lines to draw: a heading, a finding split by its tag and place, or as it came. Nothing
+// is hidden, and no count comes from here: those are the verdict's issues and attention.
+export function reportLines(text: string) {
+  return text
+    .split('\n')
+    .filter(l => l.trim())
+    .map(line => {
+      // findings.mjs writes "- [bug] Blocker · `a.js:1`: title"; reports from before it have no severity
+      const found = line.match(/^\s*-\s*\[([a-z-]+)\]\s*(?:([^·`]+?)\s*·\s*)?`?([^`:]+(?::\d+)?)`?:\s*(.*)$/)
+      if (found) return { kind: 'finding' as const, tag: found[1]!, ...(found[2] && { severity: found[2] }), place: found[3]!, text: found[4]!.replace(/`/g, '') }
+      if (/^\S[^.]*:$/.test(line.trim())) return { kind: 'heading' as const, text: line.trim().slice(0, -1) }
+      return { kind: 'line' as const, text: line }
+    })
 }
 
 // What a line says about publish.mjs's outcome; what needs no word (a pass, a PR of the person's) says nothing.
@@ -449,6 +499,54 @@ export function toViewModel(r: Round | null, o: Opts) {
   }
   // the repos that approve and merge by themselves, named in the head
   const merging = groups.filter(g => g.merge).map(g => g.name)
+  // Every PR with a verdict, as Reports lists it. A report on the person's own PR is read here and
+  // never published: toPublish takes only a row's gated report.
+  const reports = [...new Map(rows.map(x => [x.url, x])).values()].flatMap((x): ReportRow[] => {
+    const v = o.verdicts?.prs?.[x.url]
+    if (!v || x.vstate === 'none' || (!v.sha && x.vstate !== 'failed')) return []
+    const posted = v.published?.state === 'posted'
+    const failedPost = v.published?.state === 'failed'
+    const state: ReportState =
+      x.vstate === 'failed'
+        ? 'failed'
+        : x.vstate === 'run' || x.vstate === 'queued'
+          ? 'validating'
+          : x.vstate === 'stale'
+            ? 'outdated'
+            : x.isOwn
+              ? 'own'
+              : posted
+                ? 'published'
+                : failedPost && x.report
+                  ? v.published?.unconfirmed
+                    ? 'notConfirmed'
+                    : 'notPublished'
+                  : x.report
+                    ? 'publish'
+                    : v.partial
+                      ? 'partly'
+                      : 'quiet'
+    return [
+      {
+        key: x.key,
+        url: x.url,
+        repo: x.repo,
+        where: `${short(x.repo)} ${x.num}`,
+        num: x.num,
+        isOwn: x.isOwn,
+        title: x.title,
+        state,
+        issues: v.issues ?? 0,
+        attention: v.attention ?? 0,
+        partial: Boolean(v.partial),
+        text: v.report || v.finding || (state === 'failed' ? x.finding : ''),
+        sha: (v.sha ?? '').slice(0, 7),
+        why: state === 'failed' ? x.finding : (v.published?.why ?? ''),
+        at: v.published?.at ?? v.at,
+        canPublish: Boolean(x.report),
+      },
+    ]
+  })
 
   return {
     ...head,
@@ -474,6 +572,7 @@ export function toViewModel(r: Round | null, o: Opts) {
     issues: rows.filter(x => x.vstate === 'issues').length,
     // the reviews ready to go on GitHub, each with the text that would go
     toPublish: [...new Map(rows.filter(x => x.report).map(x => [x.url, { key: x.key, url: x.url, repo: x.repo, title: x.title, where: `${short(x.repo)} ${x.num}`, report: x.report }])).values()],
+    reports,
     // my PRs with something asked of me, for Fix (Argos turns the review into changes in the chat)
     rework: reworkRows.map(x => x.url),
     run: showRun ? run : null,

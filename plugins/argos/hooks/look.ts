@@ -35,6 +35,8 @@ export const SPACE = {
   block: 'md',
   // regions of the pane
   region: 'lg',
+  // the groups of a list of reports: twice the step between their rows
+  section: 'xl',
 } as const
 // An open fold (Who, a repo's Settings): one soft panel, spaced as blocks inside.
 export const PANEL = {

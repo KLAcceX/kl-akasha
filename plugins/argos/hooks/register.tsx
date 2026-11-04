@@ -8,8 +8,8 @@ import type { PluginOptions, Register } from 'claude-code'
 
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, TINT, rgba, titled } from './look'
-import { UI, ago, authorOf, hhmm, kindOf, outOf, retriesNow, runOf, runsOf, toViewModel, typesOf, verdictOf } from './view'
+import { C, EDGE, HEX, I, LOGO, PANEL, SKELETON, SPACE, STARS, TINT, rgba, titled } from './look'
+import { UI, ago, authorOf, daysOf, hhmm, isWaiting, kindOf, nearReports, outOf, reportGroups, reportLines, retriesNow, runOf, runsOf, toViewModel, typesOf, verdictOf, type ReportRow } from './view'
 import type { HistoryLine } from './view'
 import type { RepoCfg, Round, SetupInfo, Verdicts } from '../types'
 
@@ -348,7 +348,7 @@ async function afterVerdicts($: any, lang: string, limit: number) {
   if (!run || run.isRunning || (await $.state.get(ANNOUNCED)).value === run.at) return
   await $.state.set(ANNOUNCED, run.at)
   $.ui.toast(`Argos: ${run.label}`)
-  // comments left waiting for the person: History opens on them, unless they are busy elsewhere
+  // comments left waiting for the person: Reports opens on them, unless they are busy elsewhere
   const r: Round | null = (await $.state.get(ROUND)).value ?? null
   const others = new Set([...(r?.pending ?? []), ...(r?.mine ?? []), ...(r?.others ?? [])].filter(p => p.kind !== 'mine' && p.author !== r?.me).map(p => p.url))
   const waits = run.urls.some(u => others.has(u) && !v?.human?.includes(u) && v?.prs[u]?.report && !v.prs[u].published)
@@ -1073,7 +1073,7 @@ export const register: Register = (on, options) => {
     // does nothing until the run ends. A press runs once: a second press while the first one is
     // still at work is dropped.
     const focus = (key: string) => void $.ui.focus({ requestId: PANE, key }).catch(() => {})
-    const goTo = (to: string) => void update($, page, () => to).then(() => focus(to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back'))
+    const goTo = (to: string, then?: string) => void update($, page, () => to).then(() => focus(then ?? (to === 'home' ? (where === 'settings' ? 'settings-page' : `open:${where}`) : 'back')))
     // a box unticked by hand leaves the PR to humans: nothing automatic touches it, and it stays so
     const setOut = (fn: (list: string[]) => string[]) =>
       (outChain = outChain.then(async () => {
@@ -1107,11 +1107,11 @@ export const register: Register = (on, options) => {
     const inRun = new Set(vm.run?.isRunning ? vm.run.urls : [])
     const runs = (urls: string[]) => urls.some(u => inRun.has(u))
     // a sub-page's top: Back, a verb with where it goes, then the page's name as its heading
-    const bar = (title: string, toHistory = false) => (
+    const bar = (title: string, back: { to: string; label: string; then?: string } = { to: 'home', label: t(lang, 'back_home') }) => (
       <Box key="bar" flexDirection="column" gap={SPACE.block}>
         <Box flexDirection="row">
-          <Button key="back" variant="secondary" onPress={() => void (goTo(toHistory ? 'history' : 'home'), update($, confirmMerge, () => null))}>
-            {t(lang, toHistory ? 'hi_back' : 'back_home')}
+          <Button key="back" variant="secondary" onPress={() => void (goTo(back.to, back.then), update($, confirmMerge, () => null))}>
+            {back.label}
           </Button>
         </Box>
         <Text size="heading" weight="semibold" color={C.text}>
@@ -1953,170 +1953,433 @@ export const register: Register = (on, options) => {
         </Box>,
       )
 
-    // History: what waits on the person first, then each run, as the record of what Argos found and did.
-    const history = where === 'history' || where.startsWith('run:') ? runsOf(await readHistory($)) : []
+    // Reports: what waits on the person first, by how much each PR found, one report per page. Past
+    // runs apart, by day, since auto-validate can make dozens a day.
     const nowIs = await $.clock.now()
+    const history = where === 'runs' || where.startsWith('day:') || where.startsWith('run:') || where.startsWith('runreport:') ? runsOf(await readHistory($), nowIs) : []
     const whenOf = (iso: string) => ago(iso, nowIs, lang)
     const rowOf = (url: string) => vm.rows.find(x => x.url === url)
-    const whereOf = (url: string) => {
-      const part = url.split('/')
-      return `${part[4] ?? url} #${part[6] ?? ''}`
-    }
+    const partsOf = (url: string) => url.split('/')
+    const whereOf = (url: string) => `${partsOf(url)[4] ?? url} #${partsOf(url)[6] ?? ''}`
     const typesLine = (reports: (string | undefined)[]) => {
       const count = new Map<string, number>()
       for (const tag of reports.flatMap(r => typesOf(r))) count.set(tag, (count.get(tag) ?? 0) + 1)
       return [...count].sort((a, b) => b[1] - a[1]).map(([tag, n]) => `${n} ${t(lang, 'hi_type', tag, n)}`).join(' · ')
     }
-    const onePublish = (key: string, url: string) => (
-      <Box flexDirection="row">
-        <Button key={`publish-one:${key}`} variant="secondary" dimColor={isWorking('publish') || isWorking(`publish-one:${key}`)} onPress={isWorking('publish') || isWorking(`publish-one:${key}`) ? noop : work(`publish-one:${key}`, () => publishNow([url]))}>
-          {isWorking(`publish-one:${key}`) ? t(lang, 'pb_working') : t(lang, 'pb_one')}
-        </Button>
-      </Box>
-    )
-    const reportOf = (key: string, url: string, title: string, text: string, foot: any) => (
-      <Box key={`report:${key}`} flexDirection="column" gap={SPACE.line}>
-        <Text size="caption" weight="semibold" color={C.text}>
-          <ui.Link href={url}>{title}</ui.Link>
-        </Text>
-        {text
-          .split('\n')
-          .filter(Boolean)
-          .map((l, i) => (
-            <Text key={`report:${key}:${i}`} size="caption" color={C.text}>
-              {l}
-            </Text>
-          ))}
-        {foot}
-      </Box>
-    )
-    const historyPage = () => {
-      const waiting = vm.toPublish
-      const accounts = [...new Set(waiting.map(x => (repoList ?? []).find((r: RepoCfg) => r.repo === x.repo)?.account ?? last?.me ?? ''))]
-      const types = typesLine(waiting.map(x => x.report))
-      return frame(
-        bar(t(lang, 'hi_title')),
-        agents,
-        section(
-          'hi-waiting',
-          waiting.length ? t(lang, 'hi_waiting', waiting.length) : t(lang, 'hi_none_waiting'),
-          waiting.length > 0 && (
-            <Text key="hi-body" size="caption" color={C.subtle}>
-              {t(lang, 'hi_body', accounts.length === 1 ? accounts[0] : '')}
-            </Text>
-          ),
-          types && (
-            <Text key="hi-types" size="caption" weight="semibold" color={C.text}>
-              {types}
-            </Text>
-          ),
-          ...waiting.map(x => reportOf(x.key, x.url, `${x.where} · ${x.title}`, x.report, onePublish(x.key, x.url))),
-          waiting.length > 1 && (
-            <Box key="hi-all" flexDirection="row">
-              <Button key="publish-all" variant={isWorking('publish-all') ? 'secondary' : 'primary'} dimColor={isWorking('publish-all')} onPress={isWorking('publish-all') ? noop : work('publish-all', () => publishNow(waiting.map(x => x.url)))}>
-                {isWorking('publish-all') ? t(lang, 'pb_working') : t(lang, 'pb_n', waiting.length)}
-              </Button>
-            </Box>
-          ),
-        ),
-        section(
-          'hi-runs',
-          t(lang, 'hi_runs'),
-          !history.length && (
-            <Text key="hi-none" size="caption" color={C.subtle}>
-              {t(lang, 'hi_no_runs')}
-            </Text>
-          ),
-          ...history.map(run => {
-            const count = (fn: (x: (typeof run.items)[number]) => unknown) => run.items.filter(fn).length
-            const said = [
-              t(lang, 'hi_prs', run.items.length),
-              [count(x => x.issues), 'hi_issues'],
-              [count(x => x.kind === 'failed'), 'hi_failed'],
-              [count(x => x.published?.state === 'posted'), 'hi_published'],
-              [count(x => x.merged?.state === 'merged'), 'hi_merged'],
-            ].flatMap(p => (typeof p === 'string' ? [p] : p[0] ? [t(lang, p[1] as string, p[0])] : []))
-            return (
-              <Box key={`run:${run.at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
-                <Box flexGrow={1} flexShrink={1} width="40%" minWidth={24}>
-                  <Text size="caption" color={C.text}>
-                    {said.join(' · ')}
-                  </Text>
-                </Box>
-                <Button key={`open-run:${run.at}`} variant="secondary" onPress={() => goTo(`run:${run.at}`)}>
-                  {t(lang, 'hi_open', whenOf(run.at))}
-                </Button>
-              </Box>
-            )
-          }),
-        ),
-      )
+    // old reports carry no types: the line says how much it covers rather than seem to sum everything
+    const typesOfRows = (rows: ReportRow[]) => {
+      const typed = rows.filter(x => typesOf(x.text).length)
+      const line = typesLine(typed.map(x => x.text))
+      return line && typed.length < rows.length ? t(lang, 'hi_types_in', line, typed.length) : line
     }
-    const runPage = (run: (typeof history)[number]) => {
-      const found = run.items.filter(x => x.report || x.finding || x.kind === 'failed')
-      const mine = found.filter(x => rowOf(x.url)?.isOwn || x.published?.why === 'your PR')
-      const theirs = found.filter(x => !mine.includes(x))
-      const passed = run.items.length - found.length
-      const types = typesLine(theirs.map(x => x.report))
-      const footOf = (x: (typeof run.items)[number]) => {
-        const row = rowOf(x.url)
-        const text =
-          x.kind === 'failed'
-            ? t(lang, 'st_failed', x.why ?? '')
-            : x.merged?.state === 'merged'
-              ? t(lang, 'st_merged', x.merged.why ?? '')
-              : x.published?.state === 'posted'
-                ? t(lang, 'vn_published')
-                : !row
-                  ? t(lang, 'hi_closed')
-                  : row.vstate === 'stale'
-                    ? t(lang, 'hi_new')
-                    : x.published
-                      ? t(lang, 'pb_failed', t(lang, 'mg_why', x.published.why ?? ''))
-                      : ''
-        return text ? (
-          <Text size="caption" color={x.kind === 'failed' ? C.error : x.published?.state === 'posted' || x.merged ? C.success : C.subtle}>
-            {text}
-          </Text>
-        ) : null
-      }
-      return frame(
-        bar(t(lang, 'hi_run_title', whenOf(run.at)), true),
-        <Box key="run-summary" flexDirection="column" gap={SPACE.line}>
-          <Text size="caption" color={C.text}>
-            {[t(lang, 'hi_prs', run.items.length), passed ? t(lang, 'hi_passed', passed) : ''].filter(Boolean).join(' · ')}
-          </Text>
-          {types && (
-            <Text size="caption" weight="semibold" color={C.text}>
-              {types}
+    const toList = { to: 'history', label: t(lang, 'hi_back') }
+    const toRuns = { to: 'runs', label: t(lang, 'hi_back_runs') }
+    // each colour keeps its one meaning: purple Argos's own move, amber a problem, green done, red a failure
+    const stateColor = (x: ReportRow) =>
+      x.state === 'failed' || x.state === 'notPublished' || x.state === 'notConfirmed'
+        ? C.error
+        : x.state === 'outdated'
+          ? C.warning
+          : x.state === 'publish' || x.state === 'validating'
+            ? C.brand
+            : x.state === 'published' || x.state === 'merged'
+              ? C.success
+              : C.subtle
+    const caption = (key: string, text: string, color: string = C.subtle) => (
+      <Text key={key} size="caption" color={color}>
+        {text}
+      </Text>
+    )
+    // colour and weight say the state and nothing else, so a wrapped line never starts with a separator
+    const stateLine = (x: ReportRow, ...rest: string[]) => (
+      <Box flexDirection="row" flexWrap="wrap" columnGap={SPACE.inline}>
+        <Text size="caption" weight="semibold" color={stateColor(x)}>
+          {isWorking(`publish-one:${x.key}`) ? t(lang, 'hi_st_publishing') : t(lang, `hi_st_${x.state}`)}
+        </Text>
+        {rest.some(Boolean) && <Text size="caption" color={C.subtle}>{rest.filter(Boolean).join(' · ')}</Text>}
+      </Box>
+    )
+    const tagsOf = (x: ReportRow) => [...new Set(typesOf(x.text))].map(tag => t(lang, 'hi_type', tag, 1)).join(', ')
+    const sizeOf = (x: ReportRow) => (x.state === 'failed' ? t(lang, 'hi_size_failed') : x.issues ? t(lang, 'hi_blockers', x.issues) : x.attention ? t(lang, 'hi_to_check', x.attention) : '')
+    // a native button cannot cut its text: the repo's name gives way, never the count
+    const whereShort = (x: ReportRow) => x.where.replace(/^(.*) (#\d+)$/, (_, repo: string, num: string) => `${clip(repo, 18)} ${num}`)
+    // The repo page's own verdict: the star, and its count in amber. Same mark, same meaning, everywhere.
+    const verdictMark = (x: ReportRow) => {
+      // one number, the one its group counts; what else there is to check says so in words on the line
+      const count = x.state === 'failed' ? '✕' : String(x.issues || x.attention || '')
+      const star = x.state === 'failed' || x.state === 'outdated' ? STARS.stale : x.state === 'validating' ? STARS.run : STARS.done
+      return (
+        <Box flexDirection="row" alignItems="center" flexShrink={0} width={VERDICT_W}>
+          {icon(star, '✦', 14, 14, [sizeOf(x), x.issues && x.attention ? t(lang, 'hi_to_check', x.attention) : ''].filter(Boolean).join(' · '))}
+          {count && (
+            <Text size="caption" weight="semibold" color={x.state === 'failed' ? C.error : x.state === 'outdated' ? C.subtle : C.warning}>
+              {count}
             </Text>
           )}
-        </Box>,
-        theirs.length > 0 &&
-          section(
-            'run-others',
-            t(lang, 'hi_others'),
-            ...theirs.map(x => {
-              const can = vm.toPublish.some(w => w.url === x.url)
-              const key = `${run.at}:${x.url}`
-              return reportOf(key, x.url, `${whereOf(x.url)}${rowOf(x.url) ? ` · ${rowOf(x.url)!.title}` : ''}`, x.report || x.finding || '', can ? onePublish(key, x.url) : footOf(x))
-            }),
-          ),
-        mine.length > 0 &&
-          section(
-            'run-mine',
-            t(lang, 'hi_mine'),
-            <Text key="run-mine-note" size="caption" color={C.subtle}>
-              {t(lang, 'hi_mine_note')}
-            </Text>,
-            ...mine.map(x => reportOf(`${run.at}:${x.url}`, x.url, `${whereOf(x.url)}${rowOf(x.url) ? ` · ${rowOf(x.url)!.title}` : ''}`, x.report || x.finding || '', footOf(x))),
-          ),
+        </Box>
       )
     }
-    if (where === 'history') return historyPage()
+    // One line per PR, as on a repo's page: the button, the verdict, the title, how it stands. The repo
+    // is named only when the list has more than one.
+    const nameIn = (x: ReportRow, list: ReportRow[]) => (new Set(list.map(r => r.repo)).size > 1 ? whereShort(x) : padNum(x.num, Math.max(...list.map(r => r.num.length))))
+    const reportRow = (x: ReportRow, open: (x: ReportRow) => void, list: ReportRow[], isPrimary = false) => {
+      return (
+        <Box key={`row:${x.key}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={SPACE.inline} rowGap={SPACE.row}>
+          <Button key={`read:${x.url}`} variant={isPrimary ? 'primary' : 'secondary'} onPress={() => open(x)}>
+            {t(lang, 'hi_read', nameIn(x, list), '')}
+          </Button>
+          {verdictMark(x)}
+          <Box flexDirection="column" gap={SPACE.line} flexGrow={1} flexShrink={1} width="40%" minWidth={24}>
+            <Text size="caption" color={C.text}>
+              {x.title || x.where}
+            </Text>
+            {stateLine(x, x.issues && x.attention ? t(lang, 'hi_to_check', x.attention) : '', tagsOf(x))}
+          </Box>
+        </Box>
+      )
+    }
+    const reportSection = (key: string, title: string, ...body: any[]) => (
+      <Box key={key} flexDirection="column" gap={SPACE.block}>
+        <Text weight="semibold" color={C.text}>
+          {title}
+        </Text>
+        {body.filter(Boolean)}
+      </Box>
+    )
+    // A group in the colour of what it means, so the eye finds it before reading.
+    const tinted = (key: string, hex: string, color: string, title: string, ...body: any[]) => (
+      <Box key={key} flexDirection="column" gap={SPACE.inline} padding="sm" borderStyle="round" borderColor={rgba(hex, EDGE)} backgroundColor={rgba(hex, TINT)}>
+        <Text weight="semibold" color={color}>
+          {title}
+        </Text>
+        {body.filter(Boolean)}
+      </Box>
+    )
+    const listFrame = (...body: any[]) => (
+      <Box flexDirection="column" gap={SPACE.section} padding="md">
+        {body.filter(Boolean)}
+      </Box>
+    )
+    const cleanLines = (rows: ReportRow[]) =>
+      rows.map(x => (
+        <Box key={`clean:${x.key}`} flexDirection="column" gap={SPACE.line}>
+          <Text size="footnote" weight="semibold" color={C.text}>
+            <ui.Link href={x.url}>{x.title ? `${x.where} · ${x.title}` : x.where}</ui.Link>
+          </Text>
+          {caption('on', t(lang, 'hi_on', x.sha))}
+        </Box>
+      ))
+    // The groups of a list, the same for what stands now and for a past run.
+    const groupsOf = (rows: ReportRow[], open: (x: ReportRow) => void, primary?: ReportRow) => {
+      const w = reportGroups(rows)
+      const list = (group: ReportRow[]) => group.map(x => reportRow(x, open, w.walk, x === primary))
+      return [
+        w.failed.length > 0 && tinted('hi-failed', HEX.error, C.error, t(lang, 'hi_g_failed', w.failed.length), ...list(w.failed)),
+        w.blocks.length > 0 && tinted('hi-blocks', HEX.warning, C.warning, t(lang, 'hi_g_blocks', w.blocks.length), ...list(w.blocks)),
+        w.look.length > 0 && tinted('hi-look', HEX.grey, C.text, t(lang, 'hi_g_look', w.look.length), ...list(w.look)),
+      ]
+    }
+    const openReport = (x: ReportRow) => goTo(`report:${x.url}`)
+    const reportsPage = (note?: string) => {
+      const rows = vm.reports
+      const w = reportGroups(rows)
+      const waiting = w.walk.filter(isWaiting)
+      const posted = rows.filter(x => x.state === 'published').length
+      const bad = [
+        [w.failed.length, 'hi_bad_failed'],
+        [rows.filter(x => x.state === 'notPublished').length, 'hi_bad_pub'],
+        [rows.filter(x => x.state === 'notConfirmed').length, 'hi_bad_conf'],
+      ].flatMap(([n, key]) => (n ? [t(lang, key as string, n)] : []))
+      const types = typesOfRows(w.walk)
+      // one primary on every list: with nothing to publish, the worst PR
+      const primary = waiting.length ? undefined : w.walk[0]
+      const more = (key: string, label: string, to: string) => (
+        <Button key={key} variant="secondary" onPress={() => goTo(to)}>
+          {label}
+        </Button>
+      )
+      return listFrame(
+        bar(t(lang, 'hi_title')),
+        agents,
+        note && caption('hi-note', note),
+        !rows.length && caption('hi-none', t(lang, 'hi_no_reports')),
+        rows.length > 0 && (
+          <Box key="hi-summary" flexDirection="column" gap={SPACE.block}>
+            <Box flexDirection="column" gap={SPACE.line}>
+              <Text size="footnote" weight="semibold" color={C.text}>
+                {waiting.length ? t(lang, 'hi_lead_n', waiting.length) : posted ? t(lang, 'hi_lead_posted', posted) : t(lang, 'hi_lead_none')}
+              </Text>
+              {bad.length > 0 && caption('hi-bad', bad.join(' · '), C.error)}
+              {types && caption('hi-types', types)}
+            </Box>
+            {waiting.length > 0 && (
+              <Box flexDirection="row">
+                <Button key="read-waiting" variant="primary" onPress={() => openReport(waiting[0]!)}>
+                  {t(lang, 'hi_read_n', waiting.length)}
+                </Button>
+              </Box>
+            )}
+          </Box>
+        ),
+        ...groupsOf(rows, openReport, primary),
+        // what needs nothing from this page stays one tap away, out of the scroll
+        <Box key="hi-more" flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
+          {w.own.length > 0 && more('show-mine', t(lang, 'hi_show_mine', w.own.length, w.own.filter(x => x.issues).length), 'mine')}
+          {w.clean.length > 0 && more('show-clean', t(lang, 'hi_show_clean', w.clean.length), 'clean')}
+          {more('open-runs', t(lang, 'hi_open_runs'), 'runs')}
+        </Box>,
+      )
+    }
+    const minePage = () => {
+      const { own } = reportGroups(vm.reports)
+      return listFrame(bar(t(lang, 'hi_mine_title', own.length), { ...toList, then: 'show-mine' }), <Box key="mine-list" flexDirection="column" gap={SPACE.inline}>{own.map(x => reportRow(x, openReport, own))}</Box>)
+    }
+    const cleanPage = () =>
+      listFrame(bar(t(lang, 'hi_clean_title'), { ...toList, then: 'show-clean' }), caption('clean-note', t(lang, 'hi_clean_note')), <Box key="clean-list" flexDirection="column" gap={SPACE.block}>{cleanLines(reportGroups(vm.reports).clean)}</Box>)
+    // One report. Moving between them stays at the top, where the button never shifts; publishing is the
+    // final act at the bottom, past the text it publishes, so paging fast cannot land on it.
+    const reportBody = (x: ReportRow) => {
+      const blocks: { title: string; items: any[] }[] = []
+      const into = () => blocks.at(-1) ?? (blocks.push({ title: t(lang, x.state === 'own' && !typesOf(x.text).length ? 'hi_summary' : 'hi_findings'), items: [] }), blocks.at(-1)!)
+      const lead: any[] = []
+      reportLines(x.text).forEach((l, i) => {
+        if (l.kind === 'heading') blocks.push({ title: l.text, items: [] })
+        else if (l.kind === 'finding') {
+          if (l.severity && blocks.at(-1)?.title !== l.severity) blocks.push({ title: l.severity, items: [] })
+          into().items.push(
+            <Box key={`line:${i}`} flexDirection="column" gap={SPACE.line}>
+              <Text size="caption" weight="semibold" color={C.text}>
+                {`${t(lang, 'hi_type', l.tag, 1)} · ${l.place}`}
+              </Text>
+              <Text size="footnote" color={C.text}>
+                {l.text}
+              </Text>
+            </Box>,
+          )
+        } else {
+          // the sentence before the first finding says what they mean together
+          const line = (
+            <Text key={`line:${i}`} size="footnote" color={C.text}>
+              {l.text.startsWith(' ') ? l.text.trim().replace(/`/g, '') : l.text}
+            </Text>
+          )
+          if (blocks.length) into().items.push(line)
+          else if (typesOf(x.text).length) lead.push(line)
+          else into().items.push(line)
+        }
+      })
+      // what stops the merge reads in amber, as its count does on the line
+      const isBlocking = (i: number) => i === 0 && x.issues > 0
+      return [...lead, ...blocks.map((b, i) => (isBlocking(i) ? tinted(`block:${i}`, HEX.warning, C.warning, b.title, ...b.items) : reportSection(`block:${i}`, b.title, ...b.items)))]
+    }
+    const footOf = (x: ReportRow, back: { to: string; label: string }) => {
+      const act = (key: string, label: string, onPress: () => void, variant: 'primary' | 'secondary' = 'primary') => (
+        <Box flexDirection="row">
+          <Button key={key} variant={variant} onPress={onPress}>
+            {label}
+          </Button>
+        </Box>
+      )
+      const publishing = isWorking(`publish-one:${x.key}`)
+      const publishAct = act(
+        `publish-one:${x.key}`,
+        publishing ? t(lang, 'pb_working') : t(lang, 'pb_one', x.where),
+        // not disabled: a screen reader keeps its place; a second press is dropped
+        publishing ? noop : work(`publish-one:${x.key}`, async () => {
+          await publishNow([x.url])
+          focus('report-done')
+        }),
+        publishing ? 'secondary' : 'primary',
+      )
+      const account = (repoList ?? []).find((r: RepoCfg) => r.repo === x.repo)?.account ?? last?.me ?? ''
+      const validateAct = act(`validate-one:${x.key}`, t(lang, 'hi_validate', x.where), work(`validate-one:${x.key}`, () => validate($, [x.url], lang, prompts.validate)))
+      // what goes on the PR is the current report, so a past one only points there
+      const pastCopy = [caption('past', t(lang, 'hi_past_copy')), act('read-current', t(lang, 'hi_read_current', x.where), () => goTo(`report:${x.url}`))]
+      const lines: Partial<Record<ReportRow['state'], any[]>> = {
+        publish: x.canPublish ? [caption('legal', t(lang, 'hi_legal', account)), publishAct] : pastCopy,
+        notPublished: x.canPublish ? [caption('np', t(lang, 'hi_np', t(lang, 'mg_why', x.why)), C.error), publishAct] : pastCopy,
+        notConfirmed: x.canPublish ? [caption('nc', t(lang, 'hi_nc'), C.error), publishAct] : pastCopy,
+        published: [caption('posted', t(lang, 'hi_posted', whenOf(x.at), x.sha), C.success), act('report-done', back.label, () => goTo(back.to, `read:${x.url}`), 'secondary')],
+        outdated: [caption('old', t(lang, 'hi_outdated'), C.warning), rowOf(x.url) && validateAct],
+        validating: [caption('going', t(lang, 'hi_validating'))],
+        failed: [rowOf(x.url) && caption('failed', t(lang, 'hi_failed_note')), rowOf(x.url) && validateAct],
+        own: typesOf(x.text).length ? [caption('own', t(lang, 'hi_own_note'))] : [caption('own', t(lang, 'hi_own_old')), rowOf(x.url) && validateAct],
+        partly: [caption('partly', t(lang, 'hi_partly'))],
+        quiet: [caption('quiet', x.why ? t(lang, 'hi_skipped', t(lang, 'mg_why', x.why)) : t(lang, 'hi_quiet'))],
+        merged: [caption('merged', t(lang, 'hi_merged_note'), C.success)],
+        closed: [caption('closed', t(lang, 'hi_closed_note'))],
+      }
+      return (
+        <Box key="report-foot" flexDirection="column" gap={SPACE.block}>
+          {(lines[x.state] ?? []).filter(Boolean)}
+        </Box>
+      )
+    }
+    const reportPage = (rows: ReportRow[], x: ReportRow, back: { to: string; label: string }, pageOf: (r: ReportRow) => string) => {
+      const { all } = reportGroups(rows)
+      const { at, prev, next } = nearReports(all, x)
+      const move = (key: string, label: string, to: ReportRow) => (
+        <Button key={key} variant="secondary" onPress={() => goTo(pageOf(to), key)}>
+          {t(lang, label, nameIn(to, [x, to]).trim())}
+        </Button>
+      )
+      return listFrame(
+        <Box key="bar" flexDirection="column" gap={SPACE.block}>
+          {/* next first, so it stays under the pointer while paging; previous only ever follows it */}
+          <Box flexDirection="row" flexWrap="wrap" gap={SPACE.inline}>
+            <Button key="back" variant="secondary" onPress={() => goTo(back.to, `read:${x.url}`)}>
+              {back.label}
+            </Button>
+            {next && move('next-report', 'hi_read_next', next)}
+            {prev && move('prev-report', 'hi_read_prev', prev)}
+          </Box>
+          <Box flexDirection="column" gap={SPACE.line}>
+            <Text size="heading" weight="semibold" color={C.text}>
+              {x.where}
+            </Text>
+            <Text size="footnote" weight="semibold" color={C.text}>
+              <ui.Link href={x.url}>{x.title || x.url}</ui.Link>
+            </Text>
+            {stateLine(x, t(lang, 'hi_place_report', at + 1, all.length), x.issues ? t(lang, 'hi_blockers', x.issues) : '', x.attention ? t(lang, 'hi_to_check', x.attention) : '')}
+          </Box>
+        </Box>,
+        ...reportBody(x),
+        footOf(x, back),
+      )
+    }
+    // A past run in the list's own shape: what its report said then, and what became of it since.
+    const runRows = (run: (typeof history)[number]): ReportRow[] =>
+      run.items.map(e => {
+        const row = rowOf(e.url)
+        const live = vm.reports.find(x => x.url === e.url)
+        const state: ReportRow['state'] =
+          e.kind === 'failed'
+            ? 'failed'
+            : e.merged?.state === 'merged'
+              ? 'merged'
+              : e.published?.state === 'posted'
+                ? 'published'
+                : !row
+                  ? 'closed'
+                  : live && live.sha && e.sha && !e.sha.startsWith(live.sha)
+                    ? 'outdated'
+                    : row.isOwn
+                      ? 'own'
+                      : (live?.state ?? 'quiet')
+        return {
+          key: `${run.at}:${e.url}`,
+          url: e.url,
+          repo: `${partsOf(e.url)[3]}/${partsOf(e.url)[4]}`,
+          where: whereOf(e.url),
+          num: `#${partsOf(e.url)[6] ?? ''}`,
+          isOwn: Boolean(row?.isOwn) || e.published?.why === 'your PR',
+          title: row?.title ?? '',
+          state,
+          issues: e.issues ?? 0,
+          attention: e.attention ?? 0,
+          partial: Boolean(e.partial),
+          text: e.report || e.finding || e.why || '',
+          sha: (e.sha ?? '').slice(0, 7),
+          why: e.published?.why ?? e.why ?? '',
+          at: e.published?.at ?? e.at,
+          canPublish: false,
+        }
+      })
+    const runSummary = (run: (typeof history)[number]) => {
+      const count = (fn: (x: (typeof run.items)[number]) => unknown) => run.items.filter(fn).length
+      const repos = [...new Set(run.items.map(x => partsOf(x.url)[4]))]
+      const found = count(x => x.kind !== 'failed' && (x.issues || x.attention || x.report || x.finding))
+      return [
+        t(lang, 'hi_prs', run.items.length),
+        repos.length === 1 ? repos[0]! : t(lang, 'hi_repos', repos.length),
+        found ? t(lang, 'hi_with', found) : count(x => x.kind === 'failed') ? '' : t(lang, 'hi_none_found'),
+        ...([
+          [count(x => x.kind === 'failed'), 'hi_failed'],
+          [count(x => x.published?.state === 'posted'), 'hi_published'],
+          [count(x => x.merged?.state === 'merged'), 'hi_merged'],
+        ] as const).flatMap(([n, key]) => (n ? [t(lang, key, n)] : [])),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
+    const runLines = (runs: typeof history, when: (iso: string) => string) =>
+      runs.map(run => (
+        <Box key={`run:${run.at}`} flexDirection="column" gap={SPACE.row}>
+          {caption('line', runSummary(run), C.text)}
+          <Box flexDirection="row">
+            <Button key={`open-run:${run.at}`} variant="secondary" onPress={() => goTo(`run:${run.at}`)}>
+              {t(lang, 'hi_open', when(run.at))}
+            </Button>
+          </Box>
+        </Box>
+      ))
+    const clockOf = (iso: string) => hhmm(Date.parse(iso))
+    const agoOf = (iso: string) => t(lang, 'hi_ago', whenOf(iso))
+    const days = daysOf(history, nowIs)
+    const dayName = (day: (typeof days)[number]) =>
+      day.isToday ? t(lang, 'hi_today') : day.isYesterday ? t(lang, 'hi_yesterday') : new Date(Date.parse(day.runs[0]!.at)).toLocaleDateString(lang, { day: 'numeric', month: 'short' })
+    const prsIn = (day: (typeof days)[number]) => day.runs.reduce((n, run) => n + run.items.length, 0)
+    const runsPage = () =>
+      listFrame(
+        bar(t(lang, 'hi_runs_title'), { ...toList, then: 'open-runs' }),
+        !history.length && caption('hi-none', t(lang, 'hi_no_runs')),
+        ...days.map(day =>
+          reportSection(
+            `day:${day.key}`,
+            t(lang, 'hi_day_line', dayName(day), day.runs.length, prsIn(day)),
+            ...(day.isToday
+              ? runLines(day.runs, agoOf)
+              : [
+                  <Box key="open-day" flexDirection="row">
+                    <Button key={`open-day:${day.key}`} variant="secondary" onPress={() => goTo(`day:${day.key}`)}>
+                      {t(lang, 'hi_open_day', dayName(day))}
+                    </Button>
+                  </Box>,
+                ]),
+          ),
+        ),
+      )
+    const dayPage = (day: (typeof days)[number]) => listFrame(bar(t(lang, 'hi_day_line', dayName(day), day.runs.length, prsIn(day)), { ...toRuns, then: `open-day:${day.key}` }), ...runLines(day.runs, clockOf))
+    const runPage = (run: (typeof history)[number]) => {
+      const rows = runRows(run)
+      const w = reportGroups(rows)
+      const types = typesOfRows(w.walk)
+      const openRun = (x: ReportRow) => goTo(`runreport:${run.at}|${x.url}`)
+      // back to the day it came from: a busy day has dozens of lines to lose your place in
+      const day = days.find(d => d.runs.includes(run))
+      return listFrame(
+        bar(t(lang, 'hi_run_title', agoOf(run.at)), { ...(day && !day.isToday ? { to: `day:${day.key}`, label: t(lang, 'hi_back_day', dayName(day)) } : toRuns), then: `open-run:${run.at}` }),
+        <Box key="run-summary" flexDirection="column" gap={SPACE.line}>
+          {caption('line', runSummary(run), C.text)}
+          {types && caption('types', types)}
+        </Box>,
+        ...groupsOf(rows, openRun),
+        w.own.length > 0 && reportSection('run-mine', t(lang, 'hi_mine_title', w.own.length), ...w.own.map(x => reportRow(x, openRun, w.own))),
+        w.clean.length > 0 && reportSection('run-clean', t(lang, 'hi_g_clean', w.clean.length), ...w.clean.map(x => caption(`clean:${x.key}`, x.title ? `${x.where} · ${x.title}` : x.where))),
+      )
+    }
+    if (where === 'history') return reportsPage()
+    if (where === 'clean') return cleanPage()
+    if (where === 'mine') return minePage()
+    if (where.startsWith('report:')) {
+      const url = where.slice('report:'.length)
+      const x = vm.reports.find(r => r.url === url)
+      return x ? reportPage(vm.reports, x, x.isOwn ? { to: 'mine', label: t(lang, 'hi_back_mine') } : toList, r => `report:${r.url}`) : reportsPage(t(lang, 'hi_gone', whereOf(url)))
+    }
+    if (where === 'runs') return runsPage()
+    if (where.startsWith('day:')) {
+      const day = days.find(d => d.key === where.slice('day:'.length))
+      return day ? dayPage(day) : runsPage()
+    }
+    if (where.startsWith('runreport:')) {
+      const [at, url] = where.slice('runreport:'.length).split('|')
+      const run = history.find(r => r.at === at)
+      const x = run && runRows(run).find(r => r.url === url)
+      return run && x ? reportPage(runRows(run), x, { to: `run:${run.at}`, label: t(lang, 'hi_back_run') }, r => `runreport:${run.at}|${r.url}`) : runsPage()
+    }
     const openedRun = where.startsWith('run:') ? history.find(run => `run:${run.at}` === where) : undefined
     if (openedRun) return runPage(openedRun)
-    if (where.startsWith('run:')) return historyPage()
+    if (where.startsWith('run:')) return runsPage()
     const opened = vm.groups.find(g => g.repo === where)
     if (where === 'settings') return settingsPage()
     if (opened) return repoPage(opened)

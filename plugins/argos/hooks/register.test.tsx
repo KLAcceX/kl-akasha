@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { compose, reason, toViewModel, verdictOf, verdictTag } from './register'
 import { t } from '../scripts/i18n.mjs'
 import { DEMO_ROUND, DEMO_VERDICTS } from './demo-round'
-import { runsOf, typesOf } from './view'
+import { runsOf, typesOf, daysOf, nearReports, reportGroups, reportLines, type ReportRow } from './view'
 
 const NOW = Date.parse('2026-10-29T12:00:00Z')
 const ago = (d: number) => new Date(NOW - d * 864e5).toISOString()
@@ -837,29 +837,34 @@ test('Publish shows the exact text first; only confirming runs the script, which
   const posts = () => runs.filter(r => r[1] === 'publish.mjs')
   expect((await ui.find({ key: 'publish' }))?.text).toBe('Review 1 comment')
   await ui.press({ key: 'publish' })
+  await ui.press({ key: 'read-waiting' })
   // nothing has left yet: the page holds each line of the text
   expect(posts()).toEqual([])
   expect((await ui.find({ type: 'Text', text: /a\.js:1/ }))?.text).toBe('- Blocker `a.js:1`: wrong')
   expect((await ui.find({ type: 'Text', text: /b\.js:2/ }))?.text).toBe('- Look at `b.js:2`: weak test')
+  expect((await ui.find({ key: 'publish-one:acme/api#1' }))?.text).toBe('Publish comment on api #1')
   await ui.press({ key: 'publish-one:acme/api#1' })
   expect(posts()).toEqual([['node', 'publish.mjs', url.split('/').at(-1)!]])
   expect(toasts.at(-1)).toBe('Argos: 1 comment published')
   await ui.unmount()
 })
 
-test('History: what waits first, then each run, by kind of fix; a PR of mine only shows findings', async ($, on) => {
+test('Reports: what waits first, grouped by what it found; a report per page; past runs by day, each one item however many repos', async ($, on) => {
   const web = 'https://github.com/acme/web/pull/8'
   const own = 'https://github.com/acme/web/pull/9'
-  const gone = 'https://github.com/acme/web/pull/3'
+  const gone = 'https://github.com/acme/docs/pull/3'
   const fine = 'https://github.com/acme/web/pull/4'
-  const run = '2026-10-29T10:00:00.000Z'
-  const line = (o: Record<string, unknown>) => JSON.stringify({ kind: 'verdict', sha: 'abc1234', issues: 0, attention: 0, run, at: run, ...o })
+  const nowRun = new Date(NOW - 35 * 6e4).toISOString()
+  const oldRun = new Date(NOW - 3 * 864e5).toISOString()
+  const line = (o: Record<string, unknown>) => JSON.stringify({ kind: 'verdict', sha: 'abc1234', issues: 0, attention: 0, run: nowRun, at: nowRun, ...o })
+  const report = '- [security] `a.js:1`: leak; remove it\n- [security] `b.js:2`: no auth; add it\n- [tests] `c.js:3`: weak; assert it'
   const history = [
-    line({ url: web, issues: 2, report: '- [security] a.js:1: leak; remove it\n- [security] b.js:2: no auth; add it\n- [tests] c.js:3: weak; assert it' }),
-    line({ url: own, issues: 1, report: '- [deploy] d.sql:1: drops a column; keep it' }),
-    line({ url: gone, issues: 1, report: '- [scope] e.js:1: unrelated; move it' }),
+    line({ url: web, issues: 2, report }),
+    line({ url: own, issues: 1, report: '- [deploy] `d.sql:1`: drops a column; keep it' }),
+    line({ url: gone, issues: 1, report: '- [scope] `e.js:1`: unrelated; move it' }),
     line({ url: fine }),
-    JSON.stringify({ kind: 'merge', url: gone, sha: 'abc1234', state: 'merged', why: 'squash', at: run }),
+    JSON.stringify({ kind: 'merge', url: gone, sha: 'abc1234', state: 'merged', why: 'squash', at: nowRun }),
+    line({ url: fine, run: oldRun, at: oldRun }),
     'not json',
   ].join('\n')
   const prs = [
@@ -869,11 +874,7 @@ test('History: what waits first, then each run, by kind of fix; a PR of mine onl
   ]
   const seeded: Record<string, unknown> = {
     round: { ...round, me: 'me', repos: ['acme/web'], pending: [], mine: [prs[1]], others: [prs[0], prs[2]] },
-    verdicts: {
-      ...judged,
-      batch: { urls: [], at: null },
-      prs: { [web]: V({ issues: 2, report: '- [security] a.js:1: leak; remove it\n- [security] b.js:2: no auth; add it\n- [tests] c.js:3: weak; assert it' }), [own]: V({ issues: 1, report: '- [deploy] d.sql:1: drops a column; keep it' }), [fine]: V({}) },
-    },
+    verdicts: { ...judged, batch: { urls: [], at: null }, prs: { [web]: V({ issues: 2, attention: 1, report }), [own]: V({ issues: 1, report: '- [deploy] `d.sql:1`: drops a column; keep it' }), [fine]: V({}) } },
   }
   on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
   on('clock.now', clock)
@@ -885,20 +886,108 @@ test('History: what waits first, then each run, by kind of fix; a PR of mine onl
   const ui = await $.ui.mount(PANE)
   const text = async (rx: RegExp) => (await ui.find({ type: 'Text', text: rx }))?.text
   await ui.press({ key: 'history-page' })
-  // only their PR waits, with its kinds counted; the run sums up in one line
-  expect(await text(/^Waiting to publish/)).toBe('Waiting to publish · 1')
+  expect(await text(/to publish$/)).toBe('1 comment to publish')
   expect(await text(/^2 security/)).toBe('2 security · 1 test')
+  expect(await text(/^Blocks merge/)).toBe('Blocks merge · 1')
+  expect((await ui.find({ key: 'show-clean' }))?.text).toBe('Show 1 PR with no findings')
+  // their PR is a line; mine stay a tap away, so they never bury what gets a comment
+  expect((await ui.find({ key: `read:${web}` }))?.text).toBe('Read #8')
+  expect(await ui.find({ key: `read:${own}` })).toBeFalsy()
+  expect((await ui.find({ key: 'show-mine' }))?.text).toBe('Show 1 of your PRs: 1 blocks merge')
+  // their PR, with something to publish
+  await ui.press({ key: 'read-waiting' })
+  expect(await text(/^report 1 of 2/)).toBe('report 1 of 2 · 2 blockers · 1 to check')
+  expect(await text(/a\.js:1/)).toBe('security · a.js:1')
+  expect(await text(/^leak/)).toBe('leak; remove it')
+  expect((await ui.find({ key: 'publish-one:acme/web#8' }))?.text).toBe('Publish comment on web #8')
+  // reading goes on past other people's PRs into mine, and back again
+  expect(await ui.find({ key: 'prev-report' })).toBeFalsy()
+  expect((await ui.find({ key: 'next-report' }))?.text).toBe('Read next: #9')
+  await ui.press({ key: 'next-report' })
+  expect((await ui.find({ key: 'prev-report' }))?.text).toBe('Read previous: #8')
+  expect(await ui.find({ key: 'next-report' })).toBeFalsy()
+  await ui.press({ key: 'prev-report' })
+  await ui.press({ key: 'back' })
+  // my PR reads the same, with no way to publish
+  await ui.press({ key: 'show-mine' })
+  await ui.press({ key: `read:${own}` })
+  expect(await text(/d\.sql:1/)).toBe('deploy · d.sql:1')
+  expect(await text(/^Your PR: /)).toBe('Your PR: Argos posts no comment here.')
   expect(await ui.find({ key: 'publish-one:acme/web#9' })).toBeFalsy()
-  expect(await text(/^4 PRs/)).toBe('4 PRs · 3 with issues · 1 merged')
-  await ui.press({ key: `open-run:${run}` })
-  // the kinds count other people's PRs; mine shows up with no way to publish
-  expect(await text(/security · /)).toBe('2 security · 1 test · 1 scope')
-  expect(await text(/^4 PRs/)).toBe('4 PRs · 1 passed')
-  expect(await text(/d\.sql:1/)).toBe('- [deploy] d.sql:1: drops a column; keep it')
-  expect(await text(/^Findings only/)).toBeTruthy()
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'back' })
+  // past runs: this run covers two repos and is one item; older days fold into a line
+  await ui.press({ key: 'open-runs' })
+  expect(await text(/^Today/)).toBe('Today · 1 run · 4 PRs')
+  expect(await text(/^4 PRs/)).toBe('4 PRs · 2 repos · 3 with findings · 1 merged')
+  expect(await ui.find({ key: `open-run:${oldRun}` })).toBeFalsy()
+  await ui.press({ key: `open-run:${nowRun}` })
+  // this run covers two repos, so a number alone would be ambiguous
+  expect((await ui.find({ key: `read:${web}` }))?.text).toBe('Read web #8')
+  // a past report never publishes: what goes on the PR is the current one
+  await ui.press({ key: `read:${web}` })
+  expect(await ui.find({ key: `publish-one:${nowRun}:${web}` })).toBeFalsy()
+  expect((await ui.find({ key: 'read-current' }))?.text).toBe('Read current report of web #8')
+  await ui.press({ key: 'back' })
   // a PR gone from the watch says what became of it
-  expect(await text(/^merged/)).toBe('merged · squash')
+  await ui.press({ key: `read:${gone}` })
+  expect(await text(/^Merged/)).toBe('Merged')
+  expect(await text(/^This PR was merged/)).toBeTruthy()
   await ui.unmount()
+})
+
+test('a report whose PR left the last check goes back to the list and says so', async ($, on) => {
+  const seeded: Record<string, unknown> = { round, verdicts: { ...judged, batch: { urls: [], at: null }, prs: {} }, page: 'report:https://github.com/acme/web/pull/404' }
+  on('state.get', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) => (e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e)))
+  on('clock.now', clock)
+  on('env.get', () => ({ value: 'C:/home' }))
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /no longer in the last check/ }))?.text).toBe('web #404 is no longer in the last check, so it left this list.')
+  await ui.unmount()
+})
+
+test('reports: publishing moves no row and no next; a comment leads to the next comment; lines parse without hiding any', () => {
+  const r = (n: number, state: ReportRow['state'], issues: number, attention = 0): ReportRow => ({ key: String(n), url: `https://github.com/acme/web/pull/${n}`, repo: 'acme/web', where: `web #${n}`, num: `#${n}`, isOwn: state === 'own', title: '', state, issues, attention, partial: false, text: 'x', sha: '', why: '', at: '', canPublish: false })
+  const rows = [r(1, 'published', 3), r(2, 'publish', 2), r(3, 'own', 5), r(4, 'publish', 1), r(5, 'publish', 0, 1), r(6, 'failed', 0)]
+  const nums = (list: ReportRow[]) => list.map(x => x.key)
+  const g = reportGroups(rows)
+  expect([nums(g.failed), nums(g.blocks), nums(g.look), nums(g.own)]).toEqual([['6'], ['1', '2', '4'], ['5'], ['3']])
+  // publishing #2 changes neither the order nor where it leads
+  const posted = rows.map(x => (x.key === '2' ? { ...x, state: 'published' as const } : x))
+  expect(nums(reportGroups(posted).all)).toEqual(nums(g.all))
+  // one line of reading, both ways, on into the person's own PRs
+  const near = (key: string) => {
+    const { prev, next } = nearReports(g.all, rows.find(x => x.key === key)!)
+    return [prev?.key, next?.key]
+  }
+  expect(nums(g.all)).toEqual(['6', '1', '2', '4', '5', '3'])
+  expect([near('6'), near('2'), near('5'), near('3')]).toEqual([[undefined, '1'], ['1', '4'], ['4', '3'], ['5', undefined]])
+  // a finding ending in ":" stays a finding; a note and an old line come out as they are
+  expect(reportLines('Before merging:\n- [bug] `a.js:1`: fails on:\n- [security] PR description, second paragraph: holds text\n\n3 smaller items left out.\n- Blocker `a.js:1`: wrong')).toEqual([
+    { kind: 'heading', text: 'Before merging' },
+    { kind: 'finding', tag: 'bug', place: 'a.js:1', text: 'fails on:' },
+    { kind: 'finding', tag: 'security', place: 'PR description, second paragraph', text: 'holds text' },
+    { kind: 'line', text: '3 smaller items left out.' },
+    { kind: 'line', text: '- Blocker `a.js:1`: wrong' },
+  ])
+  // as findings.mjs writes them: the severity is read, and the lines under a finding stay
+  expect(reportLines('1 blocker. Wrong total.\n- [bug] Blocker · `a.js:2`: `x` is wrong.\n  It returns 1.\n- [scope] Warning · PR description: off topic.')).toEqual([
+    { kind: 'line', text: '1 blocker. Wrong total.' },
+    { kind: 'finding', tag: 'bug', severity: 'Blocker', place: 'a.js:2', text: 'x is wrong.' },
+    { kind: 'line', text: '  It returns 1.' },
+    { kind: 'finding', tag: 'scope', severity: 'Warning', place: 'PR description', text: 'off topic.' },
+  ])
+})
+
+test('runs: kept 30 days, grouped by local day', () => {
+  const at = (days: number) => new Date(NOW - days * 864e5).toISOString()
+  const v = (url: string, run: string) => ({ kind: 'verdict', url, sha: 's', run, at: run })
+  expect(runsOf([v('a', at(29)), v('b', at(31))], NOW).map(r => r.items[0].url)).toEqual(['a'])
+  const days = daysOf(runsOf([v('a', at(0)), v('b', at(1)), v('c', at(5))], NOW), NOW)
+  expect(days.map(d => [d.isToday, d.isYesterday, d.runs.length])).toEqual([[true, false, 1], [false, true, 1], [false, false, 1]])
 })
 
 test('runsOf groups by run, newest first, with what was done since; typesOf reads the tags', () => {

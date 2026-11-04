@@ -33,7 +33,7 @@ export type Item = {
 // merge.mjs's outcome on a passing verdict, once per head commit, in a repo with auto-merge on
 export type MergeOutcome = { state: 'merged' | 'approved' | 'skipped'; why: string; sha: string; at: string }
 // publish.mjs's outcome on a report, once per head commit
-export type PublishOutcome = { state: 'posted' | 'skipped' | 'failed'; why: string; sha: string; at: string }
+export type PublishOutcome = { state: 'posted' | 'skipped' | 'failed'; why: string; sha: string; at: string; unconfirmed?: boolean }
 export type Verdict = {
   state: 'queued' | 'running' | 'done' | 'failed'
   sha?: string

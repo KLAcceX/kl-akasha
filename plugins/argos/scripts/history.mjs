@@ -10,7 +10,7 @@
 //   node history.mjs verdicts [<pr-url>]                    the verdicts kept, one JSON per line
 //   node history.mjs --self-test
 // verdicts.mjs adds a verdict or a failure each time one is recorded, publish.mjs and merge.mjs what they
-// did. The pane reads the file for its History page. Env: ARGOS_STATE, as the other scripts.
+// did. The pane reads the file for its past runs. Env: ARGOS_STATE, as the other scripts.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
