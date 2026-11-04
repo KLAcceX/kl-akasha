@@ -33,6 +33,8 @@ export const AUTO = ["off", "mine", "all"];
 const EMPTY = { auto: "off", autoEvery: 30, lastAuto: null, batch: { urls: [], at: null }, prs: {}, human: [], approved: {} };
 export const EVERY = [15, 30, 60];
 const busy = (state) => state === "running" || state === "queued";
+// As hooks/view.ts's QUEUE_LIMIT: past this, whoever held the PR is gone (the agent died, Claude closed).
+const BATCH_LIMIT = 60 * 6e4;
 
 // No file yet is an empty start. A file that does not parse is an error, never an empty start: the
 // next write would wipe every verdict.
@@ -89,9 +91,10 @@ const isPr = (url) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ur
 
 // A new batch replaces the last one once nothing of it is still waiting or running, so the pane
 // counts "9 of 22" for what was asked together. The mod queues a run; the agent starts each PR as
-// it reaches it, so the time limit counts from then.
+// it reaches it, so the time limit counts from then. A PR stuck past the limit holds nothing open:
+// if it did, one closed PR would fold every later run into this one.
 function mark(v, urls, state, now) {
-  const open = v.batch.urls.some((u) => busy(v.prs[u]?.state));
+  const open = v.batch.urls.some((u) => busy(v.prs[u]?.state) && !(Date.parse(now) - Date.parse(v.prs[u].at) > BATCH_LIMIT));
   const batch = open ? { ...v.batch, urls: [...new Set([...v.batch.urls, ...urls])] } : { urls, at: now };
   const prs = { ...v.prs };
   for (const u of urls) prs[u] = { ...prs[u], state, at: now };
@@ -213,6 +216,10 @@ function selfTest() {
   v = set(set(v, a, { sha: "abc1234", issues: 0 }, "t4"), b, { sha: "def5678", issues: 0 }, "t4");
   // nothing runs: the next start is a batch of its own
   assert.deepEqual(start(v, [b], "t5").batch, { urls: [b], at: "t5" });
+  // a PR stuck in the queue holds the batch only until the limit: later runs stay runs of their own
+  const stuck = queue(EMPTYv(), [a], "2026-01-01T10:00:00.000Z");
+  assert.equal(queue(stuck, [b], "2026-01-01T10:59:00.000Z").batch.at, "2026-01-01T10:00:00.000Z");
+  assert.deepEqual(queue(stuck, [b], "2026-01-01T11:01:00.000Z").batch, { urls: [b], at: "2026-01-01T11:01:00.000Z" });
   assert.deepEqual(fail(start(v, [a], "t6"), a, " no access ", "t7").prs[a], { state: "failed", sha: "abc1234", issues: 0, attention: 0, partial: false, finding: "", reason: "no access", at: "t7" });
   assert.equal(isPr(a), true);
   assert.equal(isPr("acme/web#1"), false);
