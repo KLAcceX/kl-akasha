@@ -1,0 +1,67 @@
+{
+  "name": "argos",
+  "version": "0.9.0",
+  "description": "Argos, the hundred-eyed watcher: no PR sits idle without someone noticing.",
+  "author": { "name": "KLAcceX" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "account": {
+      "type": "string",
+      "title": "gh account",
+      "description": "gh login used by the vigil. Empty = the active account.",
+      "default": ""
+    },
+    "qualifiers": {
+      "type": "string",
+      "title": "Extra search filter",
+      "description": "Extra GitHub search qualifiers (e.g. is:draft). The vigil only watches repos connected with /argos repos add.",
+      "default": ""
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the band, the pane and the notices.",
+      "options": ["en", "pt-BR"],
+      "default": "en"
+    },
+    "intervalMinutes": {
+      "type": "number",
+      "title": "Interval (min)",
+      "description": "How often the vigil runs, in minutes, and auto-validate with it. Minimum 5.",
+      "default": 15
+    },
+    "validatePromptMode": {
+      "type": "string",
+      "title": "Validate prompt",
+      "description": "What Validate asks: Argos's own job plus your prompt, Argos's alone, or yours alone.",
+      "options": ["argos+mine", "argos", "mine"],
+      "default": "argos+mine"
+    },
+    "validatePrompt": {
+      "type": "string",
+      "title": "Your validate prompt",
+      "description": "Your own words for validating a PR, for every repo (what to look for, house rules, skills to read). A repo adds its own in its Settings fold. Verdicts are always recorded so the pane can show them.",
+      "default": ""
+    },
+    "fixPromptMode": {
+      "type": "string",
+      "title": "Fix prompt",
+      "description": "What Fix my PRs asks: Argos's own job plus your prompt, Argos's alone, or yours alone.",
+      "options": ["argos+mine", "argos", "mine"],
+      "default": "argos+mine"
+    },
+    "fixPrompt": {
+      "type": "string",
+      "title": "Your fix prompt",
+      "description": "Your own words for fixing your PRs from their review (style, what to run before pushing).",
+      "default": ""
+    },
+    "runLimitMinutes": {
+      "type": "number",
+      "title": "Time limit per PR (min)",
+      "description": "A PR still validating after this many minutes counts as failed and can be retried.",
+      "default": 10
+    }
+  }
+}

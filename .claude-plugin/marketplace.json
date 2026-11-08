@@ -1,0 +1,28 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kl-akasha",
+  "description": "The record of all knowledge: a personal skill library for AI.",
+  "owner": {
+    "name": "KLAcceX"
+  },
+  "plugins": [
+    {
+      "name": "argos",
+      "description": "Pull requests: watch my PRs and my teammates', flag what needs action, never let a PR go stale.",
+      "source": "./plugins/argos",
+      "category": "pull-requests"
+    },
+    {
+      "name": "lethe",
+      "description": "Redaction: carry content from A to B without secrets, personal data or names B must not see; publish a private repo to its public mirror, sanitized.",
+      "source": "./plugins/lethe",
+      "category": "privacy"
+    },
+    {
+      "name": "maat",
+      "description": "Compliance: check an app against the rules it must follow, with evidence and dated sources. Today it checks accessibility (WCAG 2.2 AA).",
+      "source": "./plugins/maat",
+      "category": "compliance"
+    }
+  ]
+}
